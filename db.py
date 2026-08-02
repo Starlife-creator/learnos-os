@@ -21,6 +21,7 @@ def connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
     return conn
 
 
@@ -55,10 +56,18 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (1, ?)", (now(),))
         LOG.info("数据库已迁移到 v1 (添加 ease_factor/repetition)")
 
-    # 未来迁移示例:
-    # if current < 2:
-    #     conn.execute("ALTER TABLE problems ADD COLUMN ...")
-    #     conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (2, ?)", (now(),))
+    # v2: 掌握度趋势日志表
+    if current < 2:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS mastery_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                day TEXT NOT NULL,
+                avg_mastery REAL NOT NULL,
+                count INTEGER NOT NULL
+            )
+        """)
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (2, ?)", (now(),))
+        LOG.info("数据库已迁移到 v2 (添加 mastery_log)")
 
 
 def init_db() -> None:

@@ -5,23 +5,14 @@
 """
 from __future__ import annotations
 
-import logging
 import os
 import threading
 import webbrowser
 from http.server import ThreadingHTTPServer
 
-from config import HOST, PORT, LOG
+from config import HOST, PORT, LOG, setup_logging
 from db import init_db
 from handler import Handler
-
-
-def setup_logging() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="[%(asctime)s] %(levelname)s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
 
 
 def main() -> None:

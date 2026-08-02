@@ -8,12 +8,15 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from config import LOG
+from config import LOG, API_KEY_ENV, API_BASE_ENV, MODEL_ENV
 from db import settings_dict
 
 _settings_cache: dict[str, str] | None = None
 _settings_cache_time: float = 0
 _CACHE_TTL = 30  # 秒
+
+# 内存密钥：通过 UI 录入时仅存于内存，绝不写入数据库。
+_runtime_key: str | None = None
 
 
 def invalidate_settings_cache() -> None:
@@ -23,13 +26,53 @@ def invalidate_settings_cache() -> None:
     _settings_cache_time = 0
 
 
+def set_runtime_key(key: str | None) -> None:
+    """设置内存密钥（会话级，重启后失效）。"""
+    global _runtime_key
+    _runtime_key = (key or "").strip() or None
+    invalidate_settings_cache()
+
+
 def get_cached_settings() -> dict[str, str]:
-    """带 TTL 的设置缓存，避免每次 AI 调用都查数据库。"""
+    """带 TTL 的设置缓存，按 环境变量 > 内存密钥 > 数据库 合并。"""
     global _settings_cache, _settings_cache_time
-    if _settings_cache is None or time.time() - _settings_cache_time > _CACHE_TTL:
-        _settings_cache = settings_dict(include_secret=True)
-        _settings_cache_time = time.time()
-    return _settings_cache
+    if _settings_cache is not None and time.time() - _settings_cache_time <= _CACHE_TTL:
+        return _settings_cache
+    s = dict(settings_dict(include_secret=True))
+    if API_KEY_ENV:
+        s["api_key"] = API_KEY_ENV
+        s["key_source"] = "environment"
+    elif _runtime_key:
+        s["api_key"] = _runtime_key
+        s["key_source"] = "runtime"
+    if API_BASE_ENV:
+        s["api_base"] = API_BASE_ENV
+    if MODEL_ENV:
+        s["model"] = MODEL_ENV
+    _settings_cache = s
+    _settings_cache_time = time.time()
+    return s
+
+
+def display_settings() -> dict[str, str]:
+    """供设置页展示：脱敏后的有效配置与密钥来源。"""
+    eff = get_cached_settings()
+    has_key = bool(eff.get("api_key"))
+    if API_KEY_ENV:
+        source = "environment"
+    elif _runtime_key:
+        source = "runtime"
+    elif has_key:
+        source = "local"
+    else:
+        source = "none"
+    return {
+        "api_base": eff.get("api_base", ""),
+        "model": eff.get("model", ""),
+        "temperature": eff.get("temperature", "0.3"),
+        "has_api_key": has_key,
+        "key_source": source,
+    }
 
 
 def api_endpoint(base: str) -> str:

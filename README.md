@@ -34,15 +34,25 @@ set PHYSICS_OS_PORT=9000 && python app.py
 
 | 配置项 | 环境变量 | 默认值 |
 |--------|---------|--------|
-| API 地址 | - | `https://api.openai.com/v1` |
-| API Key | `PHYSICS_OS_API_KEY` | 空（优先级高于数据库存储） |
-| 模型名称 | - | 空 |
+| API 地址 | `PHYSICS_OS_API_BASE` | `https://api.openai.com/v1` |
+| API Key | `PHYSICS_OS_API_KEY` | 空（环境变量 / 内存优先，绝不写入数据库） |
+| 模型名称 | `PHYSICS_OS_MODEL` | 空 |
 | Temperature | - | `0.3` |
 | 数据库路径 | `PHYSICS_OS_DB` | 项目目录下 `physics_study.db` |
 | 监听地址 | `PHYSICS_OS_HOST` | `127.0.0.1` |
 | 监听端口 | `PHYSICS_OS_PORT` | `8765` |
 
-> **安全建议**：优先使用环境变量 `PHYSICS_OS_API_KEY` 传递密钥，避免明文存储在数据库中。
+> **密钥安全**：API Key 仅来自环境变量或本次运行内存（UI 录入后重启失效），**永远不会以明文写入数据库文件**。设置页会显示当前密钥来源（environment / runtime / local）。
+
+### 数据备份与迁移
+
+- **导出**：概览页「导出数据」生成 `physics_study_YYYY-MM-DD.json`（题目 + 提示 + 复习记录）。
+- **导入**：概览页「导入数据」会**先自动备份**当前数据库，再以参数化写入导入，不会造成注入或数据损坏。导入前会弹出确认框。
+
+### 安全
+
+- 所有写请求（POST/PUT/DELETE）需携带 `X-Requested-With` 头，缺失即 403——防范同机恶意网页对 localhost 的跨站调用。
+- SQLite 启用 WAL 模式提升并发读写；日志写入 `physics_study.log`（滚动 1MB × 3，自动脱敏密钥）。
 
 ## 项目结构
 
@@ -90,7 +100,7 @@ pyinstaller build.spec
 ## 技术栈
 
 - **后端**：Python 标准库（`http.server` + `sqlite3` + `urllib`），零第三方依赖
-- **前端**：Vanilla HTML/CSS/JS，KaTeX（CDN）
+- **前端**：Vanilla HTML/CSS/JS，`static/app.js` + 本地 `static/vendor/` KaTeX（离线可用）
 - **算法**：SM-2 (SuperMemo 2) 间隔复习
 - **打包**：PyInstaller
 

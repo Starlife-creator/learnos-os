@@ -40,7 +40,7 @@ class PhysicsStudyOSTest(unittest.TestCase):
             f"http://127.0.0.1:{self.port}{path}",
             data=data,
             method=method,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "X-Requested-With": "PhysicsStudyOS"},
         )
         with urllib.request.urlopen(req, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
@@ -96,6 +96,7 @@ class PhysicsStudyOSTest(unittest.TestCase):
         self.assertGreaterEqual(result2["interval_days"], 3)
 
     def test_03_settings_secret_is_masked(self):
+        # 通过 UI 录入的密钥仅存于内存（runtime），绝不写入数据库
         self.request("/api/settings", "PUT", {
             "api_base": "https://example.invalid/v1",
             "api_key": "secret-test-key",
@@ -103,8 +104,14 @@ class PhysicsStudyOSTest(unittest.TestCase):
             "temperature": "0.2",
         })
         _, settings = self.request("/api/settings")
-        self.assertEqual(settings["api_key"], "••••••••")
+        # display_settings 不再返回明文/掩码密钥字段，只暴露来源与是否存在
+        self.assertNotIn("api_key", settings)
         self.assertTrue(settings["has_api_key"])
+        self.assertEqual(settings["key_source"], "runtime")
+        # 确认密钥未落库：直接读数据库 settings 表不应包含该明文
+        from db import rows
+        stored = {r["key"]: r["value"] for r in rows("SELECT key, value FROM settings")}
+        self.assertNotIn("secret-test-key", stored.values())
 
     def test_04_delete_cascades(self):
         status, created = self.request("/api/problems", "POST", {

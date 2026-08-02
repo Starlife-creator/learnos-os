@@ -3,27 +3,50 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from datetime import date, datetime, timedelta
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler
 from typing import Any
 from urllib.parse import urlparse, parse_qs
 
-from config import STATIC_DIR, LOG
+from config import STATIC_DIR, LOG, DB_PATH
 from db import DB_LOCK, db, now, row, rows, settings_dict
-from ai import call_ai, fallback_hint, problem_prompt, invalidate_settings_cache
+from ai import call_ai, fallback_hint, problem_prompt, invalidate_settings_cache, set_runtime_key, display_settings
 from review import compute_review, clamp_mastery
 from oral import start_oral, continue_oral
 
+# ── 写请求安全闸门（CSRF 轻量版）──
+# 跨站页无法设置自定义请求头（会触发预检而本服务不响应 OPTIONS），
+# 因此同源的 X-Requested-With 头即可作为写请求的合法来源证明。
+X_HEADER = "X-Requested-With"
+X_VALUE = "PhysicsStudyOS"
+
+# 写幂等：客户端携带 X-Request-Id，重复提交返回首次结果，杜绝重复建题。
+_IDEMPOTENCY: dict[str, tuple[int, dict[str, Any]]] = {}
+_IDEMPOTENCY_TTL = 3600
+
+
+def _prune_idempotency() -> None:
+    if len(_IDEMPOTENCY) < 512:
+        return
+    cutoff = datetime.now().timestamp() - _IDEMPOTENCY_TTL
+    stale = [k for k, (ts, _) in _IDEMPOTENCY.items() if ts < cutoff]
+    for k in stale:
+        _IDEMPOTENCY.pop(k, None)
+
 
 class Handler(SimpleHTTPRequestHandler):
-    server_version = "PhysicsStudyOS/0.2"
+    server_version = "PhysicsStudyOS/0.3"
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
 
     def log_message(self, fmt: str, *args: Any) -> None:
         LOG.info("%s - %s", self.address_string(), fmt % args)
+
+    def _csrf_ok(self) -> bool:
+        return self.headers.get(X_HEADER) == X_VALUE
 
     def json_response(self, data: Any, status: int = 200) -> None:
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -72,31 +95,49 @@ class Handler(SimpleHTTPRequestHandler):
                 """))
                 return
             if path == "/api/settings":
-                self.json_response(settings_dict())
+                self.json_response(display_settings())
+                return
+            if path == "/api/trend":
+                self._handle_trend()
+                return
+            if path == "/api/export":
+                self._handle_export()
                 return
             if path == "/api/health":
-                self.json_response({"ok": True, "version": "0.2.0"})
+                self.json_response({"ok": True, "version": "0.3.0"})
                 return
             super().do_GET()
         except Exception as exc:
             self._safe_error(exc)
 
     def _handle_list_problems(self) -> None:
-        """支持分页: ?page=1&limit=50  (limit 上限 200)"""
+        """支持分页与搜索: ?page=1&limit=50&q=关键词 (limit 上限 200)"""
         qs = parse_qs(urlparse(self.path).query)
         try:
             limit = min(max(int(qs.get("limit", ["50"])[0]), 1), 200)
             page = max(int(qs.get("page", ["1"])[0]), 1)
         except (ValueError, IndexError):
             limit, page = 50, 1
+        q = (qs.get("q", [""])[0] or "").strip()
         offset = (page - 1) * limit
+
+        if q:
+            like = f"%{q}%"
+            where = " WHERE title LIKE ? OR topic LIKE ? OR course LIKE ?"
+            params: tuple[Any, ...] = (like, like, like)
+        else:
+            where, params = "", ()
+
         items = rows(
-            "SELECT * FROM problems ORDER BY id DESC LIMIT ? OFFSET ?",
-            (limit, offset),
+            f"SELECT * FROM problems{where} ORDER BY id DESC LIMIT ? OFFSET ?",
+            params + (limit, offset),
         )
-        total_row = row("SELECT COUNT(*) AS count FROM problems")
+        total_row = row(f"SELECT COUNT(*) AS count FROM problems{where}", params)
         total = total_row["count"] if total_row else 0
-        self.json_response({"items": items, "total": total, "page": page, "limit": limit, "pages": (total + limit - 1) // limit})
+        self.json_response({
+            "items": items, "total": total, "page": page, "limit": limit,
+            "pages": (total + limit - 1) // limit,
+        })
 
     def _handle_dashboard(self) -> None:
         today = date.today().isoformat()
@@ -114,6 +155,21 @@ class Handler(SimpleHTTPRequestHandler):
         recent = rows("SELECT id, title, course, topic, error_type, mastery, created_at FROM problems ORDER BY id DESC LIMIT 5")
         self.json_response({"stats": stats, "due": due["count"] if due else 0, "topics": topics, "recent": recent})
 
+    def _handle_trend(self) -> None:
+        log = rows("SELECT day, avg_mastery, count FROM mastery_log ORDER BY id DESC LIMIT 60")
+        self.json_response(list(reversed(log)))
+
+    def _handle_export(self) -> None:
+        """只读导出：返回全部题目、提示与复习记录的 JSON。"""
+        data = {
+            "version": 1,
+            "exported_at": now(),
+            "problems": rows("SELECT id, title, course, topic, content, my_attempt, error_type, mastery, created_at, updated_at FROM problems ORDER BY id"),
+            "hints": rows("SELECT problem_id, level, content, created_at FROM hints ORDER BY id"),
+            "reviews": rows("SELECT problem_id, due_date, interval_days, result, created_at FROM reviews ORDER BY id"),
+        }
+        self.json_response(data)
+
     def _handle_get_problem(self, problem_id: int) -> None:
         item = row("SELECT * FROM problems WHERE id = ?", (problem_id,))
         if not item:
@@ -125,6 +181,9 @@ class Handler(SimpleHTTPRequestHandler):
     # ── POST ─────────────────────────────────────────────
 
     def do_POST(self) -> None:
+        if not self._csrf_ok():
+            self.json_response({"error": "请求来源不被信任 (缺少 X-Requested-With)"}, 403)
+            return
         path = urlparse(self.path).path
         try:
             data = self.read_json()
@@ -149,6 +208,9 @@ class Handler(SimpleHTTPRequestHandler):
             if path == "/api/oral/respond":
                 self._handle_oral_respond(data)
                 return
+            if path == "/api/import":
+                self._handle_import(data)
+                return
             if path == "/api/settings/test":
                 reply = call_ai([
                     {"role": "system", "content": "只回答：连接成功"},
@@ -161,6 +223,12 @@ class Handler(SimpleHTTPRequestHandler):
             self._safe_error(exc)
 
     def _handle_create_problem(self, data: dict[str, Any]) -> None:
+        rid = self.headers.get("X-Request-Id")
+        if rid and rid in _IDEMPOTENCY:
+            cached = _IDEMPOTENCY[rid][1]
+            self.json_response(cached, 201)
+            return
+
         title = str(data.get("title", "")).strip()
         content = str(data.get("content", "")).strip()
         if not title or not content:
@@ -181,7 +249,11 @@ class Handler(SimpleHTTPRequestHandler):
                 "INSERT INTO reviews(problem_id, due_date, interval_days, created_at) VALUES (?, ?, 1, ?)",
                 (problem_id, (date.today() + timedelta(days=1)).isoformat(), stamp),
             )
-        self.json_response({"id": problem_id}, 201)
+        result = {"id": problem_id}
+        if rid:
+            _IDEMPOTENCY[rid] = (datetime.now().timestamp(), result)
+            _prune_idempotency()
+        self.json_response(result, 201)
 
     def _handle_hint(self, problem_id: int, data: dict[str, Any]) -> None:
         level = max(1, min(3, int(data.get("level", 1))))
@@ -229,7 +301,18 @@ class Handler(SimpleHTTPRequestHandler):
                 "UPDATE problems SET mastery = ?, ease_factor = ?, repetition = ?, updated_at = ? WHERE id = ?",
                 (result.mastery, result.ease_factor, result.repetition, now(), review["problem_id"]),
             )
+            self._log_mastery(conn)
         self.json_response({"next_due": next_due, "interval_days": result.interval_days})
+
+    @staticmethod
+    def _log_mastery(conn: Any) -> None:
+        """记录今日掌握度均值，用于趋势图。"""
+        r = conn.execute("SELECT AVG(mastery) AS a, COUNT(*) AS c FROM problems").fetchone()
+        avg = round(r["a"] or 0, 2)
+        conn.execute(
+            "INSERT INTO mastery_log(day, avg_mastery, count) VALUES (?, ?, ?)",
+            (date.today().isoformat(), avg, r["c"] or 0),
+        )
 
     def _handle_oral_start(self, data: dict[str, Any]) -> None:
         topic = str(data.get("topic", "")).strip()
@@ -259,9 +342,53 @@ class Handler(SimpleHTTPRequestHandler):
             conn.execute("UPDATE oral_sessions SET status = 'finished' WHERE id = ?", (session_id,))
         self.json_response({"ok": True})
 
+    def _handle_import(self, data: dict[str, Any]) -> None:
+        """导入：先自动备份当前数据库，再参数化写入，避免注入与数据丢失。"""
+        problems = data.get("problems")
+        if not isinstance(problems, list):
+            self.json_response({"error": "导入数据格式错误（缺少 problems 列表）"}, 400)
+            return
+        # 自动备份
+        backup = DB_PATH.with_name(DB_PATH.stem + f".bak.{now().replace(':', '')}.db")
+        try:
+            shutil.copy(DB_PATH, backup)
+        except OSError as exc:
+            self.json_response({"error": f"备份失败: {exc}"}, 500)
+            return
+        try:
+            with DB_LOCK, db() as conn:
+                conn.execute("DELETE FROM hints")
+                conn.execute("DELETE FROM reviews")
+                conn.execute("DELETE FROM problems")
+                for p in problems:
+                    if not isinstance(p, dict):
+                        continue
+                    pid = int(p.get("id", 0))
+                    title = str(p.get("title", "")).strip()
+                    content = str(p.get("content", "")).strip()
+                    if not title or not content:
+                        continue
+                    conn.execute("""
+                        INSERT INTO problems(id, title, course, topic, content, my_attempt, error_type, mastery, ease_factor, repetition, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 2.5, 0, ?, ?)
+                    """, (
+                        pid, title, str(p.get("course", "")).strip(), str(p.get("topic", "")).strip(),
+                        content, str(p.get("my_attempt", "")).strip(), str(p.get("error_type", "待诊断")),
+                        clamp_mastery(int(p.get("mastery", 1))),
+                        str(p.get("created_at", now())), str(p.get("updated_at", now())),
+                    ))
+        except (ValueError, KeyError) as exc:
+            self.json_response({"error": f"导入失败: {exc}"}, 400)
+            return
+        invalidate_settings_cache()
+        self.json_response({"ok": True, "imported": len(problems), "backup": str(backup)})
+
     # ── PUT ──────────────────────────────────────────────
 
     def do_PUT(self) -> None:
+        if not self._csrf_ok():
+            self.json_response({"error": "请求来源不被信任 (缺少 X-Requested-With)"}, 403)
+            return
         path = urlparse(self.path).path
         try:
             data = self.read_json()
@@ -272,21 +399,28 @@ class Handler(SimpleHTTPRequestHandler):
             if match:
                 self._handle_update_problem(int(match.group(1)), data)
                 return
+            match = re.fullmatch(r"/api/reviews/(\d+)/reschedule", path)
+            if match:
+                self._handle_reschedule_review(int(match.group(1)))
+                return
             self.json_response({"error": "接口不存在"}, 404)
         except Exception as exc:
             self._safe_error(exc)
 
     def _handle_update_settings(self, data: dict[str, Any]) -> None:
-        allowed = {"api_base", "api_key", "model", "temperature"}
+        allowed = {"api_base", "model", "temperature"}
         values = []
         for key in allowed:
-            if key not in data or (key == "api_key" and data[key] == "••••••••"):
-                continue
-            values.append((key, str(data[key]).strip()))
+            if key in data:
+                values.append((key, str(data[key]).strip()))
         with DB_LOCK, db() as conn:
             conn.executemany("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)", values)
+        # 密钥不落库：仅存于内存（会话级），重启后需重新录入
+        key = str(data.get("api_key", "")).strip()
+        if key and key != "••••••••":
+            set_runtime_key(key)
         invalidate_settings_cache()
-        self.json_response({"ok": True, "has_api_key": bool(settings_dict(True).get("api_key"))})
+        self.json_response({"ok": True, "has_api_key": bool(display_settings().get("api_key"))})
 
     def _handle_update_problem(self, problem_id: int, data: dict[str, Any]) -> None:
         existing = row("SELECT * FROM problems WHERE id = ?", (problem_id,))
@@ -296,6 +430,11 @@ class Handler(SimpleHTTPRequestHandler):
         fields = ["title", "course", "topic", "content", "my_attempt", "error_type", "mastery"]
         merged = {field: data.get(field, existing[field]) for field in fields}
         merged["mastery"] = clamp_mastery(int(merged["mastery"]))
+        merged["title"] = str(merged["title"]).strip()
+        merged["content"] = str(merged["content"]).strip()
+        if not merged["title"] or not merged["content"]:
+            self.json_response({"error": "标题和题目内容不能为空"}, 400)
+            return
         with DB_LOCK, db() as conn:
             conn.execute("""
                 UPDATE problems SET title=?, course=?, topic=?, content=?, my_attempt=?, error_type=?, mastery=?, updated_at=?
@@ -303,9 +442,22 @@ class Handler(SimpleHTTPRequestHandler):
             """, tuple(merged[field] for field in fields) + (now(), problem_id))
         self.json_response({"ok": True})
 
+    def _handle_reschedule_review(self, review_id: int) -> None:
+        """手动控制：把复习提前到今天。"""
+        review = row("SELECT * FROM reviews WHERE id = ?", (review_id,))
+        if not review:
+            self.json_response({"error": "复习任务不存在"}, 404)
+            return
+        with DB_LOCK, db() as conn:
+            conn.execute("UPDATE reviews SET due_date = ? WHERE id = ?", (date.today().isoformat(), review_id))
+        self.json_response({"ok": True})
+
     # ── DELETE ───────────────────────────────────────────
 
     def do_DELETE(self) -> None:
+        if not self._csrf_ok():
+            self.json_response({"error": "请求来源不被信任 (缺少 X-Requested-With)"}, 403)
+            return
         path = urlparse(self.path).path
         try:
             match = re.fullmatch(r"/api/problems/(\d+)", path)

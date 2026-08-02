@@ -39,7 +39,8 @@ class TestEndpoints(unittest.TestCase):
     def _request(self, method, path, body=None):
         conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
         data = json.dumps(body) if body else None
-        conn.request(method, path, data, {"Content-Type": "application/json"})
+        headers = {"Content-Type": "application/json", "X-Requested-With": "PhysicsStudyOS"}
+        conn.request(method, path, data, headers)
         resp = conn.getresponse()
         result = json.loads(resp.read().decode("utf-8"))
         conn.close()
@@ -154,6 +155,52 @@ class TestEndpoints(unittest.TestCase):
     def test_oral_end_not_found(self):
         status, data = self._request("POST", "/api/oral/99999/end", {})
         self.assertEqual(status, 404)
+
+    def test_csrf_blocks_post_without_header(self):
+        # 缺少 X-Requested-With 的写请求应被 403 拦截
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("POST", "/api/problems",
+                     json.dumps({"title": "x", "content": "y"}).encode(),
+                     {"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        conn.close()
+        self.assertEqual(resp.status, 403)
+
+    def test_trend_records_after_review(self):
+        pid = self.test_create_problem()
+        # 完成一次复习，触发掌握度日志
+        _, reviews = self._request("GET", "/api/reviews")
+        rid = next(r["id"] for r in reviews if r["problem_id"] == pid)
+        self._request("POST", f"/api/reviews/{rid}/complete", {"rating": 3})
+        status, log = self._request("GET", "/api/trend")
+        self.assertEqual(status, 200)
+        self.assertIsInstance(log, list)
+        self.assertTrue(any("avg_mastery" in row for row in log))
+
+    def test_export_import_roundtrip(self):
+        self.test_create_problem()
+        status, exported = self._request("GET", "/api/export")
+        self.assertEqual(status, 200)
+        self.assertIn("problems", exported)
+        # 导入导出数据
+        status, result = self._request("POST", "/api/import", exported)
+        self.assertEqual(status, 200)
+        self.assertIn("imported", result)
+        self.assertIn("backup", result)
+
+    def test_write_idempotency(self):
+        # 相同 X-Request-Id 重复提交应返回首次结果，不产生重复题目
+        body = {"title": "幂等题", "content": "test"}
+        rid = "idem-1"
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("POST", "/api/problems", json.dumps(body).encode(),
+                     {"Content-Type": "application/json", "X-Requested-With": "PhysicsStudyOS", "X-Request-Id": rid})
+        r1 = json.loads(conn.getresponse().read().decode())
+        conn.request("POST", "/api/problems", json.dumps(body).encode(),
+                     {"Content-Type": "application/json", "X-Requested-With": "PhysicsStudyOS", "X-Request-Id": rid})
+        r2 = json.loads(conn.getresponse().read().decode())
+        conn.close()
+        self.assertEqual(r1["id"], r2["id"])
 
 
 if __name__ == "__main__":
