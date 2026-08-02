@@ -172,10 +172,11 @@ class TestEndpoints(unittest.TestCase):
         _, reviews = self._request("GET", "/api/reviews")
         rid = next(r["id"] for r in reviews if r["problem_id"] == pid)
         self._request("POST", f"/api/reviews/{rid}/complete", {"rating": 3})
-        status, log = self._request("GET", "/api/trend")
+        status, data = self._request("GET", "/api/trend")
         self.assertEqual(status, 200)
-        self.assertIsInstance(log, list)
-        self.assertTrue(any("avg_mastery" in row for row in log))
+        self.assertIn("points", data)
+        self.assertIn("summary", data)
+        self.assertTrue(any("avg_mastery" in row for row in data["points"]))
 
     def test_export_import_roundtrip(self):
         self.test_create_problem()

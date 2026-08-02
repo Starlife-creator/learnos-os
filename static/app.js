@@ -14,7 +14,8 @@ async function api(path, opts = {}) {
   if (method !== 'GET') headers['X-Request-Id'] = uid();
   const body = opts.body ? JSON.stringify(opts.body) : undefined;
 
-  const doFetch = () => fetch(API + path, { method, headers, body });
+  let fetchFailed = false;
+  const doFetch = () => fetch(API + path, { method, headers, body }).catch(e => { fetchFailed = true; throw e; });
   try {
     const res = await doFetch();
     const data = await res.json().catch(() => ({}));
@@ -22,7 +23,8 @@ async function api(path, opts = {}) {
     return data;
   } catch (err) {
     // 仅对网络层失败（非 HTTP 错误）重试一次（GET）
-    if (err instanceof TypeError && method === 'GET') {
+    if (fetchFailed && method === 'GET') {
+      fetchFailed = false;
       const res = await doFetch();
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || '请求失败');
@@ -89,6 +91,11 @@ function closeModal(id) {
   if (!overlay) return;
   overlay.classList.remove('active');
   if (_lastFocus && _lastFocus.focus) _lastFocus.focus();
+  // 清理详情弹窗的键盘快捷键监听
+  if (id === 'problemModal' && overlay._onKey) {
+    document.removeEventListener('keydown', overlay._onKey);
+    overlay._onKey = null;
+  }
 }
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
@@ -130,17 +137,21 @@ function confirmDialog(message) {
 
 // ── 导航 + 深链 ──
 const PAGES = ['dashboard', 'problems', 'review', 'oral', 'settings'];
-function switchPage(page) {
+function switchPage(page, {push=true}={}) {
   if (!PAGES.includes(page)) page = 'dashboard';
   document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.page === page));
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.getElementById('page-' + page).classList.add('active');
-  if (location.hash !== '#' + page) history.replaceState(null, '', '#' + page);
+  if (push) history.pushState(null, '', '#' + page);
   if (page === 'dashboard') loadDashboard();
   if (page === 'problems') loadProblems(1);
   if (page === 'review') loadReviews();
   if (page === 'settings') loadSettings();
 }
+window.addEventListener('popstate', () => {
+  const hash = (location.hash || '').replace('#', '');
+  switchPage(PAGES.includes(hash) ? hash : 'dashboard', {push: false});
+});
 document.querySelectorAll('.nav-item').forEach(el => {
   el.addEventListener('click', () => switchPage(el.dataset.page));
 });
@@ -154,9 +165,10 @@ document.addEventListener('keydown', (e) => {
 // ── 主题切换 ──
 function applyTheme(theme) {
   const root = document.documentElement;
-  if (theme === 'dark') root.style.colorScheme = 'dark';
-  else if (theme === 'light') root.style.colorScheme = 'light';
-  else root.style.colorScheme = '';
+  const meta = document.querySelector('meta[name="color-scheme"]');
+  if (theme === 'dark') { root.style.colorScheme = 'dark'; if (meta) meta.content = 'dark'; }
+  else if (theme === 'light') { root.style.colorScheme = 'light'; if (meta) meta.content = 'light'; }
+  else { root.style.colorScheme = ''; if (meta) meta.content = 'light dark'; }
 }
 document.getElementById('themeToggle').addEventListener('click', () => {
   const cur = document.documentElement.style.colorScheme;
@@ -207,6 +219,35 @@ async function loadDashboard() {
       recentEl.innerHTML = '<div class="empty"><p>还没有记录，去"错题"页添加第一题吧</p></div>';
     }
     drawTrend();
+
+    // 课程级统计
+    const courseEl = document.getElementById('courseStats');
+    if (d.course_stats && d.course_stats.length) {
+      courseEl.innerHTML = d.course_stats.map(c => `
+        <div class="flex-between mb-8">
+          <span class="text-sm" style="min-width:80px">${escapeHtml(c.course)}</span>
+          <span class="flex gap-8 items-center" style="flex:1">
+            <span style="flex:1;height:6px;background:var(--border);border-radius:3px;overflow:hidden">
+              <span style="display:block;height:100%;width:${(c.avg_mastery/5*100).toFixed(0)}%;background:${c.avg_mastery>=4?'var(--success)':c.avg_mastery>=3?'var(--accent)':'var(--warning)'};border-radius:3px"></span>
+            </span>
+            <span class="tag tag-gray">${c.avg_mastery} (${c.count}题${c.due>0?',待复习'+c.due:''})</span>
+          </span>
+        </div>`).join('');
+    } else {
+      courseEl.innerHTML = '<div class="empty"><p>暂无课程分类</p></div>';
+    }
+
+    // 最近复习活动
+    const actEl = document.getElementById('recentActivity');
+    if (d.recent_activity && d.recent_activity.length) {
+      const labels = {1:'忘记',2:'模糊',3:'正确',4:'掌握'};
+      actEl.innerHTML = d.recent_activity.map(a => `
+        <div class="list-item" onclick="viewProblem(${a.problem_id})" style="padding:8px 12px">
+          <span class="text-sm">📝 ${escapeHtml(a.title)}</span>
+          <span class="tag ${a.result==='4'?'tag-green':a.result==='3'?'tag-blue':'tag-amber'}">${labels[a.result]||'?'}</span>
+          <span class="text-muted text-sm" style="float:right">${(a.created_at||'').slice(0,16)}</span>
+        </div>`).join('');
+    } else { actEl.innerHTML = '<div class="empty"><p>暂无复习活动</p></div>'; }
   } catch(e) { toast(e.message, 'error'); }
 }
 
@@ -214,8 +255,10 @@ async function drawTrend() {
   const svg = document.getElementById('trendSvg');
   const hint = document.getElementById('trendHint');
   try {
-    const log = await api('/api/trend');
-    if (!log.length) { svg.innerHTML = ''; return; }
+    const data = await api('/api/trend');
+    const log = data.points || data;
+    const summary = data.summary || {};
+    if (!log.length) { svg.innerHTML = ''; hint.textContent = '完成复习后会记录掌握度变化'; return; }
     const W = 300, H = 120, pad = 10;
     const max = 5, min = 0;
     const n = log.length;
@@ -228,7 +271,8 @@ async function drawTrend() {
       <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2"/>
       <circle cx="${x(n - 1).toFixed(1)}" cy="${y(last.avg_mastery).toFixed(1)}" r="3" fill="var(--accent)"/>
     `;
-    hint.textContent = `最近 ${n} 次复习 · 当前均值 ${last.avg_mastery}`;
+    const acc = summary.week_accuracy ? ` · 近7天正确率 ${summary.week_accuracy}%` : '';
+    hint.textContent = `最近 ${n} 次${acc} · 当前均值 ${last.avg_mastery}`;
   } catch(e) { /* 趋势可选，失败不阻塞 */ }
 }
 
@@ -248,7 +292,7 @@ async function loadProblems(page = 1) {
   listEl.innerHTML = '<div class="skeleton"></div><div class="skeleton"></div>';
   const q = document.getElementById('searchInput').value.trim();
   const sort = document.getElementById('sortSelect').value;
-  const params = new URLSearchParams({ page, limit: 20, q });
+  const params = new URLSearchParams({ page, limit: 20, q, sort });
   try {
     const data = await api(`/api/problems?${params.toString()}`);
     problemPages = data.pages || 1;
@@ -256,15 +300,16 @@ async function loadProblems(page = 1) {
     if (!items.length) {
       listEl.innerHTML = '<div class="empty"><p>暂无题目，点击"新增题目"开始</p></div>';
     } else {
-      let sorted = items.slice();
-      if (sort === 'mastery') sorted.sort((a, b) => a.mastery - b.mastery);
-      listEl.innerHTML = sorted.map(p => `
-        <div class="list-item" onclick="viewProblem(${p.id})">
-          <div class="list-item-header">
-            <span class="list-item-title">${escapeHtml(p.title)}</span>
-            ${masteryTag(p.mastery)}
+      listEl.innerHTML = items.map(p => `
+        <div class="list-item" style="display:flex;gap:10px;align-items:flex-start">
+          <input type="checkbox" style="margin-top:3px;accent-color:var(--accent)" onclick="event.stopPropagation();toggleBatch(${p.id},this.checked)" aria-label="选择题目">
+          <div style="flex:1" onclick="viewProblem(${p.id})">
+            <div class="list-item-header">
+              <span class="list-item-title">${p.starred ? '⭐ ' : ''}${escapeHtml(p.title)}${miniTrendDots(p.recent_results)}</span>
+              ${masteryTag(p.mastery)}
           </div>
           <div class="list-item-meta">${escapeHtml(p.course)} · ${escapeHtml(p.topic)} · ${escapeHtml(p.error_type)} · ${escapeHtml(p.created_at)}</div>
+          </div>
         </div>`).join('');
     }
     renderPager();
@@ -284,7 +329,7 @@ function renderPager() {
 async function viewProblem(id) {
   try {
     const p = await api(`/api/problems/${id}`);
-    document.getElementById('modalTitle').textContent = p.title;
+    document.getElementById('modalTitle').textContent = (p.starred ? '⭐ ' : '') + p.title;
     let html = `
       <div class="flex gap-8 mb-8">
         <span class="tag tag-blue">${escapeHtml(p.course || '未分类')}</span>
@@ -315,11 +360,33 @@ async function viewProblem(id) {
     }
     html += `<div class="flex gap-12 mt-16">
       <button class="btn btn-secondary btn-sm" onclick="editProblem(${id})">编辑</button>
+      <button class="btn btn-secondary btn-sm" onclick="toggleStar(${id})">${p.starred ? '★ 已收藏' : '☆ 收藏'}</button>
       <button class="btn btn-danger btn-sm" onclick="deleteProblem(${id})">删除</button>
-    </div>`;
+    </div>
+    <div id="problemHistory" class="mt-16"></div>
+    <div id="relatedProblems" class="mt-16"></div>
+    <p class="text-sm text-muted mt-12" style="opacity:0.6">快捷键：1/2/3=提示  s=收藏  e=编辑  d=删除</p>`;
     document.getElementById('modalBody').innerHTML = html;
     renderMath(document.getElementById('modalBody'));
     openModal('problemModal');
+    // 异步加载历史 + 关联题目
+    loadHistory(id);
+    loadRelated(id);
+    // 详情弹窗内键盘快捷键
+    const modal = document.getElementById('problemModal');
+    const onKey = (e) => {
+      if (!modal.classList.contains('active')) return;
+      const tag = (document.activeElement && document.activeElement.tagName) || '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key === '1') getHint(id, 1);
+      else if (e.key === '2') getHint(id, 2);
+      else if (e.key === '3') getHint(id, 3);
+      else if (e.key === 's') toggleStar(id);
+      else if (e.key === 'e') editProblem(id);
+      else if (e.key === 'd') deleteProblem(id);
+    };
+    modal._onKey = onKey;
+    document.addEventListener('keydown', onKey);
   } catch(e) { toast(e.message, 'error'); }
 }
 
@@ -356,6 +423,7 @@ async function editProblem(id) {
       document.getElementById('editAttempt').value = p.my_attempt || '';
       document.getElementById('editErrorType').value = p.error_type || '待诊断';
       document.getElementById('editMastery').value = p.mastery || 1;
+      document.getElementById('editStarred').checked = p.starred === 1;
     } catch(e) { toast(e.message, 'error'); return; }
   } else {
     titleEl.textContent = '新增题目';
@@ -377,6 +445,7 @@ async function saveProblem() {
     my_attempt: document.getElementById('editAttempt').value,
     error_type: document.getElementById('editErrorType').value,
     mastery: parseInt(document.getElementById('editMastery').value, 10),
+    starred: document.getElementById('editStarred').checked ? 1 : 0,
   };
   if (!body.title.trim() || !body.content.trim()) { toast('标题和题目内容不能为空', 'error'); return; }
   try {
@@ -394,10 +463,83 @@ async function saveProblem() {
 async function deleteProblem(id) {
   const ok = await confirmDialog('确定删除这道题目？相关提示和复习记录也会被删除。');
   if (!ok) return;
+  let cancelled = false;
+  const toastEl = document.createElement('div');
+  toastEl.className = 'toast error';
+  toastEl.setAttribute('role', 'status');
+  toastEl.setAttribute('aria-live', 'polite');
+  toastEl.innerHTML = '已删除 · <a href="#" style="color:#fff;text-decoration:underline;cursor:pointer" onclick="event.stopPropagation();cancelled=true;this.parentElement.remove();toast(\'已取消删除\',\'success\')">撤销</a>';
+  document.body.appendChild(toastEl);
+  // 10 秒倒计时后真正删除
+  await new Promise(r => setTimeout(r, 10000));
+  if (cancelled) { toastEl.remove(); return; }
   try {
     await api(`/api/problems/${id}`, { method: 'DELETE' });
+    toastEl.remove();
     toast('已删除');
     closeModal('problemModal');
+    loadProblems(problemPage);
+  } catch(e) { toastEl.remove(); toast(e.message, 'error'); }
+}
+
+async function toggleStar(id) {
+  try {
+    await api('/api/problems/batch', { method: 'POST', body: { ids: [id], action: 'star' } });
+    toast('已切换收藏');
+    closeModal('problemModal'); viewProblem(id);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function loadHistory(id) {
+  try {
+    const history = await api(`/api/problems/${id}/history`);
+    const el = document.getElementById('problemHistory');
+    if (!history.length) { el.innerHTML = ''; return; }
+    el.innerHTML = `<div class="card-title">复习轨迹</div>` +
+      history.map(h => {
+        const labels = {1:'❌忘记',2:'⚠模糊',3:'✓正确',4:'✅掌握'};
+        const cls = h.result === '4' ? 'tag-green' : h.result === '3' ? 'tag-blue' : h.result === '2' ? 'tag-amber' : 'tag-red';
+        return `<span class="tag ${cls}" style="margin:1px 4px" title="${h.due_date} · 间隔${h.interval_days}天">${labels[h.result]||h.result}</span>`;
+      }).join(' ');
+  } catch(e) {}
+}
+
+async function loadRelated(id) {
+  try {
+    const related = await api(`/api/problems/${id}/related`);
+    const el = document.getElementById('relatedProblems');
+    if (!related.length) { el.innerHTML = ''; return; }
+    el.innerHTML = `<div class="card-title">同知识点题目</div>` +
+      related.map(r => `<span class="tag tag-gray" style="cursor:pointer;margin:1px 4px" onclick="closeModal('problemModal');viewProblem(${r.id})">${escapeHtml(r.title)}</span>`).join('');
+  } catch(e) {}
+}
+
+function miniTrendDots(results) {
+  if (!results || !results.length) return '';
+  const colors = {1:'var(--danger)',2:'var(--warning)',3:'var(--accent)',4:'var(--success)'};
+  return '<span style="display:inline-flex;gap:2px;vertical-align:middle;margin-left:6px">' +
+    results.map(r => `<span style="width:6px;height:6px;border-radius:50%;background:${colors[r]||'var(--border)'}"></span>`).join('') +
+    '</span>';
+}
+
+let _batchSelected = new Set();
+function toggleBatch(pid, checked) {
+  if (checked) _batchSelected.add(pid); else _batchSelected.delete(pid);
+  document.getElementById('batchBar').classList.toggle('hidden', _batchSelected.size === 0);
+  document.getElementById('batchCount').textContent = _batchSelected.size;
+}
+async function batchAction(action) {
+  const ids = Array.from(_batchSelected);
+  if (!ids.length) return;
+  if (action === 'delete') {
+    const ok = await confirmDialog(`确定批量删除 ${ids.length} 道题目？`);
+    if (!ok) return;
+  }
+  try {
+    await api('/api/problems/batch', { method: 'POST', body: { ids, action } });
+    toast(`已处理 ${ids.length} 题`);
+    _batchSelected.clear();
+    document.getElementById('batchBar').classList.add('hidden');
     loadProblems(problemPage);
   } catch(e) { toast(e.message, 'error'); }
 }
@@ -413,6 +555,22 @@ async function loadReviews() {
       return;
     }
     const today = new Date().toISOString().slice(0, 10);
+    const dueCount = list.filter(r => r.due_date <= today).length;
+    document.getElementById('reviewProgress').innerHTML = `
+      <div style="height:8px;background:var(--border);border-radius:4px;overflow:hidden;margin-bottom:10px">
+        <div style="height:100%;width:0%;background:var(--accent);border-radius:4px;transition:width .3s" id="reviewProgressBar"></div>
+      </div>
+      <span class="text-sm text-muted" id="reviewProgressText">今日到期 ${dueCount} 题 · 完成 0</span>
+    `;
+    let completed = 0;
+    const updateProgress = () => {
+      completed++;
+      const bar = document.getElementById('reviewProgressBar');
+      if (bar) bar.style.width = (completed / dueCount * 100).toFixed(0) + '%';
+      const text = document.getElementById('reviewProgressText');
+      if (text) text.textContent = `今日到期 ${dueCount} 题 · 完成 ${completed}`;
+    };
+    window._reviewUpdateProgress = updateProgress;
     el.innerHTML = list.map(r => `
       <div class="list-item">
         <div class="list-item-header">
@@ -421,7 +579,7 @@ async function loadReviews() {
             ${r.due_date <= today ? '今日到期' : '即将到期'}
           </span>
         </div>
-        <div class="list-item-meta">${escapeHtml(r.course)} · ${escapeHtml(r.topic)} · 到期日: ${r.due_date}</div>
+        <div class="list-item-meta">${escapeHtml(r.course)} · ${escapeHtml(r.topic)} · 到期日: ${r.due_date} · 间隔: ${r.interval_days}天</div>
         <div class="flex gap-8 mt-12 flex-wrap">
           <button class="btn btn-danger btn-sm" onclick="completeReview(${r.id},1)">忘记</button>
           <button class="btn btn-secondary btn-sm" onclick="completeReview(${r.id},2)">模糊</button>
@@ -439,6 +597,7 @@ async function completeReview(id, rating) {
     const r = await api(`/api/reviews/${id}/complete`, { method: 'POST', body: { rating } });
     const labels = {1:'已标记为忘记',2:'已标记为模糊',3:'已标记为基本正确',4:'已标记为完全掌握'};
     toast(`${labels[rating]} · 下次复习: ${r.next_due} (${r.interval_days}天后)`);
+    if (window._reviewUpdateProgress) window._reviewUpdateProgress();
     loadReviews();
     if (document.getElementById('page-dashboard').classList.contains('active')) loadDashboard();
   } catch(e) { toast(e.message, 'error'); }
@@ -596,6 +755,34 @@ async function importData(input) {
     loadDashboard();
   } catch(e) { toast('导入失败: ' + e.message, 'error'); }
   input.value = '';
+}
+
+// ── 公式速查 ──
+const _FORMULAS = [
+  {cat:'运动学',eqs:['v = v₀ + at','s = v₀t + ½at²','v² − v₀² = 2as','ω = dθ/dt']},
+  {cat:'动力学',eqs:['F = ma','F_f ≤ μN','F = −kx（胡克定律）','p = mv']},
+  {cat:'功与能',eqs:['W = F·s·cosθ','K = ½mv²','W = ΔK','U_g = mgh','U_e = ½kx²']},
+  {cat:'动量守恒',eqs:['p_i = p_f','J = Δp = FΔt','完全弹性碰撞：v₁'+"'"+' = (m₁−m₂)/(m₁+m₂)·v₁']},
+  {cat:'圆周运动',eqs:['a_c = v²/r = ω²r','F_c = mv²/r','v = ωr','T = 2π/ω']},
+  {cat:'静电场',eqs:['F = kQq/r²','E = F/q','E = kQ/r²','U = Ed（匀强）']},
+  {cat:'电路',eqs:['V = IR','P = IV = I²R','R_s = R₁+R₂+...','1/R_p = 1/R₁+1/R₂+...']},
+  {cat:'磁场',eqs:['F = qvB·sinθ','F = ILB·sinθ','Φ = BA·cosθ','ε = −dΦ/dt']},
+  {cat:'热学',eqs:['PV = nRT','ΔU = Q − W','η = 1 − T_c/T_h','ΔS = Q_rev/T']},
+  {cat:'波动与光学',eqs:['v = fλ','n = c/v','n₁sinθ₁ = n₂sinθ₂','dsinθ = mλ（双缝）']},
+  {cat:'SI词头',eqs:['n 10⁻⁹','μ 10⁻⁶','m 10⁻³','c 10⁻²','k 10³','M 10⁶','G 10⁹']},
+];
+function toggleFormulaPanel() {
+  const p = document.getElementById('formulaPanel');
+  const content = document.getElementById('formulaContent');
+  if (p.classList.contains('hidden')) {
+    content.innerHTML = _FORMULAS.map(c =>
+      `<div style="margin-bottom:8px"><strong>${c.cat}</strong>: ${c.eqs.map(e=>escapeHtml(e)).join(' &nbsp;| ')}</div>`
+    ).join('');
+    p.classList.remove('hidden');
+    renderMath(content);
+  } else {
+    p.classList.add('hidden');
+  }
 }
 
 // ── 初始化 ──

@@ -69,6 +69,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (2, ?)", (now(),))
         LOG.info("数据库已迁移到 v2 (添加 mastery_log)")
 
+    # v3: 收藏/星标列
+    if current < 3:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(problems)").fetchall()}
+        if "starred" not in cols:
+            conn.execute("ALTER TABLE problems ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (3, ?)", (now(),))
+        LOG.info("数据库已迁移到 v3 (添加 starred)")
+
 
 def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -80,6 +88,18 @@ def init_db() -> None:
             DEFAULT_SETTINGS.items(),
         )
     LOG.info("数据库已初始化: %s", DB_PATH)
+
+    # 性能索引（幂等，已存在则跳过）
+    with DB_LOCK, db() as conn:
+        _IDX_SQLS = [
+            "CREATE INDEX IF NOT EXISTS idx_reviews_pid_comp ON reviews(problem_id, completed, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_reviews_due ON reviews(due_date, completed)",
+            "CREATE INDEX IF NOT EXISTS idx_problems_course ON problems(course)",
+            "CREATE INDEX IF NOT EXISTS idx_problems_topic ON problems(topic)",
+        ]
+        for sql in _IDX_SQLS:
+            conn.execute(sql)
+    LOG.info("数据库索引已确认")
 
 
 def rows(query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:

@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light dark">
 <title>个人物理学习 OS</title>
 <link rel="stylesheet" href="/vendor/katex.min.css">
 <script defer src="/vendor/katex.min.js"></script>
@@ -48,7 +49,7 @@
   a { color: var(--accent); text-decoration: none; }
 
   /* ── 导航 ── */
-  .nav { display: flex; gap: 0; background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 100; }
+  .nav { display: flex; gap: 0; background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 100; mask-image: linear-gradient(to right, transparent 0px, black 40px, black calc(100% - 8px), transparent 100%); -webkit-mask-image: linear-gradient(to right, transparent 0px, black 40px, black calc(100% - 8px), transparent 100%); }
   .nav-item { padding: 14px 22px; cursor: pointer; border-bottom: 2px solid transparent; font-size: 14px; font-weight: 500; color: var(--text-2); transition: all .15s; background: none; border-top: none; border-left: none; border-right: none; font-family: inherit; }
   .nav-item:hover { color: var(--text); background: var(--bg); }
   .nav-item.active { color: var(--accent); border-bottom-color: var(--accent); }
@@ -236,6 +237,16 @@
       <div class="card-title">最近记录</div>
       <div id="recentList"></div>
     </div>
+
+    <div class="card" id="courseStatsCard">
+      <div class="card-title">课程掌握度</div>
+      <div id="courseStats"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">最近复习活动</div>
+      <div id="recentActivity"></div>
+    </div>
   </div>
 
   <!-- ── 错题页 ── -->
@@ -256,12 +267,25 @@
       </div>
     </div>
     <div id="problemsList"></div>
+    <div class="flex gap-12 mt-12 hidden" id="batchBar" style="position:sticky;bottom:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:8px 16px;z-index:50">
+      <span class="text-sm">已选 <strong id="batchCount">0</strong> 题</span>
+      <button class="btn btn-secondary btn-sm" onclick="batchAction('star')">☆ 收藏/取消</button>
+      <button class="btn btn-danger btn-sm" onclick="batchAction('delete')">删除</button>
+    </div>
     <div class="flex gap-12 mt-12" id="pager" style="justify-content:center"></div>
+    <div class="mt-12">
+      <button class="btn btn-secondary btn-sm" onclick="toggleFormulaPanel()">📐 公式速查</button>
+    </div>
+    <div class="card hidden mt-12" id="formulaPanel">
+      <div class="card-title">物理公式速查</div>
+      <div id="formulaContent" class="text-sm"></div>
+    </div>
   </div>
 
   <!-- ── 复习页 ── -->
   <div id="page-review" class="page">
     <h2 style="font-size:18px;margin-bottom:14px">今日复习</h2>
+    <div id="reviewProgress"></div>
     <div id="reviewList"></div>
   </div>
 
@@ -388,6 +412,11 @@
         </select>
         <p class="hint-text">注：复习评分采用 1-4 分制（忘记/模糊/基本正确/完全掌握），与上面 1-5 的「题目掌握度」是两套独立指标。</p>
       </div>
+    </div>
+    <div class="form-group">
+      <label style="display:flex;align-items:center;gap:6px;font-size:14px">
+        <input type="checkbox" id="editStarred" style="width:auto;accent-color:var(--warning)"> ⭐ 收藏此题
+      </label>
     </div>
     <div class="flex gap-12 mt-12">
       <button class="btn btn-primary" onclick="saveProblem()">保存</button>

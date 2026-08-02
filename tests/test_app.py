@@ -79,7 +79,7 @@ class PhysicsStudyOSTest(unittest.TestCase):
         # 获取一级提示（无 AI 配置，应为 fallback）
         _, hint = self.request(f"/api/problems/{problem_id}/hint", "POST", {"level": 1})
         self.assertEqual(hint["source"], "fallback")
-        self.assertIn("量纲", hint["content"])
+        self.assertIn("简谐振动", hint["content"])
 
         # 获取今日复习列表
         _, reviews = self.request("/api/reviews")

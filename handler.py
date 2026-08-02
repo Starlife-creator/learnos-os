@@ -87,6 +87,14 @@ class Handler(SimpleHTTPRequestHandler):
             if match:
                 self._handle_get_problem(int(match.group(1)))
                 return
+            match = re.fullmatch(r"/api/problems/(\d+)/history", path)
+            if match:
+                self._handle_problem_history(int(match.group(1)))
+                return
+            match = re.fullmatch(r"/api/problems/(\d+)/related", path)
+            if match:
+                self._handle_related_problems(int(match.group(1)))
+                return
             if path == "/api/reviews":
                 self.json_response(rows("""
                     SELECT r.*, p.title, p.course, p.topic, p.content, p.my_attempt
@@ -100,6 +108,10 @@ class Handler(SimpleHTTPRequestHandler):
             if path == "/api/trend":
                 self._handle_trend()
                 return
+            match = re.fullmatch(r"/api/oral/(\d+)", path)
+            if match:
+                self._handle_get_oral(int(match.group(1)))
+                return
             if path == "/api/export":
                 self._handle_export()
                 return
@@ -111,7 +123,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._safe_error(exc)
 
     def _handle_list_problems(self) -> None:
-        """支持分页与搜索: ?page=1&limit=50&q=关键词 (limit 上限 200)"""
+        """支持分页与搜索: ?page=1&limit=50&q=关键词&sort=time|mastery (limit 上限 200)"""
         qs = parse_qs(urlparse(self.path).query)
         try:
             limit = min(max(int(qs.get("limit", ["50"])[0]), 1), 200)
@@ -119,6 +131,8 @@ class Handler(SimpleHTTPRequestHandler):
         except (ValueError, IndexError):
             limit, page = 50, 1
         q = (qs.get("q", [""])[0] or "").strip()
+        sort = qs.get("sort", ["time"])[0]
+        order = {"time": "id DESC", "mastery": "mastery ASC"}.get(sort, "id DESC")
         offset = (page - 1) * limit
 
         if q:
@@ -129,11 +143,27 @@ class Handler(SimpleHTTPRequestHandler):
             where, params = "", ()
 
         items = rows(
-            f"SELECT * FROM problems{where} ORDER BY id DESC LIMIT ? OFFSET ?",
+            f"SELECT id, title, course, topic, error_type, mastery, starred, created_at, updated_at FROM problems{where} ORDER BY {order} LIMIT ? OFFSET ?",
             params + (limit, offset),
         )
         total_row = row(f"SELECT COUNT(*) AS count FROM problems{where}", params)
         total = total_row["count"] if total_row else 0
+        # 一次窗口函数查询拉回所有题的最近 3 次评分（替代每道题单独查）
+        if items:
+            ids = [item["id"] for item in items]
+            placeholders = ",".join("?" for _ in ids)
+            mini_rows = rows(f"""
+                SELECT problem_id, result FROM (
+                    SELECT problem_id, result, id,
+                        ROW_NUMBER() OVER (PARTITION BY problem_id ORDER BY id DESC) AS rn
+                    FROM reviews WHERE completed = 1 AND problem_id IN ({placeholders})
+                ) WHERE rn <= 3 ORDER BY problem_id, id ASC
+            """, tuple(ids))
+            by_pid: dict[int, list[str]] = {pid: [] for pid in ids}
+            for mr in mini_rows:
+                by_pid[mr["problem_id"]].append(mr["result"])
+            for item in items:
+                item["recent_results"] = by_pid.get(item["id"], [])
         self.json_response({
             "items": items, "total": total, "page": page, "limit": limit,
             "pages": (total + limit - 1) // limit,
@@ -152,12 +182,46 @@ class Handler(SimpleHTTPRequestHandler):
             SELECT topic, COUNT(*) AS count, ROUND(AVG(mastery), 1) AS mastery
             FROM problems WHERE topic <> '' GROUP BY topic ORDER BY mastery ASC, count DESC LIMIT 8
         """)
-        recent = rows("SELECT id, title, course, topic, error_type, mastery, created_at FROM problems ORDER BY id DESC LIMIT 5")
-        self.json_response({"stats": stats, "due": due["count"] if due else 0, "topics": topics, "recent": recent})
+        recent = rows("SELECT id, title, course, topic, error_type, mastery, created_at, starred FROM problems ORDER BY id DESC LIMIT 5")
+        recent_activity = rows("""
+            SELECT r.id, r.result, r.created_at, p.id AS problem_id, p.title, p.course, p.topic
+            FROM reviews r JOIN problems p ON p.id = r.problem_id
+            WHERE r.completed = 1 ORDER BY r.id DESC LIMIT 5
+        """)
+        course_stats = rows("""
+            SELECT course, COUNT(*) AS count, ROUND(AVG(mastery), 1) AS avg_mastery,
+                   SUM(CASE WHEN mastery >= 4 THEN 1 ELSE 0 END) AS mastered,
+                   (SELECT COUNT(*) FROM reviews WHERE completed=0 AND due_date<=? AND problem_id IN (SELECT id FROM problems p2 WHERE p2.course = p.course)) AS due
+            FROM problems p WHERE course <> '' GROUP BY course ORDER BY avg_mastery ASC LIMIT 6
+        """, (today,))
+        self.json_response({"stats": stats, "due": due["count"] if due else 0, "topics": topics, "recent": recent, "recent_activity": recent_activity, "course_stats": course_stats})
 
     def _handle_trend(self) -> None:
         log = rows("SELECT day, avg_mastery, count FROM mastery_log ORDER BY id DESC LIMIT 60")
-        self.json_response(list(reversed(log)))
+        week_ago = (date.today() - timedelta(days=7)).isoformat()
+        summary = row("""
+            SELECT COUNT(*) AS week_reviews,
+                   COALESCE(ROUND(AVG(CASE WHEN CAST(result AS INTEGER) >= 3 THEN 1.0 ELSE 0 END) * 100, 0), 0) AS week_accuracy
+            FROM reviews WHERE completed = 1 AND created_at >= ?
+        """, (week_ago,)) or {}
+        week_new = row("SELECT COUNT(*) AS count FROM problems WHERE created_at >= ?", (week_ago,))
+        self.json_response({
+            "points": list(reversed(log)),
+            "summary": {
+                "week_reviews": int(summary.get("week_reviews", 0)),
+                "week_accuracy": int(summary.get("week_accuracy", 0)),
+                "week_new": int(week_new["count"]) if week_new else 0,
+            },
+        })
+
+    def _handle_get_oral(self, session_id: int) -> None:
+        """返回一次口试会话的完整 transcript。"""
+        item = row("SELECT * FROM oral_sessions WHERE id = ?", (session_id,))
+        if not item:
+            self.json_response({"error": "口试会话不存在"}, 404)
+            return
+        item["transcript"] = json.loads(item["transcript"]) if item["transcript"] else []
+        self.json_response(item)
 
     def _handle_export(self) -> None:
         """只读导出：返回全部题目、提示与复习记录的 JSON。"""
@@ -166,7 +230,7 @@ class Handler(SimpleHTTPRequestHandler):
             "exported_at": now(),
             "problems": rows("SELECT id, title, course, topic, content, my_attempt, error_type, mastery, created_at, updated_at FROM problems ORDER BY id"),
             "hints": rows("SELECT problem_id, level, content, created_at FROM hints ORDER BY id"),
-            "reviews": rows("SELECT problem_id, due_date, interval_days, result, created_at FROM reviews ORDER BY id"),
+            "reviews": rows("SELECT problem_id, due_date, interval_days, result, completed, created_at FROM reviews ORDER BY id"),
         }
         self.json_response(data)
 
@@ -177,6 +241,29 @@ class Handler(SimpleHTTPRequestHandler):
             return
         item["hints"] = rows("SELECT level, content, created_at FROM hints WHERE problem_id = ? ORDER BY level", (problem_id,))
         self.json_response(item)
+
+    def _handle_problem_history(self, problem_id: int) -> None:
+        """一道题的全部已完成复习记录（SM-2 轨迹）。"""
+        history = rows("""
+            SELECT due_date, result, interval_days, created_at
+            FROM reviews WHERE problem_id = ? AND completed = 1
+            ORDER BY id ASC
+        """, (problem_id,))
+        self.json_response(history)
+
+    def _handle_related_problems(self, problem_id: int) -> None:
+        """同知识点 / 同课程的其他题目（排除自身，最多 3 题）。"""
+        p = row("SELECT topic, course FROM problems WHERE id = ?", (problem_id,))
+        if not p:
+            self.json_response({"error": "题目不存在"}, 404)
+            return
+        topic = p["topic"] or ""
+        course = p["course"] or ""
+        related = rows(
+            "SELECT id, title, course, topic, mastery FROM problems WHERE id != ? AND (topic = ? OR course = ?) ORDER BY id DESC LIMIT 3",
+            (problem_id, topic, course),
+        )
+        self.json_response(related)
 
     # ── POST ─────────────────────────────────────────────
 
@@ -211,6 +298,9 @@ class Handler(SimpleHTTPRequestHandler):
             if path == "/api/import":
                 self._handle_import(data)
                 return
+            if path == "/api/problems/batch":
+                self._handle_batch(data)
+                return
             if path == "/api/settings/test":
                 reply = call_ai([
                     {"role": "system", "content": "只回答：连接成功"},
@@ -225,9 +315,11 @@ class Handler(SimpleHTTPRequestHandler):
     def _handle_create_problem(self, data: dict[str, Any]) -> None:
         rid = self.headers.get("X-Request-Id")
         if rid and rid in _IDEMPOTENCY:
-            cached = _IDEMPOTENCY[rid][1]
-            self.json_response(cached, 201)
-            return
+            ts, cached = _IDEMPOTENCY[rid]
+            if ts >= datetime.now().timestamp() - _IDEMPOTENCY_TTL:
+                self.json_response(cached, 201)
+                return
+            _IDEMPOTENCY.pop(rid, None)
 
         title = str(data.get("title", "")).strip()
         content = str(data.get("content", "")).strip()
@@ -306,12 +398,14 @@ class Handler(SimpleHTTPRequestHandler):
 
     @staticmethod
     def _log_mastery(conn: Any) -> None:
-        """记录今日掌握度均值，用于趋势图。"""
+        """记录今日掌握度均值（每天保留最新一条），用于趋势图。"""
         r = conn.execute("SELECT AVG(mastery) AS a, COUNT(*) AS c FROM problems").fetchone()
         avg = round(r["a"] or 0, 2)
+        today = date.today().isoformat()
+        conn.execute("DELETE FROM mastery_log WHERE day = ?", (today,))
         conn.execute(
             "INSERT INTO mastery_log(day, avg_mastery, count) VALUES (?, ?, ?)",
-            (date.today().isoformat(), avg, r["c"] or 0),
+            (today, avg, r["c"] or 0),
         )
 
     def _handle_oral_start(self, data: dict[str, Any]) -> None:
@@ -348,6 +442,11 @@ class Handler(SimpleHTTPRequestHandler):
         if not isinstance(problems, list):
             self.json_response({"error": "导入数据格式错误（缺少 problems 列表）"}, 400)
             return
+        # 版本兼容性校验（防未来 schema 不一致的备份被误加载）
+        data_version = int(data.get("version", 1))
+        if data_version > 1:
+            self.json_response({"error": f"备份来自更新的版本 (v{data_version})，请升级应用后再导入"}, 400)
+            return
         # 自动备份
         backup = DB_PATH.with_name(DB_PATH.stem + f".bak.{now().replace(':', '')}.db")
         try:
@@ -377,11 +476,51 @@ class Handler(SimpleHTTPRequestHandler):
                         clamp_mastery(int(p.get("mastery", 1))),
                         str(p.get("created_at", now())), str(p.get("updated_at", now())),
                     ))
+                # 导入提示记录
+                for h in data.get("hints", []):
+                    if not isinstance(h, dict):
+                        continue
+                    conn.execute(
+                        "INSERT INTO hints(problem_id, level, content, created_at) VALUES (?, ?, ?, ?)",
+                        (int(h.get("problem_id", 0)), int(h.get("level", 1)),
+                         str(h.get("content", "")).strip(), str(h.get("created_at", now()))),
+                    )
+                # 导入复习记录
+                for rv in data.get("reviews", []):
+                    if not isinstance(rv, dict):
+                        continue
+                    conn.execute(
+                        "INSERT INTO reviews(problem_id, due_date, interval_days, result, completed, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                        (int(rv.get("problem_id", 0)), str(rv.get("due_date", "")).strip(),
+                         int(rv.get("interval_days", 1)), str(rv.get("result", "")).strip(),
+                         int(rv.get("completed", 0)), str(rv.get("created_at", now()))),
+                    )
         except (ValueError, KeyError) as exc:
             self.json_response({"error": f"导入失败: {exc}"}, 400)
             return
         invalidate_settings_cache()
         self.json_response({"ok": True, "imported": len(problems), "backup": str(backup)})
+
+    def _handle_batch(self, data: dict[str, Any]) -> None:
+        """批量操作：删除/标记掌握度/切换星标。"""
+        ids = data.get("ids")
+        action = str(data.get("action", "")).strip()
+        if not isinstance(ids, list) or not ids or not action:
+            self.json_response({"error": "参数不合法 (ids/action)"}, 400)
+            return
+        value = data.get("value")
+        with DB_LOCK, db() as conn:
+            for pid in ids:
+                pid = int(pid)
+                if action == "delete":
+                    conn.execute("DELETE FROM problems WHERE id = ?", (pid,))
+                elif action == "mastery" and isinstance(value, int):
+                    conn.execute("UPDATE problems SET mastery = ?, updated_at = ? WHERE id = ?",
+                                 (clamp_mastery(value), now(), pid))
+                elif action == "star":
+                    conn.execute("UPDATE problems SET starred = CASE WHEN starred THEN 0 ELSE 1 END, updated_at = ? WHERE id = ?",
+                                 (now(), pid))
+        self.json_response({"ok": True, "affected": len(ids)})
 
     # ── PUT ──────────────────────────────────────────────
 
@@ -427,7 +566,7 @@ class Handler(SimpleHTTPRequestHandler):
         if not existing:
             self.json_response({"error": "题目不存在"}, 404)
             return
-        fields = ["title", "course", "topic", "content", "my_attempt", "error_type", "mastery"]
+        fields = ["title", "course", "topic", "content", "my_attempt", "error_type", "mastery", "starred"]
         merged = {field: data.get(field, existing[field]) for field in fields}
         merged["mastery"] = clamp_mastery(int(merged["mastery"]))
         merged["title"] = str(merged["title"]).strip()
@@ -437,7 +576,7 @@ class Handler(SimpleHTTPRequestHandler):
             return
         with DB_LOCK, db() as conn:
             conn.execute("""
-                UPDATE problems SET title=?, course=?, topic=?, content=?, my_attempt=?, error_type=?, mastery=?, updated_at=?
+                UPDATE problems SET title=?, course=?, topic=?, content=?, my_attempt=?, error_type=?, mastery=?, starred=?, updated_at=?
                 WHERE id=?
             """, tuple(merged[field] for field in fields) + (now(), problem_id))
         self.json_response({"ok": True})

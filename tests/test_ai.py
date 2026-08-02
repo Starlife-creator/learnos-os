@@ -1,10 +1,13 @@
 """测试 AI 相关函数：URL 拼接、降级提示。"""
+import tempfile
 import unittest
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from ai import api_endpoint, fallback_hint, problem_prompt, get_cached_settings, invalidate_settings_cache
+import config
+import db
 
 
 class TestApiEndpoint(unittest.TestCase):
@@ -37,16 +40,16 @@ class TestFallbackHint(unittest.TestCase):
 
     def test_level_1_mentions_dimension(self):
         hint = fallback_hint(self.problem, 1)
-        self.assertIn("量纲", hint)
+        self.assertIn("受力图", hint)
         self.assertIn("转动惯量", hint)
 
     def test_level_2_mentions_steps(self):
         hint = fallback_hint(self.problem, 2)
-        self.assertIn("建立模型", hint)
+        self.assertIn("运动方程", hint)
 
     def test_level_3_mentions_check(self):
         hint = fallback_hint(self.problem, 3)
-        self.assertIn("三重检查", hint)
+        self.assertIn("量纲", hint)
 
     def test_level_2_with_attempt(self):
         self.problem["my_attempt"] = "I = 1/2 MR^2"
@@ -93,6 +96,17 @@ class TestProblemPrompt(unittest.TestCase):
 
 
 class TestSettingsCache(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._tmpdir = tempfile.mkdtemp(prefix="cache_")
+        cls._orig_db = config.DB_PATH
+        config.DB_PATH = Path(cls._tmpdir) / "cache_test.db"
+        db.init_db()
+
+    @classmethod
+    def tearDownClass(cls):
+        config.DB_PATH = cls._orig_db
+
     def test_cache_returns_dict(self):
         invalidate_settings_cache()
         s = get_cached_settings()
