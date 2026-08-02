@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ai import api_endpoint, fallback_hint, problem_prompt
+from ai import api_endpoint, fallback_hint, problem_prompt, get_cached_settings, invalidate_settings_cache
 
 
 class TestApiEndpoint(unittest.TestCase):
@@ -90,6 +90,25 @@ class TestProblemPrompt(unittest.TestCase):
         self.problem["my_attempt"] = "E = kQ/r^2"
         msgs = problem_prompt(self.problem, 1)
         self.assertIn("E = kQ/r^2", msgs[1]["content"])
+
+
+class TestSettingsCache(unittest.TestCase):
+    def test_cache_returns_dict(self):
+        invalidate_settings_cache()
+        s = get_cached_settings()
+        self.assertIsInstance(s, dict)
+
+    def test_cache_returns_same_object_within_ttl(self):
+        invalidate_settings_cache()
+        s1 = get_cached_settings()
+        s2 = get_cached_settings()
+        self.assertIs(s1, s2)
+
+    def test_invalidate_clears_cache(self):
+        s1 = get_cached_settings()
+        invalidate_settings_cache()
+        s2 = get_cached_settings()
+        self.assertIsNot(s1, s2)
 
 
 if __name__ == "__main__":

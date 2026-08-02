@@ -42,8 +42,14 @@ def main() -> None:
     except KeyboardInterrupt:
         LOG.info("正在停止...")
     except OSError as exc:
-        if exc.errno == 98 or "Address already in use" in str(exc):
-            LOG.error("端口 %d 已被占用，请更换端口: PHYSICS_OS_PORT=9000 python app.py", PORT)
+        addr_in_use = (
+            exc.errno in (98, 10048)
+            or "address already in use" in str(exc).lower()
+            or "已在使用" in str(exc)
+            or "已被使用" in str(exc)
+        )
+        if addr_in_use:
+            LOG.error("端口 %d 已被占用，请更换端口: set PHYSICS_OS_PORT=9000 && python app.py", PORT)
         else:
             LOG.error("服务器错误: %s", exc)
     finally:

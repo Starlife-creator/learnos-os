@@ -14,9 +14,9 @@ import db
 class TestDatabase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls._tmpdir = tempfile.mkdtemp()
+        cls._tmpdir = tempfile.mkdtemp(prefix="db_")
         cls._orig_db = config.DB_PATH
-        config.DB_PATH = Path(cls._tmpdir) / "test.db"
+        config.DB_PATH = Path(cls._tmpdir) / "db_test.db"
         db.init_db()
 
     @classmethod
@@ -78,13 +78,20 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(len(hints), 0)
         self.assertEqual(len(reviews), 0)
 
+    def test_schema_version_table_exists(self):
+        """迁移后应存在 schema_version 表。"""
+        tables = db.rows("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
+        self.assertEqual(len(tables), 1)
+        versions = db.rows("SELECT version FROM schema_version")
+        self.assertTrue(any(v["version"] == 1 for v in versions))
+
 
 class TestSettingsDict(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls._tmpdir = tempfile.mkdtemp()
+        cls._tmpdir = tempfile.mkdtemp(prefix="settings_")
         cls._orig_db = config.DB_PATH
-        config.DB_PATH = Path(cls._tmpdir) / "test_settings.db"
+        config.DB_PATH = Path(cls._tmpdir) / "settings_test.db"
         db.init_db()
 
     @classmethod

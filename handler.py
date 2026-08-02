@@ -7,11 +7,11 @@ from datetime import date, datetime, timedelta
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 from config import STATIC_DIR, LOG
 from db import DB_LOCK, db, now, row, rows, settings_dict
-from ai import call_ai, fallback_hint, problem_prompt
+from ai import call_ai, fallback_hint, problem_prompt, invalidate_settings_cache
 from review import compute_review, clamp_mastery
 from oral import start_oral, continue_oral
 
@@ -58,7 +58,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self._handle_dashboard()
                 return
             if path == "/api/problems":
-                self.json_response(rows("SELECT * FROM problems ORDER BY id DESC"))
+                self._handle_list_problems()
                 return
             match = re.fullmatch(r"/api/problems/(\d+)", path)
             if match:
@@ -80,6 +80,23 @@ class Handler(SimpleHTTPRequestHandler):
             super().do_GET()
         except Exception as exc:
             self._safe_error(exc)
+
+    def _handle_list_problems(self) -> None:
+        """支持分页: ?page=1&limit=50  (limit 上限 200)"""
+        qs = parse_qs(urlparse(self.path).query)
+        try:
+            limit = min(max(int(qs.get("limit", ["50"])[0]), 1), 200)
+            page = max(int(qs.get("page", ["1"])[0]), 1)
+        except (ValueError, IndexError):
+            limit, page = 50, 1
+        offset = (page - 1) * limit
+        items = rows(
+            "SELECT * FROM problems ORDER BY id DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        )
+        total_row = row("SELECT COUNT(*) AS count FROM problems")
+        total = total_row["count"] if total_row else 0
+        self.json_response({"items": items, "total": total, "page": page, "limit": limit, "pages": (total + limit - 1) // limit})
 
     def _handle_dashboard(self) -> None:
         today = date.today().isoformat()
@@ -121,6 +138,10 @@ class Handler(SimpleHTTPRequestHandler):
             match = re.fullmatch(r"/api/reviews/(\d+)/complete", path)
             if match:
                 self._handle_complete_review(int(match.group(1)), data)
+                return
+            match = re.fullmatch(r"/api/oral/(\d+)/end", path)
+            if match:
+                self._handle_oral_end(int(match.group(1)))
                 return
             if path == "/api/oral/start":
                 self._handle_oral_start(data)
@@ -178,7 +199,7 @@ class Handler(SimpleHTTPRequestHandler):
         except Exception as exc:
             hint = fallback_hint(problem, level)
             source = "fallback"
-            hint += f"\n\n（AI 未调用：{exc}）"
+            LOG.warning("提示降级 (problem=%s, level=%d): %s", problem_id, level, exc)
         with DB_LOCK, db() as conn:
             conn.execute(
                 "INSERT INTO hints(problem_id, level, content, created_at) VALUES (?, ?, ?, ?)",
@@ -228,6 +249,16 @@ class Handler(SimpleHTTPRequestHandler):
         reply = continue_oral(session, answer)
         self.json_response({"reply": reply, "finished": "【口试结束】" in reply})
 
+    def _handle_oral_end(self, session_id: int) -> None:
+        """结束口试会话，将状态设为 finished。"""
+        session = row("SELECT * FROM oral_sessions WHERE id = ?", (session_id,))
+        if not session:
+            self.json_response({"error": "口试会话不存在"}, 404)
+            return
+        with DB_LOCK, db() as conn:
+            conn.execute("UPDATE oral_sessions SET status = 'finished' WHERE id = ?", (session_id,))
+        self.json_response({"ok": True})
+
     # ── PUT ──────────────────────────────────────────────
 
     def do_PUT(self) -> None:
@@ -254,6 +285,7 @@ class Handler(SimpleHTTPRequestHandler):
             values.append((key, str(data[key]).strip()))
         with DB_LOCK, db() as conn:
             conn.executemany("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)", values)
+        invalidate_settings_cache()
         self.json_response({"ok": True, "has_api_key": bool(settings_dict(True).get("api_key"))})
 
     def _handle_update_problem(self, problem_id: int, data: dict[str, Any]) -> None:
@@ -281,7 +313,10 @@ class Handler(SimpleHTTPRequestHandler):
                 self.json_response({"error": "接口不存在"}, 404)
                 return
             with DB_LOCK, db() as conn:
-                conn.execute("DELETE FROM problems WHERE id = ?", (int(match.group(1)),))
+                cursor = conn.execute("DELETE FROM problems WHERE id = ?", (int(match.group(1)),))
+                if cursor.rowcount == 0:
+                    self.json_response({"error": "题目不存在"}, 404)
+                    return
             self.json_response({"ok": True})
         except Exception as exc:
             self._safe_error(exc)

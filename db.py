@@ -35,12 +35,30 @@ def db():
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
-    """给旧版数据库添加新列（v0.1 → v0.2 迁移）。"""
-    cols = {row[1] for row in conn.execute("PRAGMA table_info(problems)").fetchall()}
-    if "ease_factor" not in cols:
-        conn.execute("ALTER TABLE problems ADD COLUMN ease_factor REAL NOT NULL DEFAULT 2.5")
-    if "repetition" not in cols:
-        conn.execute("ALTER TABLE problems ADD COLUMN repetition INTEGER NOT NULL DEFAULT 0")
+    """版本化数据库迁移：每次 schema 变更新增一个版本条目。"""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS schema_version (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        )
+    """)
+    row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+    current = row[0] if row and row[0] is not None else 0
+
+    # v1: v0.1 → v0.2 — 添加 ease_factor 和 repetition 列
+    if current < 1:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(problems)").fetchall()}
+        if "ease_factor" not in cols:
+            conn.execute("ALTER TABLE problems ADD COLUMN ease_factor REAL NOT NULL DEFAULT 2.5")
+        if "repetition" not in cols:
+            conn.execute("ALTER TABLE problems ADD COLUMN repetition INTEGER NOT NULL DEFAULT 0")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (1, ?)", (now(),))
+        LOG.info("数据库已迁移到 v1 (添加 ease_factor/repetition)")
+
+    # 未来迁移示例:
+    # if current < 2:
+    #     conn.execute("ALTER TABLE problems ADD COLUMN ...")
+    #     conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (2, ?)", (now(),))
 
 
 def init_db() -> None:

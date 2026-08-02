@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>个人物理学习 OS</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
 <style>
   :root {
     --bg: #f8f9fa;
@@ -134,6 +137,26 @@
   .text-muted { color: var(--text-2); }
   .text-mono { font-family: var(--mono); }
   .hidden { display: none !important; }
+
+  /* ── 响应式 ── */
+  @media (max-width: 640px) {
+    .nav { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .nav-item { padding: 12px 14px; white-space: nowrap; font-size: 13px; }
+    .nav-brand { padding: 12px 14px; font-size: 14px; }
+    .container { padding: 16px 12px; }
+    .stats-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+    .stat-card { padding: 12px; }
+    .stat-value { font-size: 22px; }
+    .form-row { grid-template-columns: 1fr; gap: 0; }
+    .modal { width: 95%; padding: 16px; border-radius: 8px; }
+    .card { padding: 14px; }
+    .chat-msg { max-width: 95%; }
+    .btn { padding: 10px 16px; min-height: 44px; }
+    .btn-sm { padding: 8px 12px; min-height: 36px; }
+    .flex-between { flex-direction: column; align-items: flex-start; gap: 8px; }
+    .flex { flex-wrap: wrap; }
+    .gap-12 { gap: 8px; }
+  }
 </style>
 </head>
 <body>
@@ -208,6 +231,7 @@
         <textarea id="oralAnswer" placeholder="输入你的回答..." rows="2" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();respondOral()}"></textarea>
       </div>
       <button class="btn btn-primary" onclick="respondOral()">回答</button>
+      <button class="btn btn-secondary" onclick="resetOral()">重新开始</button>
     </div>
   </div>
 
@@ -355,6 +379,30 @@ function escapeHtml(s) {
   return d.innerHTML;
 }
 
+function renderMath(el) {
+  if (window.renderMathInElement) {
+    renderMathInElement(el || document.body, {
+      delimiters: [
+        {left: '$$', right: '$$', display: true},
+        {left: '$', right: '$', display: false},
+        {left: '\\[', right: '\\]', display: true},
+        {left: '\\(', right: '\\)', display: false},
+      ],
+      throwOnError: false,
+    });
+  }
+}
+
+// ── 键盘可访问性 ──
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.modal-overlay.active').forEach(m => m.classList.remove('active'));
+  }
+});
+document.querySelectorAll('.modal-overlay').forEach(m => {
+  m.addEventListener('click', e => { if (e.target === m) m.classList.remove('active'); });
+});
+
 // ── 导航 ──
 let allProblems = [];
 document.querySelectorAll('.nav-item').forEach(el => {
@@ -410,9 +458,14 @@ async function loadDashboard() {
 }
 
 // ── 错题 ──
+let allProblems = [];
+let problemTotal = 0;
+
 async function loadProblems() {
   try {
-    allProblems = await api('/api/problems');
+    const data = await api('/api/problems?page=1&limit=200');
+    allProblems = data.items || data;
+    problemTotal = data.total || allProblems.length;
     renderProblems();
   } catch(e) { toast(e.message, 'error'); }
 }
@@ -474,6 +527,7 @@ async function viewProblem(id) {
       <button class="btn btn-danger btn-sm" onclick="deleteProblem(${id})">删除</button>
     </div>`;
     document.getElementById('modalBody').innerHTML = html;
+    renderMath(document.getElementById('modalBody'));
     document.getElementById('problemModal').classList.add('active');
   } catch(e) { toast(e.message, 'error'); }
 }
@@ -487,6 +541,7 @@ async function getHint(id, level) {
     const srcTag = r.source === 'ai' ? '<span class="tag tag-green">AI</span>' :
                    r.source === 'fallback' ? '<span class="tag tag-amber">降级</span>' : '<span class="tag tag-gray">缓存</span>';
     area.innerHTML += `<div class="hint-card"><h4>第 ${level} 级提示 ${srcTag}</h4><p>${escapeHtml(r.content)}</p></div>`;
+    renderMath(area);
     btn.textContent = '已查看'; btn.style.opacity = '0.5';
   } catch(e) {
     toast(e.message, 'error'); btn.disabled = false; btn.textContent = `第${'一二三'[level-1]}级提示`;
@@ -612,6 +667,7 @@ async function startOral() {
     document.getElementById('oralTopicDisplay').textContent = `主题: ${topic}`;
     document.getElementById('oralTurn').textContent = `第 1 / 5 轮`;
     document.getElementById('oralChat').innerHTML = `<div class="chat-msg assistant"><div class="bubble">${escapeHtml(r.reply)}</div></div>`;
+    renderMath(document.getElementById('oralChat'));
     document.getElementById('oralAnswer').value = '';
     document.getElementById('oralAnswer').focus();
   } catch(e) { toast(e.message, 'error'); }
@@ -629,6 +685,7 @@ async function respondOral() {
     const r = await api('/api/oral/respond', { method: 'POST', body: { session_id: oralSessionId, answer } });
     oralTurn++;
     chatEl.innerHTML += `<div class="chat-msg assistant"><div class="bubble">${escapeHtml(r.reply)}</div></div>`;
+    renderMath(chatEl);
     chatEl.scrollTop = chatEl.scrollHeight;
     if (r.finished) {
       document.getElementById('oralTurn').textContent = '口试已结束';
@@ -644,7 +701,10 @@ async function respondOral() {
   }
 }
 
-function resetOral() {
+async function resetOral() {
+  if (oralSessionId) {
+    try { await api(`/api/oral/${oralSessionId}/end`, { method: 'POST', body: {} }); } catch(e) {}
+  }
   oralSessionId = null; oralTurn = 0;
   document.getElementById('oralStartCard').classList.remove('hidden');
   document.getElementById('oralChatCard').classList.add('hidden');

@@ -18,9 +18,9 @@ from handler import Handler
 class PhysicsStudyOSTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.temp_dir = tempfile.TemporaryDirectory()
+        cls.temp_dir = tempfile.TemporaryDirectory(prefix="e2e_")
         cls._orig_db = config.DB_PATH
-        config.DB_PATH = Path(cls.temp_dir.name) / "test.db"
+        config.DB_PATH = Path(cls.temp_dir.name) / "e2e_test.db"
         db.init_db()
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         cls.port = cls.server.server_address[1]

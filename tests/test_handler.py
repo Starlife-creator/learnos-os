@@ -22,12 +22,12 @@ class TestEndpoints(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls._tmpdir = tempfile.mkdtemp()
+        cls._tmpdir = tempfile.mkdtemp(prefix="handler_")
         cls._orig_db = config.DB_PATH
-        config.DB_PATH = Path(cls._tmpdir) / "test_api.db"
-        config.PORT = 18765
+        config.DB_PATH = Path(cls._tmpdir) / "handler_test.db"
         db.init_db()
-        cls.server = ThreadingHTTPServer(("127.0.0.1", 18765), Handler)
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.server.server_address[1]
         cls.thread = Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
 
@@ -37,7 +37,7 @@ class TestEndpoints(unittest.TestCase):
         config.DB_PATH = cls._orig_db
 
     def _request(self, method, path, body=None):
-        conn = HTTPConnection("127.0.0.1", 18765, timeout=5)
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
         data = json.dumps(body) if body else None
         conn.request(method, path, data, {"Content-Type": "application/json"})
         resp = conn.getresponse()
@@ -96,6 +96,22 @@ class TestEndpoints(unittest.TestCase):
         status, data = self._request("GET", f"/api/problems/{pid}")
         self.assertEqual(status, 404)
 
+    def test_delete_not_found(self):
+        status, data = self._request("DELETE", "/api/problems/99999")
+        self.assertEqual(status, 404)
+
+    def test_problems_pagination(self):
+        # Create 3 problems
+        for i in range(3):
+            self._request("POST", "/api/problems", {"title": f"分页测试{i}", "content": "test"})
+        # Request page 1 with limit 2
+        status, data = self._request("GET", "/api/problems?page=1&limit=2")
+        self.assertEqual(status, 200)
+        self.assertIn("items", data)
+        self.assertEqual(len(data["items"]), 2)
+        self.assertGreaterEqual(data["total"], 3)
+        self.assertGreaterEqual(data["pages"], 2)
+
     def test_reviews_empty(self):
         status, data = self._request("GET", "/api/reviews")
         self.assertEqual(status, 200)
@@ -117,13 +133,27 @@ class TestEndpoints(unittest.TestCase):
         self.assertEqual(status, 400)
 
     def test_static_index(self):
-        conn = HTTPConnection("127.0.0.1", 18765, timeout=5)
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
         conn.request("GET", "/")
         resp = conn.getresponse()
         body = resp.read().decode("utf-8")
         conn.close()
         self.assertEqual(resp.status, 200)
         self.assertIn("物理学习", body)
+
+    def test_oral_end(self):
+        # Start an oral session
+        status, data = self._request("POST", "/api/oral/start", {"topic": "电磁感应"})
+        self.assertEqual(status, 200)
+        session_id = data["session_id"]
+        # End it
+        status, data = self._request("POST", f"/api/oral/{session_id}/end", {})
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+
+    def test_oral_end_not_found(self):
+        status, data = self._request("POST", "/api/oral/99999/end", {})
+        self.assertEqual(status, 404)
 
 
 if __name__ == "__main__":

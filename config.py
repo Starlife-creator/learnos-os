@@ -11,7 +11,11 @@ APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False)
 STATIC_DIR = BUNDLE_ROOT / "static"
 DB_PATH = Path(os.environ.get("PHYSICS_OS_DB", APP_DIR / "physics_study.db"))
 HOST = os.environ.get("PHYSICS_OS_HOST", "127.0.0.1")
-PORT = int(os.environ.get("PHYSICS_OS_PORT", "8765"))
+try:
+    PORT = int(os.environ.get("PHYSICS_OS_PORT", "8765"))
+except ValueError:
+    LOG.warning("PHYSICS_OS_PORT 值无效，使用默认端口 8765")
+    PORT = 8765
 
 LOG = logging.getLogger("physics_os")
 

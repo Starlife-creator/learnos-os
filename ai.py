@@ -3,12 +3,33 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from typing import Any
 
 from config import LOG
 from db import settings_dict
+
+_settings_cache: dict[str, str] | None = None
+_settings_cache_time: float = 0
+_CACHE_TTL = 30  # 秒
+
+
+def invalidate_settings_cache() -> None:
+    """设置更新后调用，清除缓存。"""
+    global _settings_cache, _settings_cache_time
+    _settings_cache = None
+    _settings_cache_time = 0
+
+
+def get_cached_settings() -> dict[str, str]:
+    """带 TTL 的设置缓存，避免每次 AI 调用都查数据库。"""
+    global _settings_cache, _settings_cache_time
+    if _settings_cache is None or time.time() - _settings_cache_time > _CACHE_TTL:
+        _settings_cache = settings_dict(include_secret=True)
+        _settings_cache_time = time.time()
+    return _settings_cache
 
 
 def api_endpoint(base: str) -> str:
@@ -19,7 +40,7 @@ def api_endpoint(base: str) -> str:
 
 
 def call_ai(messages: list[dict[str, str]], max_tokens: int = 700, retries: int = 1) -> str:
-    config = settings_dict(include_secret=True)
+    config = get_cached_settings()
     api_key = config.get("api_key", "").strip()
     model = config.get("model", "").strip()
     base = config.get("api_base", "").strip()
