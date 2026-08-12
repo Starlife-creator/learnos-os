@@ -138,7 +138,10 @@ def call_ai(
     retries: int = 1,
     tier: str | None = None,
     model_override: str | None = None,
+    route: str = "",
 ) -> str:
+    from telemetry import record
+    start = time.monotonic()
     config = get_cached_settings()
     api_key = config.get("api_key", "").strip()
     model = _resolve_model(config, tier)
@@ -146,8 +149,12 @@ def call_ai(
         model = model_override
     base = config.get("api_base", "").strip()
     if not model or not base:
+        record(route=route, model=model, ok=False, error_kind="not_configured",
+               start=start)
         raise ValueError('请先在「AI 设置」中填写 API 地址、密钥和模型。')
     if not api_key and not is_local_endpoint(base):
+        record(route=route, model=model, ok=False, error_kind="not_configured",
+               start=start)
         raise ValueError('请先在「AI 设置」中填写 API 地址、密钥和模型。')
 
     payload = json.dumps({
@@ -171,6 +178,9 @@ def call_ai(
         try:
             with urllib.request.urlopen(request, timeout=45) as response:
                 result = json.loads(response.read().decode("utf-8"))
+            usage = result.get("usage") or {}
+            tokens = int(usage.get("total_tokens") or 0)
+            record(route=route, model=model, ok=True, tokens=tokens, start=start)
             return result["choices"][0]["message"]["content"].strip()
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:500]
@@ -185,6 +195,9 @@ def call_ai(
         if attempt < retries:
             LOG.warning("AI 调用第 %d 次失败，正在重试...", attempt + 1)
 
+    record(route=route, model=model, ok=False,
+           error_kind=type(last_error).__name__ if last_error else "unknown",
+           start=start)
     raise last_error if last_error else RuntimeError("AI 调用失败")
 
 
@@ -205,18 +218,25 @@ def call_ai_stream(
     messages: list[dict[str, str]],
     max_tokens: int = 700,
     tier: str | None = None,
+    route: str = "",
 ) -> Any:
     """C1 流式调用：请求 stream=true，返回 (生成器逐块文本, 超时重试语义)。
 
     生成器每步产出增量文本；调用方负责关闭响应。
     """
+    from telemetry import record
+    start = time.monotonic()
     config = get_cached_settings()
     api_key = config.get("api_key", "").strip()
     model = _resolve_model(config, tier)
     base = config.get("api_base", "").strip()
     if not model or not base:
+        record(route=route, model=model, ok=False, error_kind="not_configured",
+               start=start)
         raise ValueError('请先在「AI 设置」中填写 API 地址、密钥和模型。')
     if not api_key and not is_local_endpoint(base):
+        record(route=route, model=model, ok=False, error_kind="not_configured",
+               start=start)
         raise ValueError('请先在「AI 设置」中填写 API 地址、密钥和模型。')
 
     payload = json.dumps({
@@ -236,7 +256,12 @@ def call_ai_stream(
     request = urllib.request.Request(
         api_endpoint(base), data=payload, headers=headers, method="POST",
     )
-    response = urllib.request.urlopen(request, timeout=120)
+    try:
+        response = urllib.request.urlopen(request, timeout=120)
+    except Exception as exc:
+        record(route=route, model=model, ok=False,
+               error_kind=type(exc).__name__, start=start)
+        raise
 
     def _chunks():
         try:
@@ -254,6 +279,11 @@ def call_ai_stream(
                     delta = ""
                 if delta:
                     yield delta
+            record(route=route, model=model, ok=True, start=start)
+        except Exception as exc:
+            record(route=route, model=model, ok=False,
+                   error_kind=type(exc).__name__, start=start)
+            raise
         finally:
             response.close()
 

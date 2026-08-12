@@ -4,6 +4,30 @@
 
 ---
 
+## 2026-08-12：P1 批次「零依赖四件套」优化（全部完成）
+
+原则：**不多装依赖、不引大文件**——本批四项全部纯标准库 + SQL + 前端，无任何新增第三方依赖。
+
+全量回归：**171 passed + 4 subtests**，`node --check static/app.js` 通过。
+
+| # | 项 | 实现 | 验证 |
+|---|---|---|---|
+| 1 | C6 AI 调用遥测 | 新表 `ai_telemetry`（仅元数据：route/model/latency_ms/tokens/ok/error_kind，**不含任何内容**，R4 隐私）；新模块 `telemetry.py`（`record` 写入时顺手清理 >90 天数据，防膨胀；`summary` 近 7 天调用/失败率/均延迟/估算 token/慢路由 TOP3）；`ai.py` 的 `call_ai`/`call_ai_stream` 埋点（route 可选参数，流式 urllib 请求/迭代成功失败 均记录），handler hint/oral/设置测试连接均传 route | test_telemetry（无 AI 降级也计数 ok=0） |
+| 2 | D5 学习日志周报 | `Handler._weekly_report()`：周一至今 vs 上周（新增题/复习数/保持率/增量）+ 模板建议句（按保持率 0.7 分档，零 AI 依赖），并入 `/api/dashboard` 单请求 | test_weekly 字段断言 |
+| 3 | D6 游戏化防刷 | 新表 `gamification(date PK, reviews, xp)`；XP 按 rating 结算（1→1/2→3/3→8/4→15），复习完成接口挂钩；streak 逐日回推；6 枚本地徽章（首战/7日/30日/百题/单日20/XP500，无排行榜无内购）；`/api/gamification` 端点 | test_gamification（15 XP/首战解锁） |
+| 4 | A8 一题多解 | `problems.methods`(JSON 字符串数组) v15 迁移；创建/更新接口收口 `_as_str_list`（只收字符串元素，非法忽略）；详情弹窗「一题多解」区块：展示/添加（prompt）/删除，复习时可换思路重做 | test_methods_roundtrip（覆盖/清空/非法元素） |
+
+### 附注/事故记录
+- `_as_str_list` 初始用 `str(v)` 会把 dict 元素转成 `"{'bad': …}"` 落库——改为只接受 `isinstance(v, str)`，杜绝脏数据。
+- `telemetry.py` 初版写了冗余 `record_timing` 包装，后合并进 `record(start=…)` 简化。
+- PowerShell 不支持 heredoc，批量改 oral.py 的 7 处 `call_ai(` 用临时脚本文件完成（`tests/.tmp/`，已删除）。
+
+### 可选依赖说明
+- 本批未引入任何新依赖；`ai.py` 双档（fast/heavy）与 `/api/export?ansi-csv|ics` 均已在前批落地。
+- 遥测 token 精确值取自响应 `usage`（OpenAI 兼容）；流式响应无 usage 时记 0，仅作趋势参考。
+
+---
+
 ## 2026-08-12：P0 八项「借鉴成熟项目」优化（全部完成）
 
 全量回归：**169 passed + 4 subtests**，`node --check static/app.js` 通过。

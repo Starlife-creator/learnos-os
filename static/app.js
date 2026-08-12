@@ -429,6 +429,59 @@ function drawAnalytics(data) {
   drawForgetPredict((data && data.forget_predict) || {});
   drawTodayTasks((data && data.tasks) || []);
   drawStubborn((data && data.stubborn) || []);
+  drawGamification((data && data.gamification) || {});
+  drawTelemetry((data && data.telemetry) || {});
+  drawWeekly((data && data.weekly) || {});
+}
+
+// ── D6 游戏化 ──
+function drawGamification(g) {
+  const el = document.getElementById('gameCard');
+  if (!el) return;
+  if (!g || g.total_reviews === undefined) { el.innerHTML = '<div class="text-muted text-sm">暂无数据</div>'; return; }
+  const unlocked = (g.badges || []).filter(b => b.unlocked);
+  el.innerHTML = `<div class="flex-between mb-8">
+    <div><span class="text-sm">累计 XP</span><div class="text-xl">${g.total_xp}</div></div>
+    <div><span class="text-sm">今日 XP</span><div class="text-xl">${g.today_xp}</div></div>
+    <div><span class="text-sm">连续天数</span><div class="text-xl">🔥 ${g.streak}</div></div>
+    <div><span class="text-sm">累计复习</span><div class="text-xl">${g.total_reviews}</div></div>
+  </div>
+  <div class="flex wrap gap-8">${(g.badges || []).map(b =>
+    `<span class="tag ${b.unlocked ? 'tag-green' : 'tag-gray'}" title="${escapeHtml(b.label)}">${b.unlocked ? '🏅' : '🔒'} ${escapeHtml(b.id.replace('_',' '))}</span>`
+  ).join('') || '<span class="text-muted text-sm">完成复习解锁第一个徽章</span>'}</div>`;
+}
+
+// ── C6 AI 遥测 ──
+function drawTelemetry(t) {
+  const el = document.getElementById('telemetryCard');
+  if (!el) return;
+  if (!t || t.calls === undefined) { el.innerHTML = '<div class="text-muted text-sm">暂无数据</div>'; return; }
+  const rate = t.fail_rate > 0.3 ? 'tag-red' : t.fail_rate > 0.1 ? 'tag-warn' : 'tag-green';
+  el.innerHTML = `<div class="flex-between mb-8">
+    <span class="text-sm">近 7 天调用</span><b>${t.calls}</b>
+    <span class="text-sm">失败率</span><span class="tag ${rate}">${(t.fail_rate * 100).toFixed(0)}%</span>
+    <span class="text-sm">平均延迟</span><b>${t.avg_latency_ms}ms</b>
+    <span class="text-sm">估算 Token</span><b>${t.tokens}</b>
+  </div>
+  ${t.slow_routes && t.slow_routes.length ? `<p class="hint-text">最慢路由：${t.slow_routes.map(escapeHtml).join('、')}</p>` : ''}`;
+}
+
+// ── D5 周报 ──
+function drawWeekly(w) {
+  const el = document.getElementById('weeklyCard');
+  if (!el) return;
+  if (!w || w.week_start === undefined) { el.innerHTML = '<div class="text-muted text-sm">暂无数据</div>'; return; }
+  const delta = (w.review_delta || 0);
+  const deltaStr = delta > 0 ? `+${delta}` : String(delta);
+  el.innerHTML = `<div class="flex-between mb-8">
+    <span class="text-sm">本周（${escapeHtml(w.week_start)} 起）</span>
+  </div>
+  <div class="flex-between mb-8">
+    <span class="text-sm">新增错题</span><b>${w.new_problems}（上周 ${w.prev_problems}）</b>
+    <span class="text-sm">复习次数</span><b>${w.week_reviews}（${deltaStr}）</b>
+    <span class="text-sm">保持率</span><b>${(w.good_rate * 100).toFixed(0)}%</b>
+  </div>
+  <p class="hint-text">💡 ${escapeHtml(w.tip || '')}</p>`;
 }
 
 // ── P0 顽固错题 ──
@@ -600,7 +653,12 @@ async function viewProblem(id) {
         html += `<div class="hint-card"><h4>第 ${h.level} 级提示</h4><p>${escapeHtml(h.content)}</p></div>`;
       });
     }
-    html += `<div class="card-title mt-16">举一反三（变式题）</div>
+    html += `<div class="card-title mt-16">一题多解</div>
+      <div class="flex gap-12 mb-8">
+        <button class="btn btn-secondary btn-sm" onclick="addMethod(${id})">+ 添加解法</button>
+      </div>
+      <div id="methodsArea">${renderMethods(p.methods || [], id)}</div>
+      <div class="card-title mt-16">举一反三（变式题）</div>
       <div class="flex gap-12 mb-8">
         <button class="btn btn-secondary btn-sm" onclick="generateVariants(${id})" id="genVariantsBtn">生成 3 道变式</button>
         <button class="btn btn-primary btn-sm hidden" onclick="saveVariants(${id})" id="saveVariantsBtn">确认保存变式</button>
@@ -1535,6 +1593,42 @@ document.addEventListener('keydown', e => {
   if (e.key === 'ArrowLeft') { e.preventDefault(); flashRate(1); }
   if (e.key === 'ArrowRight') { e.preventDefault(); flashRate(4); }
 });
+
+// ── A8 一题多解 ──
+function renderMethods(methods, id) {
+  if (!Array.isArray(methods) || !methods.length) {
+    return '<p class="text-sm text-muted">暂无其他解法。可在复习时「换一种思路重做」，会记得更牢。</p>';
+  }
+  return '<div class="flex column gap-8">' + methods.map((m, i) =>
+    `<div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px">
+      <div class="flex-between mb-4">
+        <b class="text-sm">解法 ${i + 1}</b>
+        <button class="btn btn-secondary btn-sm" onclick="removeMethod(${id},${i})">删除</button>
+      </div>
+      <p class="text-mono text-sm" style="white-space:pre-wrap">${escapeHtml(m)}</p>
+    </div>`).join('') + '</div>';
+}
+
+async function addMethod(id) {
+  const text = window.prompt('输入一种新解法（可多行，将追加到本题）：', '');
+  if (text === null) return;
+  const p = await api(`/api/problems/${id}`);
+  const methods = [...(p.methods || []), text.trim()].filter(Boolean);
+  try {
+    await api(`/api/problems/${id}`, { method: 'PUT', body: { methods } });
+    document.getElementById('methodsArea').innerHTML = renderMethods(methods, id);
+    toast('解法已保存');
+    renderMath(document.getElementById('methodsArea'));
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function removeMethod(id, idx) {
+  const p = await api(`/api/problems/${id}`);
+  const methods = (p.methods || []).filter((_, i) => i !== idx);
+  await api(`/api/problems/${id}`, { method: 'PUT', body: { methods } });
+  document.getElementById('methodsArea').innerHTML = renderMethods(methods, id);
+  toast('解法已删除');
+}
 
 // ── 设置 ──
 async function probeLocalModels() {

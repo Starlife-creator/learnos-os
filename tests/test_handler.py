@@ -578,6 +578,48 @@ class TestEndpoints(unittest.TestCase):
         self.assertEqual(entry["total_reviews"], entry["miss_count"])
         self.assertEqual(entry["repetition"], 0)  # SM-2 答错重置，顽固判定只看错次
 
+    def test_telemetry_gamification_weekly_fields(self):
+        """P0 批次：dashboard 含 AI 遥测/游戏化/周报；复习后 XP 生效；hint 调用记入遥测。"""
+        pid = self._create_problem(title="P0遥测题", error_type="careless")
+        # hint 无 AI 时走降级，仍记遥测（ok=0）
+        self._request("POST", f"/api/problems/{pid}/hint", {"level": 2})
+        _, reviews = self._request("GET", "/api/reviews")
+        rid = next(r["id"] for r in reviews if r["problem_id"] == pid)
+        self._request("POST", f"/api/reviews/{rid}/complete", {"rating": 4})
+        status, d = self._request("GET", "/api/dashboard")
+        self.assertEqual(status, 200)
+        # 遥测：至少 1 次 hint 调用（无 AI 环境失败也计数）
+        self.assertIn("telemetry", d)
+        self.assertGreaterEqual(d["telemetry"]["calls"], 1)
+        self.assertGreaterEqual(d["telemetry"]["failed"], 1)
+        # 游戏化：rating=4 → 15 XP，连胜 ≥1，首战徽章解锁
+        self.assertIn("gamification", d)
+        self.assertGreaterEqual(d["gamification"]["total_xp"], 15)
+        self.assertGreaterEqual(d["gamification"]["today_reviews"], 1)
+        self.assertGreaterEqual(d["gamification"]["streak"], 1)
+        first = next((b for b in d["gamification"]["badges"] if b["id"] == "first_blood"), None)
+        self.assertIsNotNone(first)
+        self.assertTrue(first["unlocked"])
+        # 周报：本周有 1 题 1 复习
+        self.assertIn("weekly", d)
+        self.assertGreaterEqual(d["weekly"]["new_problems"], 1)
+        self.assertGreaterEqual(d["weekly"]["week_reviews"], 1)
+
+    def test_methods_roundtrip(self):
+        """A8：methods 列创建时写入、详情返回、PUT 整体覆盖、非法输入忽略。"""
+        pid = self._create_problem(title="A8多解法", content="求电路电流")
+        status, _ = self._request("PUT", f"/api/problems/{pid}",
+                                  {"methods": ["方法一：基尔霍夫方程", {"bad": "忽略"}]})
+        self.assertEqual(status, 200)
+        status, p = self._request("GET", f"/api/problems/{pid}")
+        self.assertEqual(status, 200)
+        self.assertIn("methods", p)
+        self.assertEqual(p["methods"], ["方法一：基尔霍夫方程"])
+        # 覆盖为空数组
+        self._request("PUT", f"/api/problems/{pid}", {"methods": []})
+        status, p = self._request("GET", f"/api/problems/{pid}")
+        self.assertEqual(p["methods"], [])
+
     def test_write_idempotency(self):
         # 相同 X-Request-Id 重复提交应返回首次结果，不产生重复题目
         body = {"title": "幂等题", "content": "test"}

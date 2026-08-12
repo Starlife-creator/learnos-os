@@ -248,6 +248,34 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (14, ?)", (now(),))
         LOG.info("数据库已迁移到 v14 (B4 真题 exam_papers/exam_questions)")
 
+    # v15: P0 批次 — AI 遥测 / 游戏化 / 一题多解（全部零依赖）
+    if current < 15:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ai_telemetry (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                route TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL DEFAULT '',
+                latency_ms INTEGER NOT NULL DEFAULT 0,
+                tokens INTEGER NOT NULL DEFAULT 0,
+                ok INTEGER NOT NULL DEFAULT 0,
+                error_kind TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_telemetry_ts ON ai_telemetry(ts)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS gamification (
+                date TEXT PRIMARY KEY,
+                reviews INTEGER NOT NULL DEFAULT 0,
+                xp INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(problems)").fetchall()}
+        if "methods" not in cols:
+            conn.execute("ALTER TABLE problems ADD COLUMN methods TEXT NOT NULL DEFAULT '[]'")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (15, ?)", (now(),))
+        LOG.info("数据库已迁移到 v15 (ai_telemetry/gamification/problems.methods)")
+
 
 def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)

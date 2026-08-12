@@ -85,7 +85,7 @@ def start_feynman(problem: dict[str, Any]) -> tuple[int, str]:
                 f"主题：{topic or title}。第一步请只提一个问题：让学生用大白话讲解。"
             )},
             {"role": "user", "content": f"题目：{content}\n标题：{title}"},
-        ], max_tokens=200)
+        ], max_tokens=200, route="oral")
     except Exception as exc:
         LOG.warning("Feynman 首问 AI 失败，使用内置问题: %s", exc)
 
@@ -109,7 +109,7 @@ def _feynman_followup(transcript: list[dict[str, str]], turn: int) -> str:
             )},
             {"role": "user", "content": "讲解记录：" + json.dumps(transcript[-4:], ensure_ascii=False)},
         ]
-        return call_ai(messages, max_tokens=220, tier="heavy")
+        return call_ai(messages, max_tokens=220, tier="heavy", route="oral")
     except Exception as exc:
         LOG.warning("Feynman 对照引导失败，使用内置: %s", exc)
         return (
@@ -132,7 +132,7 @@ def _self_review_draft(transcript: list[dict[str, str]], problem_content: str) -
                 f"标准解析要点：{problem_content}\n对话记录：" + json.dumps(transcript[-6:], ensure_ascii=False)
             )},
         ]
-        raw = call_ai(messages, max_tokens=300, tier="heavy")
+        raw = call_ai(messages, max_tokens=300, tier="heavy", route="oral")
         data = json.loads(raw)
         return {
             "gaps": [str(x) for x in data.get("gaps", [])][:3],
@@ -207,7 +207,7 @@ def start_oral(topic: str) -> tuple[int, str]:
                 f"学生刚开始学习「{topic}」。一次只问一个简洁的、关于物理图像的问题，不给答案。"
             )},
             {"role": "user", "content": f'围绕「{topic}」提出第一个概念理解问题。'},
-        ], max_tokens=180)
+        ], max_tokens=180, route="oral")
     except Exception as exc:
         LOG.warning("口试 AI 调用失败，使用内置问题: %s", exc)
 
@@ -328,7 +328,7 @@ def _ai_followup(transcript: list[dict[str, str]], topic: str, stage: str, level
     )
     messages = [{"role": "system", "content": "你是严格的大学物理口试老师（苏格拉底式）。" + instruction}]
     messages.extend(transcript[-6:])
-    return call_ai(messages, max_tokens=300, tier="heavy")
+    return call_ai(messages, max_tokens=300, tier="heavy", route="oral")
 
 
 def _summary(transcript: list[dict[str, str]], topic: str) -> str:
@@ -341,7 +341,7 @@ def _summary(transcript: list[dict[str, str]], topic: str) -> str:
             )},
             {"role": "user", "content": "以下是本场口试的完整对话记录：" + json.dumps(transcript[-8:], ensure_ascii=False)},
         ]
-        return call_ai(messages, max_tokens=400, tier="heavy")
+        return call_ai(messages, max_tokens=400, tier="heavy", route="oral")
     except Exception as exc:
         LOG.warning("口试总结 AI 调用失败，使用本地总结: %s", exc)
         return (
@@ -405,4 +405,4 @@ def _ai_card_content(transcript: list[dict[str, str]], topic: str, weak: str) ->
         )},
         {"role": "user", "content": "口试记录：" + json.dumps(transcript[-8:], ensure_ascii=False)},
     ]
-    return call_ai(messages, max_tokens=260, tier="heavy")
+    return call_ai(messages, max_tokens=260, tier="heavy", route="oral")

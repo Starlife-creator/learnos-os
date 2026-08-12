@@ -44,6 +44,15 @@ _IDEMPOTENCY: dict[str, tuple[int, dict[str, Any]]] = {}
 _IDEMPOTENCY_TTL = 3600
 
 
+def _as_str_list(value: Any) -> list[str]:
+    """A8：收口 methods 输入——只接受字符串数组；单字符串视为一法；非法则忽略。"""
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, list):
+        return [v.strip() for v in value if isinstance(v, str) and v.strip()]
+    return []
+
+
 def _interleave(items: list[dict[str, Any]], key: str = "topic") -> list[dict[str, Any]]:
     """A7 交错练习：按 key 分桶后贪心轮转取卡，避免同知识点连续出现。
 
@@ -145,6 +154,13 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             if path == "/api/fsrs/status":
                 self.json_response(fsrs_bridge.fsrs_status())
+                return
+            if path == "/api/gamification":
+                from gamification import state as game_state
+                self.json_response(game_state())
+                return
+            if path == "/api/report/weekly":
+                self._handle_weekly_report()
                 return
             if path == "/api/reviews":
                 self._handle_list_reviews()
@@ -397,7 +413,76 @@ class Handler(SimpleHTTPRequestHandler):
             "forget_predict": self._forget_predict(),
             "tasks": self._today_tasks(),
             "stubborn": self._stubborn_problems(),
+            "gamification": self._game_state(),
+            "telemetry": self._telemetry_summary(),
+            "weekly": self._weekly_report(),
         })
+
+    @staticmethod
+    def _game_state() -> dict[str, Any]:
+        try:
+            from gamification import state as game_state
+            return game_state()
+        except Exception as exc:
+            LOG.debug("游戏化状态失败（可忽略）: %s", exc)
+            return {}
+
+    @staticmethod
+    def _telemetry_summary() -> dict[str, Any]:
+        try:
+            from telemetry import summary as telemetry_summary
+            return telemetry_summary()
+        except Exception as exc:
+            LOG.debug("遥测摘要失败（可忽略）: %s", exc)
+            return {}
+
+    @staticmethod
+    def _weekly_report() -> dict[str, Any]:
+        """D5 学习日志周报：本周 vs 上周变化 + 模板建议（零依赖，AI 可选）。"""
+        from datetime import date, timedelta
+        today = date.today()
+        week_start = today - timedelta(days=today.weekday())
+        prev_start = week_start - timedelta(days=7)
+        try:
+            with DB_LOCK, db() as conn:
+                counts = conn.execute("""
+                    SELECT
+                      SUM(CASE WHEN date(created_at) >= ? AND date(created_at) <= ? THEN 1 ELSE 0 END) AS new_problems,
+                      SUM(CASE WHEN date(created_at) >= ? AND date(created_at) < ? THEN 1 ELSE 0 END) AS prev_problems,
+                      COUNT(*) AS total
+                    FROM problems
+                """, (week_start.isoformat(), today.isoformat(),
+                      prev_start.isoformat(), week_start.isoformat())).fetchone()
+                reviews = conn.execute("""
+                    SELECT
+                      SUM(CASE WHEN date(created_at) >= ? THEN 1 ELSE 0 END) AS week_reviews,
+                      SUM(CASE WHEN date(created_at) >= ? AND date(created_at) < ? THEN 1 ELSE 0 END) AS prev_reviews,
+                      SUM(CASE WHEN date(created_at) >= ? AND CAST(result AS INTEGER) >= 3 THEN 1 ELSE 0 END) AS week_good
+                    FROM reviews WHERE completed = 1
+                """, (week_start.isoformat(), prev_start.isoformat(),
+                      week_start.isoformat(), week_start.isoformat())).fetchone()
+        except Exception as exc:
+            LOG.debug("周报统计失败（可忽略）: %s", exc)
+            return {}
+        new_problems = int(counts["new_problems"] or 0)
+        prev_problems = int(counts["prev_problems"] or 0)
+        week_reviews = int(reviews["week_reviews"] or 0)
+        prev_reviews = int(reviews["prev_reviews"] or 0)
+        week_good = int(reviews["week_good"] or 0)
+        good_rate = round(week_good / week_reviews, 3) if week_reviews else 0.0
+        tip = "本周暂无复习记录。建议从今日到期的最少 1 张卡开始，保持 7 天连续打卡。" if week_reviews == 0 else \
+              "本周投入稳定，继续保持。建议复习完每张卡后写清「对策」，防止重复犯错。" if good_rate >= 0.7 else \
+              "本周记忆保持率不足 70%。建议放慢节奏：把错题按知识点分组，每天只复习 1 个薄弱知识点。"
+        return {
+            "week_start": week_start.isoformat(),
+            "new_problems": new_problems,
+            "prev_problems": prev_problems,
+            "week_reviews": week_reviews,
+            "prev_reviews": prev_reviews,
+            "good_rate": good_rate,
+            "tip": tip,
+            "review_delta": week_reviews - prev_reviews,
+        }
 
     @staticmethod
     def _stubborn_problems() -> list[dict[str, Any]]:
@@ -888,6 +973,11 @@ class Handler(SimpleHTTPRequestHandler):
         # A2：concept_ids 解析 + 先修掌握度告警
         item["concept_ids"] = graph.concept_ids_to_list(item.get("concept_ids") or "")
         item["prereq_warnings"] = graph.prereq_warnings(problem_id)
+        # A8：一题多解
+        try:
+            item["methods"] = json.loads(item["methods"]) if item.get("methods") else []
+        except (json.JSONDecodeError, TypeError):
+            item["methods"] = []
         # A5：Feynman 自评表（已保存的最新一条）
         feynman = row(
             "SELECT self_review FROM oral_sessions "
@@ -1065,7 +1155,7 @@ class Handler(SimpleHTTPRequestHandler):
                 reply = call_ai([
                     {"role": "system", "content": "只回答：连接成功"},
                     {"role": "user", "content": "测试连接"},
-                ], max_tokens=20)
+                ], max_tokens=20, route="test")
                 self.json_response({"ok": True, "reply": reply})
                 return
             if path == "/api/fsrs/train":
@@ -1097,6 +1187,7 @@ class Handler(SimpleHTTPRequestHandler):
         error_type = normalize_error_type(data.get("error_type", "待诊断"))
         tags = json.dumps(data.get("tags", []), ensure_ascii=False)
         tags_status = "confirmed" if data.get("tags") else "none"
+        methods = json.dumps(_as_str_list(data.get("methods")), ensure_ascii=False)
         # A2：显式 concept_ids 校验存在后落库；未提供则稍后自动绑定
         raw_concepts = data.get("concept_ids") or []
         if isinstance(raw_concepts, list):
@@ -1107,9 +1198,9 @@ class Handler(SimpleHTTPRequestHandler):
             cursor = conn.execute("""
                 INSERT INTO problems(title, course, topic, content, my_attempt, error_type,
                                      error_path, trap_note, shortcut, fix_action, tags, tags_status,
-                                     concept_ids, media_path, mastery, ease_factor, repetition,
+                                     concept_ids, media_path, methods, mastery, ease_factor, repetition,
                                      created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2.5, 0, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2.5, 0, ?, ?)
             """, (
                 title, str(data.get("course", "")).strip(), str(data.get("topic", "")).strip(),
                 content, str(data.get("my_attempt", "")).strip(), error_type,
@@ -1117,6 +1208,7 @@ class Handler(SimpleHTTPRequestHandler):
                 str(data.get("shortcut", "")).strip(), str(data.get("fix_action", "")).strip(),
                 tags, tags_status, concept_csv,
                 self._normalize_media_paths(data.get("media_path", "")),
+                methods,
                 clamp_mastery(int(data.get("mastery", 1))), stamp, stamp,
             ))
             problem_id = int(cursor.lastrowid)
@@ -1183,7 +1275,7 @@ class Handler(SimpleHTTPRequestHandler):
             return
         source = "ai"
         try:
-            hint = call_ai(problem_prompt(problem, level) + rag_messages, tier="fast")
+            hint = call_ai(problem_prompt(problem, level) + rag_messages, tier="fast", route="hint")
         except Exception as exc:
             hint = fallback_hint(problem, level)
             source = "fallback"
@@ -1220,7 +1312,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._sse_send("sources", {"sources": rag_sources})
         collected: list[str] = []
         try:
-            chunks = call_ai_stream(problem_prompt(problem, level) + rag_messages, tier="fast")
+            chunks = call_ai_stream(problem_prompt(problem, level) + rag_messages, tier="fast", route="hint")
             for delta in chunks:
                 collected.append(delta)
                 self._sse_send("delta", {"delta": delta})
@@ -1305,6 +1397,11 @@ class Handler(SimpleHTTPRequestHandler):
                 )
             self._log_variant_result(conn, review, rating)
             self._log_mastery(conn)
+        try:
+            from gamification import record as gamify_record
+            gamify_record(rating)  # D6 游戏化（零依赖，失败不影响主流程）
+        except Exception as exc:
+            LOG.debug("游戏化记录失败（可忽略）: %s", exc)
         self.json_response({"next_due": next_due, "interval_days": result.interval_days})
 
     @staticmethod
@@ -1785,13 +1882,17 @@ class Handler(SimpleHTTPRequestHandler):
         if data.get("tags") is not None:
             tags = json.dumps(data["tags"], ensure_ascii=False)
             tags_status = "confirmed"
+        # A8：methods 显式提交则整体覆盖（结构校验：只收字符串数组）
+        methods = existing["methods"]
+        if data.get("methods") is not None:
+            methods = json.dumps(_as_str_list(data["methods"]), ensure_ascii=False)
         with DB_LOCK, db() as conn:
             conn.execute("""
                 UPDATE problems SET title=?, course=?, topic=?, content=?, my_attempt=?, error_type=?,
                                     error_path=?, trap_note=?, shortcut=?, fix_action=?,
-                                    mastery=?, starred=?, tags=?, tags_status=?, updated_at=?
+                                    mastery=?, starred=?, tags=?, tags_status=?, methods=?, updated_at=?
                 WHERE id=?
-            """, tuple(merged[field] for field in fields) + (tags, tags_status, now(), problem_id))
+            """, tuple(merged[field] for field in fields) + (tags, tags_status, methods, now(), problem_id))
         self.json_response({"ok": True})
 
     def _handle_reschedule_review(self, review_id: int) -> None:
