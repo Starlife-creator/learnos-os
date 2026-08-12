@@ -561,6 +561,23 @@ class TestEndpoints(unittest.TestCase):
         self.assertIn("accuracy", data)
         self.assertIsInstance(data["error_counts"], dict)
 
+    def test_stubborn_problems(self):
+        """P0：重复出错(≥2 次)的题进入顽固错题榜，含再错统计。"""
+        pid = self._create_problem(title="P0顽固题", error_type="careless")
+        for _ in range(2):  # 两次都答错
+            _, reviews = self._request("GET", "/api/reviews")
+            rid = next(r["id"] for r in reviews if r["problem_id"] == pid)
+            status, _ = self._request("POST", f"/api/reviews/{rid}/complete", {"rating": 1})
+            self.assertEqual(status, 200)
+        status, d = self._request("GET", "/api/dashboard")
+        self.assertEqual(status, 200)
+        self.assertIn("stubborn", d)
+        entry = next((s for s in d["stubborn"] if s["id"] == pid), None)
+        self.assertIsNotNone(entry)
+        self.assertGreaterEqual(entry["miss_count"], 2)
+        self.assertEqual(entry["total_reviews"], entry["miss_count"])
+        self.assertEqual(entry["repetition"], 0)  # SM-2 答错重置，顽固判定只看错次
+
     def test_write_idempotency(self):
         # 相同 X-Request-Id 重复提交应返回首次结果，不产生重复题目
         body = {"title": "幂等题", "content": "test"}

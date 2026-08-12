@@ -4,6 +4,12 @@
 - vendor/fsrs 目录存在 → 使用 FSRS-6 调度；
 - 缺失/导入失败 → 回退 SM-2（review.compute_review），功能不中断。
 
+P0 增强（2026-08-12）：
+- 个性化参数训练：用本地复习历史训练 FSRS 21 参数（需 torch/pandas/tqdm，
+  属用户可选安装；缺失时仅提示，调度仍用默认参数）→ data/fsrs_params.json；
+- 目标保持率 desired_retention 可调（settings.fsrs_desired_retention，默认 0.9）；
+- retrievability() 预测当前检索概率（遗忘预测可视化用）。
+
 复习评分（rating 1-4）映射 FSRS Rating：
   1=Again 2=Hard 3=Good 4=Easy
 
@@ -11,12 +17,16 @@
 """
 from __future__ import annotations
 
+import json
+import os
 import sys
+import threading
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from config import LOG
+from config import APP_DIR, LOG
+from db import now
 
 _VENDOR_DIR = Path(__file__).resolve().parent / "vendor" / "fsrs"
 
@@ -24,10 +34,61 @@ try:
     if _VENDOR_DIR.exists():
         sys.path.insert(0, str(_VENDOR_DIR))
     from fsrs import Scheduler, Card, Rating  # type: ignore
+    from fsrs.scheduler import DEFAULT_PARAMETERS  # type: ignore
     _FSRS_AVAILABLE = True
 except Exception as exc:  # pragma: no cover - 降级路径
     _FSRS_AVAILABLE = False
+    DEFAULT_PARAMETERS = None  # type: ignore[assignment]
     LOG.warning("FSRS vendored 依赖不可用，回退 SM-2: %s", exc)
+
+_PARAM_FILE = APP_DIR / "data" / "fsrs_params.json"
+_RETENTION_KEY = "fsrs_desired_retention"
+
+_PARAM_CACHE: dict[str, object] | None = None
+_TRAIN_STATE: dict[str, object] = {"running": False, "result": None, "error": None}
+
+
+def _invalidate() -> None:
+    global _PARAM_CACHE
+    _PARAM_CACHE = None
+
+
+def _load_params() -> dict[str, object] | None:
+    global _PARAM_CACHE
+    if _PARAM_CACHE is not None:
+        return _PARAM_CACHE
+    try:
+        if _PARAM_FILE.is_file():
+            data = json.loads(_PARAM_FILE.read_text("utf-8"))
+            params = [float(x) for x in data.get("parameters", [])]
+            if len(params) == len(DEFAULT_PARAMETERS):
+                _PARAM_CACHE = {"parameters": params, "trained_at": data.get("trained_at", "")}
+                return _PARAM_CACHE  # type: ignore[return-value]
+    except Exception as exc:
+        LOG.warning("FSRS 参数文件读取失败（用默认参数）: %s", exc)
+    _PARAM_CACHE = None
+    return None
+
+
+def _desired_retention() -> float:
+    from db import settings_dict
+    try:
+        value = float(settings_dict().get(_RETENTION_KEY, "0.9"))
+        return value if 0.75 <= value <= 0.97 else 0.9
+    except (TypeError, ValueError):
+        return 0.9
+
+
+def _scheduler() -> Scheduler:
+    params = DEFAULT_PARAMETERS
+    trained = _load_params()
+    if trained:
+        params = trained["parameters"]  # type: ignore[assignment]
+    try:
+        return Scheduler(parameters=params, desired_retention=_desired_retention())
+    except Exception as exc:
+        LOG.warning("FSRS 参数校验失败（用默认）: %s", exc)
+        return Scheduler(desired_retention=_desired_retention())
 
 
 @dataclass
@@ -75,7 +136,7 @@ def compute_fsrs_review(
     """FSRS-6 调度。返回下一次复习状态（供 problems 表持久化）。"""
     today = today or date.today()
     card = _state_to_card(state, stability, difficulty, prev_interval)
-    scheduler = Scheduler()
+    scheduler = _scheduler()
     review_dt = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
     updated, _log = scheduler.review_card(
         card,
@@ -96,6 +157,31 @@ def compute_fsrs_review(
     )
 
 
+def retrievability(
+    prev_interval: int,
+    state: int = 0,
+    stability: float = 0.0,
+    difficulty: float = 0.0,
+    last_review: str = "",
+    current: date | None = None,
+) -> float:
+    """P0：预测该卡今天的检索概率 R（0-1）。无 FSRS → 用 SM-2 间隔近似。"""
+    current = current or date.today()
+    if not _FSRS_AVAILABLE:
+        return 0.0
+    try:
+        card = _state_to_card(state, stability, difficulty, prev_interval)
+        ref = last_review or current.isoformat()
+        ref_dt = datetime.fromisoformat(ref)
+        if ref_dt.tzinfo is None:
+            ref_dt = ref_dt.replace(tzinfo=timezone.utc)
+        card.last_review = ref_dt
+        now_dt = datetime.combine(current, datetime.min.time(), tzinfo=timezone.utc)
+        return round(float(_scheduler().get_card_retrievability(card, now_dt)), 4)
+    except Exception:
+        return 0.0
+
+
 def next_interval_days(
     rating: int,
     prev_interval: int,
@@ -113,3 +199,126 @@ def next_interval_days(
             LOG.warning("FSRS 调度异常，回退 SM-2: %s", exc)
     from review import compute_review
     return max(1, compute_review(rating, prev_interval, 2.5, 0).interval_days)
+
+
+def fsrs_status() -> dict[str, object]:
+    """P0：调度与训练状态（设置页 FSRS 卡 + 遗忘预测）。"""
+    trained = _load_params()
+    status: dict[str, object] = {
+        "available": _FSRS_AVAILABLE,
+        "params_source": "trained" if trained else "default",
+        "trained_at": str(trained["trained_at"]) if trained else "",
+        "desired_retention": _desired_retention(),
+        "training": bool(_TRAIN_STATE["running"]),
+        "sample_count": 0,
+    }
+    if _TRAIN_STATE["result"]:
+        status["last_train"] = _TRAIN_STATE["result"]
+        status["sample_count"] = int(_TRAIN_STATE["result"]["sample_count"])
+    if _TRAIN_STATE["error"]:
+        status["train_error"] = _TRAIN_STATE["error"]
+    return status
+
+
+def set_desired_retention(value: float) -> bool:
+    """P0：设置目标保持率（0.75-0.97），写 settings 表。"""
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return False
+    if not (0.75 <= value <= 0.97):
+        return False
+    from db import DB_LOCK, db
+    with DB_LOCK, db() as conn:
+        conn.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)",
+                     (_RETENTION_KEY, str(round(value, 2))))
+    return True
+
+
+def train_parameters(
+    reviews: list[tuple[int, int, str]],
+) -> tuple[bool, dict[str, object]]:
+    """P0：用本地复习历史训练个性化参数。
+
+    reviews: [(card_id, rating(1-4), iso_datetime)]，按卡分组即为训练序列。
+    依赖 torch/pandas/tqdm 缺失 → (False, reason)；成功写 data/fsrs_params.json。
+    """
+    if not _FSRS_AVAILABLE:
+        return False, {"reason": "FSRS 未启用（vendor 缺失）"}
+    try:
+        from fsrs.optimizer import Optimizer  # type: ignore
+        from fsrs.review_log import ReviewLog  # type: ignore
+        import torch  # noqa: F401
+        import pandas  # noqa: F401
+        import tqdm  # noqa: F401
+    except ImportError as exc:
+        return False, {
+            "reason": "训练依赖缺失：torch / pandas / tqdm（用户可选安装；未装则继续用默认参数）",
+            "detail": str(exc).splitlines()[0][:120],
+        }
+    logs = []
+    for card_id, rating, ts in reviews:
+        try:
+            dt = datetime.fromisoformat(str(ts))
+        except ValueError:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        logs.append(ReviewLog(card_id=card_id, rating=Rating(int(rating)),
+                              review_datetime=dt, review_duration=0))
+    if len(logs) < 10:
+        return False, {"reason": "复习记录不足（需 ≥10 条，当前 %d 条）" % len(logs),
+                       "sample_count": len(logs)}
+    try:
+        optimizer = Optimizer(logs)
+        params = optimizer.compute_optimal_parameters(verbose=False)
+    except Exception as exc:  # torch 路径各种数值异常
+        return False, {"reason": "训练失败：%s" % str(exc).splitlines()[0][:120]}
+    from fsrs.scheduler import LOWER_BOUNDS_PARAMETERS, UPPER_BOUNDS_PARAMETERS  # type: ignore
+    if not all(lb <= p <= ub for p, lb, ub in zip(params, LOWER_BOUNDS_PARAMETERS, UPPER_BOUNDS_PARAMETERS)):
+        return False, {"reason": "训练参数越界，已丢弃（保留默认参数）"}
+    try:
+        _PARAM_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _PARAM_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps({
+            "parameters": [round(float(p), 6) for p in params],
+            "trained_at": now(),
+        }, ensure_ascii=False), "utf-8")
+        os.replace(tmp, _PARAM_FILE)
+    except OSError as exc:
+        return False, {"reason": "参数写入失败：%s" % exc}
+    _invalidate()
+    return True, {"sample_count": len(logs), "trained_at": now()}
+
+
+def train_async(reviews: list[tuple[int, int, str]]) -> bool:
+    """后台线程训练（不阻塞 HTTP 请求）。已在训练 → False。"""
+    if _TRAIN_STATE["running"]:
+        return False
+    _TRAIN_STATE["result"] = None
+    _TRAIN_STATE["error"] = None
+
+    def _run() -> None:
+        _TRAIN_STATE["running"] = True
+        try:
+            ok, payload = train_parameters(reviews)
+            if ok:
+                _TRAIN_STATE["result"] = payload
+            else:
+                _TRAIN_STATE["error"] = payload
+        finally:
+            _TRAIN_STATE["running"] = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return True
+
+
+def reset_parameters() -> bool:
+    """P0：清除个性化参数，回默认。"""
+    try:
+        if _PARAM_FILE.is_file():
+            _PARAM_FILE.unlink()
+    except OSError:
+        return False
+    _invalidate()
+    return True

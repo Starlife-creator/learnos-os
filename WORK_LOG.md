@@ -4,6 +4,28 @@
 
 ---
 
+## 2026-08-12：P0 八项「借鉴成熟项目」优化（全部完成）
+
+全量回归：**169 passed + 4 subtests**，`node --check static/app.js` 通过。
+
+| # | 项 | 实现 | 验证 |
+|---|---|---|---|
+| 1 | FSRS 个性化参数训练 | `fsrs_bridge.py` 扩展：`train_parameters()`（要求 torch/pandas/tqdm + ≥10 条复习，bounds 校验，tmp+os.replace 原子写 `data/fsrs_params.json`）、`train_async()` 后台线程、`reset_parameters()`、`retrievability()` 遗忘预测、`set_desired_retention()`（设置 key `fsrs_desired_retention` 0.75-0.97，默认 0.9）接入 `_scheduler()` 工厂；端点 `/api/fsrs/status`、`/api/fsrs/train|reset|retention`；设置页 FSRS 卡（滑条 + 训练/重置）。**本机无 torch/pandas/tqdm → 降级指引，调度主路径不受影响** | test_fsrs_bridge 8 用例（含缺依赖降级） |
+| 2 | 压力指数（PI） | `Handler._pressure_index()`：逾期/今日/明日计数 × 1.5 分钟估时 → 0-100 分（逾期×2 上限 60 + 今日×0.8 上限 30 + 明日×0.3 上限 15），高/中/低分级，并入 `/api/dashboard` | test_dashboard 全绿（含压力字段） |
+| 3 | 遗忘预测（R 值） | `_forget_predict()`：due≤明日 的复习 join problems（state/stability/difficulty），逐卡算 R；高风险 R<0.5 / 中风险 0.5-0.7 / 平均 R / 最危险 3 题 | test_dashboard 断言 200 全过 |
+| 4 | 反复错题追踪 | `_stubborn_problems()`：同题评分≤2 次数≥2 入「顽固错题」榜（按错次降序、掌握度升序，附再错率），概览页新卡 | test_stubborn_problems（SM-2 答错重置 repetition，判定只依赖错次） |
+| 5 | 闪电/翻卡复习 | 复习页「⚡ 闪电复习」全屏翻卡：忘了(1)/记得(4) 一键记入 FSRS，键盘 ←/→，点击翻面，进度+完成统计 | `node --check` |
+| 6 | 打印增强（考前自测卷） | 「📝 考前自测卷」按钮：薄弱优先抽 ≤30 题、按知识点交错组卷、**不打印答案/对策**，标注建议时长，作答线留白 | `node --check` |
+| 7 | 今日任务清单 | `_today_tasks()`：今日复习量 + 错因专项（TOP 错因 + 3 道最薄弱题）+ 距考 ≤14 天提醒，概览页新卡 | test_dashboard 全绿 |
+| 8 | 同知识题隔开 | 复习队列**默认交错**（`_interleave` 贪心轮转，`?mode=plain` 关闭），复习页开关改为默认开（localStorage 语义反转） | test_reviews_interleave_mode 仍过 |
+
+### 附注/事故记录
+- `_forget_predict` 初版误取 `r.state/r.stability/r.last_review`（FSRS 状态列在 `problems` 表）→ 500；改为 join problems + reviews 子查询取最近完成时间，3 个 dashboard 用例一次修复。
+- 顽固题初版按 `repetition≥2` 筛选失败——SM-2 答错会重置 repetition=0；改为按错次（评分≤2）统计，前端显示同步改用错次。
+- 测试误删行已恢复（edit 冗余行导致 `body` 变量丢失）。
+
+---
+
 ## 2026-08-12：C7 八项打磨优化（全部完成）
 
 全量回归：**165 passed + 4 subtests**，`node --check static/app.js` 通过。

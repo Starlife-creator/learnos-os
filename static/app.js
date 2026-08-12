@@ -224,7 +224,7 @@ function switchPage(page, {push=true}={}) {
   if (page === 'dashboard') loadDashboard();
   if (page === 'problems') loadProblems(1);
   if (page === 'review') loadReviews();
-  if (page === 'settings') loadSettings();
+  if (page === 'settings') { loadSettings(); loadFsrsStatus(); }
   if (page === 'rag') { loadRagDocs(); loadRagSearch(''); }
   if (page === 'exam') loadExam();
 }
@@ -425,6 +425,60 @@ function drawAnalytics(data) {
   if (dh) dh.innerHTML = h.total ?
     `新生 ${h.newborn} · 学习中 ${h.learning} · 成长中 ${h.mature}（共 ${h.total} 题，平均复习 ${h.avg_repetition} 次，平均掌握度 ${h.avg_mastery}）` :
     '暂无数据';
+  drawPressure((data && data.pressure) || {});
+  drawForgetPredict((data && data.forget_predict) || {});
+  drawTodayTasks((data && data.tasks) || []);
+  drawStubborn((data && data.stubborn) || []);
+}
+
+// ── P0 顽固错题 ──
+function drawStubborn(list) {
+  const el = document.getElementById('stubbornList');
+  if (!el) return;
+  if (!list || !list.length) { el.innerHTML = '暂无反复出错的题目，保持势头 🎉'; return; }
+  el.innerHTML = list.map(p => {
+    const rate = p.total_reviews ? Math.round(p.miss_count / p.total_reviews * 100) : 0;
+    return `<div class="flex-between mb-8">
+      <a href="#" onclick="event.preventDefault();viewProblem(${p.id});return false;">${escapeHtml(p.title)}</a>
+      <span class="text-muted">错 ${p.miss_count} 次 · 再错率 ${rate}% · 掌握度 ${p.mastery}/5</span>
+    </div>`;
+  }).join('') + '<p class="hint-text mt-8">再错率 = 评分 ≤2 的复习占比；建议对这些题做「错因专项」+ 变式练习。</p>';
+}
+
+// ── P0 复习压力指数（PI）──
+function drawPressure(p) {
+  const el = document.getElementById('pressureCard');
+  if (!el) return;
+  const color = p.level === '高' ? 'var(--danger,#ef4444)' : p.level === '中' ? 'var(--warning)' : 'var(--success)';
+  el.innerHTML = p.total == null ? '—' :
+    `<div class="flex-between"><span class="text-sm">压力分 <b style="color:${color}">${p.score}</b>（${p.level}）</span>
+     <span class="text-sm text-muted">逾期 ${p.overdue} · 今日 ${p.today} · 明日 ${p.tomorrow} · 合计约 ${p.est_minutes} 分钟</span></div>
+     <div class="error-bar-track mt-8"><div class="error-bar-fill" style="width:${Math.min(100, p.score)}%;background:${color}"></div></div>
+     <p class="hint-text mt-8">${p.overdue > 0 ? `⚠ 有 ${p.overdue} 题逾期：先清逾期（系统已自动缩短逾期间隔），再按优先级复习。` : '当前无逾期，保持节奏即可。'}</p>`;
+}
+
+// ── P0 遗忘预测（FSRS R 值）──
+function drawForgetPredict(f) {
+  const el = document.getElementById('forgetCard');
+  if (!el) return;
+  if (!f.count) { el.innerHTML = '近期待复习的题目不多，暂无遗忘风险'; return; }
+  const pct = (r) => (r * 100).toFixed(0) + '%';
+  el.innerHTML =
+    `<div class="text-sm">近期 ${f.count} 题待复习 · 平均检索概率 ${pct(f.avg_r)} · 高危(R&lt;50%) ${f.high_risk} · 中危(50-70%) ${f.medium_risk}</div>
+     ${f.top && f.top.length ? `<div class="mt-8 text-sm">最易遗忘：${f.top.map(t => `<a href="#" onclick="event.preventDefault();viewProblem(${t.problem_id});return false;">${escapeHtml(t.title)}（R=${pct(t.r)}）</a>`).join('、')}</div>` : ''}
+     <p class="hint-text mt-8">R = 按 FSRS 预测的「明天还记得」概率，R 越低越该先复习。数据随 FSRS 参数个性化而更准。</p>`;
+}
+
+// ── P0 今日任务清单 ──
+function drawTodayTasks(tasks) {
+  const el = document.getElementById('taskCard');
+  if (!el) return;
+  if (!tasks || !tasks.length) { el.innerHTML = '暂无任务'; return; }
+  const icons = { review: '📚', error_focus: '🎯', exam: '🏃', done: '✅' };
+  el.innerHTML = tasks.map(t =>
+    `<div class="flex-between mb-8"><span class="text-sm">${icons[t.kind] || ''} ${escapeHtml(t.label)}</span>
+     ${t.kind === 'review' && t.count ? `<a class="btn btn-secondary btn-sm" href="#review">去复习</a>` : ''}</div>`
+  ).join('');
 }
 
 // ── C6 错因分布（横向条形）──
@@ -947,8 +1001,9 @@ async function loadReviews() {
   el.innerHTML = '<div class="loading">加载中…</div>';
   loadTodaySummary();
   try {
-    const mode = localStorage.getItem('interleave') === '1' ? '?mode=interleave' : '';
-    document.getElementById('interleaveToggle').checked = localStorage.getItem('interleave') === '1';
+    const interleave = localStorage.getItem('interleave') !== '0';
+    const mode = interleave ? '' : '?mode=plain';
+    document.getElementById('interleaveToggle').checked = interleave;
     const list = await api('/api/reviews' + mode);
     if (!list.length) {
       el.innerHTML = '<div class="empty"><p>今天没有待复习的题目，去看看概览页吧</p></div>';
@@ -1365,6 +1420,121 @@ async function printProblems() {
     window.print();
   } catch(e) { toast(e.message, 'error'); }
 }
+
+// ── P0 打印增强：考前自测卷（隐藏答案，薄弱优先 + 同知识点隔开）──
+async function printQuizSheet() {
+  const q = document.getElementById('searchInput').value.trim();
+  const params = new URLSearchParams({ page: 1, limit: 10000, q });
+  try {
+    const data = await api('/api/problems?' + params.toString());
+    const items = data.items || data;
+    if (items.length < 3) { toast('题太少，至少 3 题才能组卷', 'warn'); return; }
+    const quiz = [...items]
+      .sort((a, b) => (a.mastery || 0) - (b.mastery || 0))
+      .slice(0, 30);
+    const buckets = {};
+    for (const p of quiz) {
+      const k = p.topic || '未分类';
+      (buckets[k] = buckets[k] || []).push(p);
+    }
+    const ordered = [];
+    let last = null;
+    while (ordered.length < quiz.length) {
+      const pool = Object.keys(buckets).filter(k => k !== last && buckets[k].length);
+      const k = pool.length ? pool.reduce((a, b) => buckets[a].length >= buckets[b].length ? a : b)
+                            : Object.keys(buckets).find(k => buckets[k].length);
+      ordered.push(buckets[k].shift());
+      last = k;
+      if (buckets[k].length === 0) delete buckets[k];
+    }
+    const minutes = Math.max(5, Math.round(quiz.length * 1.5));
+    document.getElementById('printArea').innerHTML =
+      `<h2>物理考前自测卷（${quiz.length} 题 · 建议 ${minutes} 分钟 · ${new Date().toLocaleDateString()}）</h2>
+      <p class="hint-text">本卷不含答案与对策；完成后请到系统中核对「我的尝试」。</p>
+      ${ordered.map((p, i) => `<div class="print-item">
+        <div class="print-title">第 ${i+1} 题 · ${escapeHtml(p.course || '')} · ${escapeHtml(p.topic || '')}</div>
+        <pre>${escapeHtml(p.content || '')}</pre>
+        <div class="print-answer-line">我的作答：</div>
+      </div>`).join('')}`;
+    window.print();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ── P0 闪电复习（快速翻卡，忘了=1 / 记得=4）──
+let _flashQueue = [];
+let _flashIdx = 0;
+let _flashDone = 0;
+
+async function startFlashReview() {
+  const list = await api('/api/reviews');
+  if (!list.length) { toast('今天没有待复习的题目', 'warn'); return; }
+  _flashQueue = list;
+  _flashIdx = 0;
+  _flashDone = 0;
+  document.getElementById('flashBody').innerHTML = `
+    <div class="flash-count text-sm text-muted mb-8" id="flashCount"></div>
+    <div class="flash-front">
+      <div class="text-muted text-sm mb-8" id="flashMeta"></div>
+      <pre class="flash-content" id="flashContent">加载中...</pre>
+    </div>
+    <div class="flash-back hidden" id="flashBack">
+      <div class="print-hdr">我的尝试</div>
+      <pre class="flash-content" id="flashAttempt"></pre>
+      <div class="print-hdr">对策</div>
+      <pre class="flash-content" id="flashFix"></pre>
+    </div>
+    <p class="hint-text text-center">点击卡片翻面查看答案；记住键盘 ← 忘了 / → 记得</p>`;
+  document.querySelector('#flashModal .modal-footer').classList.remove('hidden');
+  openModal('flashModal');
+  _flashRender();
+}
+
+function _flashRender() {
+  const r = _flashQueue[_flashIdx];
+  if (!r) { _flashFinish(); return; }
+  document.getElementById('flashCount').textContent =
+    `第 ${_flashIdx + 1} / ${_flashQueue.length} 题（已答 ${_flashDone}）`;
+  document.getElementById('flashMeta').textContent =
+    `${escapeHtml(r.course || '')} · ${escapeHtml(r.topic || '')} · 错因：${escapeHtml(r.error_type || '待诊断')}`;
+  document.getElementById('flashContent').textContent = r.content || '(无题干)';
+  document.getElementById('flashAttempt').textContent = r.my_attempt || '(无记录)';
+  document.getElementById('flashFix').textContent = r.fix_action || '(无对策)';
+  flashFlip(true);
+}
+
+function flashFlip(forceBack) {
+  const back = document.getElementById('flashBack');
+  if (forceBack === true || !back.classList.contains('hidden')) {
+    back.classList.add('hidden');
+    return;
+  }
+  back.classList.remove('hidden');
+}
+
+async function flashRate(rating) {
+  const r = _flashQueue[_flashIdx];
+  _flashDone++;
+  try { await api(`/api/reviews/${r.id}/complete`, { method: 'POST', body: { rating } }); }
+  catch(e) { toast(e.message, 'error'); }
+  _flashIdx++;
+  _flashRender();
+}
+
+function _flashFinish() {
+  const el = document.getElementById('flashBody');
+  el.innerHTML = `<div class="text-center" style="padding:30px 0">
+    <h3 style="margin-bottom:12px">🎉 完成闪电复习</h3>
+    <p class="text-muted">本次共 ${_flashQueue.length} 题，全部已按记忆情况记入 FSRS 调度。</p>
+  </div>`;
+  document.querySelector('#flashModal .modal-footer').classList.add('hidden');
+  loadReviews();
+}
+
+document.addEventListener('keydown', e => {
+  if (!document.getElementById('flashModal').classList.contains('active')) return;
+  if (e.key === 'ArrowLeft') { e.preventDefault(); flashRate(1); }
+  if (e.key === 'ArrowRight') { e.preventDefault(); flashRate(4); }
+});
 
 // ── 设置 ──
 async function probeLocalModels() {
@@ -1798,6 +1968,65 @@ async function savePrefs() {
     });
     toast('偏好已保存');
     loadPrefs();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ── P0 FSRS 参数个性化 ──
+async function loadFsrsStatus() {
+  const el = document.getElementById('fsrsStatus');
+  if (!el) return;
+  try {
+    const s = await api('/api/fsrs/status');
+    if (!s.available) {
+      el.textContent = 'FSRS 未启用（vendor 缺失），当前使用 SM-2 调度。';
+      el.style.color = 'var(--warning)';
+      return;
+    }
+    const src = s.params_source === 'trained'
+      ? `<b>个性化参数</b>（训练于 ${escapeHtml(s.trained_at)}，样本 ${s.sample_count} 条）`
+      : '<b>默认参数</b>（用复习历史训练后会更贴合你的记忆曲线）';
+    let extra = '';
+    if (s.training) extra = ' <span class="tag tag-amber">训练中…</span>';
+    else if (s.last_train) extra = ` <span class="tag tag-green">上次训练成功</span>`;
+    else if (s.train_error) extra = ` <span class="tag tag-red">上次训练未成功</span>`;
+    el.innerHTML = `FSRS 调度已启用 · ${src} · 目标保持率 ${s.desired_retention}${extra}`;
+    const ret = document.getElementById('fsrsRetention');
+    if (ret) { ret.value = s.desired_retention; document.getElementById('fsrsRetentionVal').textContent = s.desired_retention; }
+    if (s.training) { setTimeout(loadFsrsStatus, 3000); }
+  } catch(e) { el.textContent = 'FSRS 状态加载失败'; }
+}
+
+async function saveFsrsRetention() {
+  try {
+    const r = await api('/api/fsrs/retention', {
+      method: 'POST',
+      body: { value: parseFloat(document.getElementById('fsrsRetention').value) },
+    });
+    toast(r.ok ? '目标保持率已保存' : '值需在 0.75-0.97 之间', r.ok ? '' : 'error');
+    if (r.ok) loadFsrsStatus();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function trainFsrs() {
+  const btn = document.getElementById('trainFsrsBtn');
+  btn.disabled = true;
+  try {
+    const r = await api('/api/fsrs/train', { method: 'POST', body: {} });
+    if (r.started) {
+      toast(`已开始训练（${r.sample_count} 条复习记录）…`);
+      setTimeout(loadFsrsStatus, 2000);
+    } else {
+      toast('无法训练：' + (r.error || '未知原因'), 'error');
+    }
+  } catch(e) { toast(e.message, 'error'); }
+  btn.disabled = false;
+}
+
+async function resetFsrs() {
+  try {
+    const r = await api('/api/fsrs/reset', { method: 'POST', body: {} });
+    toast(r.ok ? '已重置为默认参数' : '重置失败', r.ok ? '' : 'error');
+    if (r.ok) loadFsrsStatus();
   } catch(e) { toast(e.message, 'error'); }
 }
 

@@ -137,6 +137,15 @@ class Handler(SimpleHTTPRequestHandler):
             if path == "/api/problems/duplicates":
                 self._handle_duplicates()
                 return
+            if path == "/api/fsrs/train":
+                self._handle_fsrs_train()
+                return
+            if path == "/api/fsrs/reset":
+                self.json_response({"ok": fsrs_bridge.reset_parameters()})
+                return
+            if path == "/api/fsrs/status":
+                self.json_response(fsrs_bridge.fsrs_status())
+                return
             if path == "/api/reviews":
                 self._handle_list_reviews()
                 return
@@ -218,14 +227,15 @@ class Handler(SimpleHTTPRequestHandler):
             self._safe_error(exc)
 
     def _handle_list_reviews(self) -> None:
-        """复习队列。?mode=interleave 时按知识点混合排序（A7 交错练习）。"""
+        """复习队列。默认同知识点隔开（P0 交错），?mode=plain 关闭（A7 遗留参数保留）。"""
         items = rows("""
             SELECT r.*, p.title, p.course, p.topic, p.content, p.my_attempt
             FROM reviews r JOIN problems p ON p.id = r.problem_id
             WHERE r.completed = 0 ORDER BY r.due_date ASC
         """)
         qs = parse_qs(urlparse(self.path).query)
-        if qs.get("mode", [""])[0] == "interleave" and len(items) > 2:
+        # P0：交错复习默认开启（同知识点隔开）；?mode=plain 关闭
+        if qs.get("mode", [""])[0] != "plain" and len(items) > 2:
             items = _interleave(items)
         # A5：带未清漏点的题目标 Feynman 徽章（下次复习优先重考漏点）
         feynman_sessions = rows(
@@ -383,7 +393,152 @@ class Handler(SimpleHTTPRequestHandler):
             "daily_reviews": analytics["daily_reviews"],
             "error_distribution": self._error_distribution(),
             "error_trend": self._error_trend(),
+            "pressure": self._pressure_index(),
+            "forget_predict": self._forget_predict(),
+            "tasks": self._today_tasks(),
+            "stubborn": self._stubborn_problems(),
         })
+
+    @staticmethod
+    def _stubborn_problems() -> list[dict[str, Any]]:
+        """P0 顽固错题：同一题答错(评分≤2)≥2 次的题，按错误次数与掌握度排序。"""
+        items = rows("""
+            SELECT p.id, p.title, p.topic, p.mastery, p.repetition,
+                   (SELECT COUNT(*) FROM reviews r
+                    WHERE r.problem_id = p.id AND r.completed = 1
+                      AND CAST(r.result AS INTEGER) <= 2) AS miss_count,
+                   (SELECT COUNT(*) FROM reviews r
+                    WHERE r.problem_id = p.id AND r.completed = 1) AS total_reviews
+            FROM problems p
+            WHERE (SELECT COUNT(*) FROM reviews r
+                   WHERE r.problem_id = p.id AND r.completed = 1
+                     AND CAST(r.result AS INTEGER) <= 2) >= 2
+            ORDER BY miss_count DESC, p.mastery ASC
+            LIMIT 6
+        """)
+        out = []
+        for p in items:
+            out.append({
+                "id": p["id"], "title": p["title"], "topic": p["topic"],
+                "mastery": p["mastery"], "repetition": p["repetition"],
+                "miss_count": p["miss_count"] or 0,
+                "total_reviews": p["total_reviews"] or 0,
+            })
+        return out
+
+    @staticmethod
+    def _forget_predict() -> dict[str, Any]:
+        """P0 遗忘预测：对近期待复习卡算 FSRS 检索概率 R，统计风险分布。"""
+        import fsrs_bridge
+        soon = rows("""
+            SELECT r.id, r.problem_id, r.due_date, r.interval_days,
+                   p.state, p.stability, p.difficulty, p.title,
+                   (SELECT MAX(created_at) FROM reviews
+                    WHERE problem_id = p.id AND completed = 1) AS last_review
+            FROM reviews r JOIN problems p ON p.id = r.problem_id
+            WHERE r.completed = 0 AND r.due_date <= ?
+            ORDER BY r.due_date ASC
+        """, ((date.today() + timedelta(days=1)).isoformat(),))
+        if not soon:
+            return {"count": 0, "high_risk": 0, "medium_risk": 0, "avg_r": None, "top": []}
+        values = []
+        for s in soon:
+            r = fsrs_bridge.retrievability(
+                prev_interval=int(s["interval_days"] or 1),
+                state=int(s["state"] or 0),
+                stability=float(s["stability"] or 0),
+                difficulty=float(s["difficulty"] or 0),
+                last_review=str(s["last_review"] or ""),
+            )
+            values.append({"id": s["id"], "problem_id": s["problem_id"],
+                           "title": s["title"], "due": s["due_date"], "r": r})
+        high = sum(1 for v in values if v["r"] < 0.5)
+        medium = sum(1 for v in values if 0.5 <= v["r"] < 0.7)
+        avg = round(sum(v["r"] for v in values) / len(values), 3)
+        top = sorted(values, key=lambda v: v["r"])[:3]
+        return {"count": len(values), "high_risk": high, "medium_risk": medium,
+                "avg_r": avg, "top": top}
+
+    @staticmethod
+    def _today_tasks() -> list[dict[str, Any]]:
+        """P0 今日任务清单：复习压力 + 错因专项 + 冲刺提醒。"""
+        tasks: list[dict[str, Any]] = []
+        pressure = Handler._pressure_index()
+        if pressure["total"] > 0:
+            tasks.append({
+                "kind": "review",
+                "label": f"复习 {pressure['total']} 题（逾期 {pressure['overdue']} + 今日 {pressure['today']} + 明日 {pressure['tomorrow']}，约 {pressure['est_minutes']} 分钟）",
+                "count": pressure["total"],
+            })
+        elif pressure["overdue"] == 0:
+            tasks.append({"kind": "done", "label": "今日没有到期待复习的题目", "count": 0})
+        # 错因专项：近期最高频错因 → 抽 3 道同错因题
+        top_err = rows("""
+            SELECT error_type, COUNT(*) AS c FROM problems
+            WHERE error_type <> '' AND error_type <> '待诊断'
+            GROUP BY error_type ORDER BY c DESC LIMIT 1
+        """)
+        if top_err:
+            et = top_err[0]["error_type"]
+            picks = rows("""
+                SELECT title FROM problems WHERE error_type = ?
+                ORDER BY mastery ASC, id DESC LIMIT 3
+            """, (et,))
+            if picks:
+                label = ERROR_TYPE_LABELS.get(et, et)
+                tasks.append({
+                    "kind": "error_focus",
+                    "label": f"错因专项：「{label}」专项 3 题",
+                    "count": len(picks),
+                    "titles": [p["title"] for p in picks],
+                })
+        # 冲刺提醒
+        try:
+            from profile import aggregate
+            goal = aggregate().get("goal", {}) or {}
+            if goal.get("exam_date"):
+                days = (date.fromisoformat(goal["exam_date"]) - date.today()).days
+                if 0 <= days <= 14:
+                    tasks.append({
+                        "kind": "exam",
+                        "label": f"距考试仅 {days} 天，建议按冲刺计划加练",
+                        "count": days,
+                    })
+        except Exception:
+            pass
+        return tasks
+
+    @staticmethod
+    def _pressure_index() -> dict[str, Any]:
+        """P0 复习压力指数（PI）：逾期/今日/明日负载 + 预估耗时 + 压力分。"""
+        today = date.today().isoformat()
+        tomorrow = (date.today() + timedelta(days=1)).isoformat()
+        overdue = row("SELECT COUNT(*) AS c FROM reviews WHERE completed = 0 AND due_date < ?", (today,)) or {}
+        today_n = row("SELECT COUNT(*) AS c FROM reviews WHERE completed = 0 AND due_date = ?", (today,)) or {}
+        tomorrow_n = row("SELECT COUNT(*) AS c FROM reviews WHERE completed = 0 AND due_date = ?", (tomorrow,)) or {}
+        overdue_c = int(overdue.get("c", 0))
+        today_c = int(today_n.get("c", 0))
+        tomorrow_c = int(tomorrow_n.get("c", 0))
+        # 估算：每题约 90 秒（标注为估算值）
+        total = overdue_c + today_c + tomorrow_c
+        minutes = round(total * 1.5)
+        # 压力分：逾期 2 分/题（封顶 60）+ 今日 0.8 分/题（封顶 30）+ 明日 0.3 分/题（封顶 15）
+        score = min(60, overdue_c * 2) + min(30, int(today_c * 0.8)) + min(15, int(tomorrow_c * 0.3))
+        if score >= 80:
+            level = "高"
+        elif score >= 40:
+            level = "中"
+        else:
+            level = "低"
+        return {
+            "score": int(score),
+            "level": level,
+            "overdue": overdue_c,
+            "today": today_c,
+            "tomorrow": tomorrow_c,
+            "total": total,
+            "est_minutes": minutes,
+        }
 
     @staticmethod
     def _error_trend() -> list[dict[str, Any]]:
@@ -460,6 +615,23 @@ class Handler(SimpleHTTPRequestHandler):
                 })
         scored.sort(key=lambda x: -x["similarity"])
         self.json_response({"duplicates": scored[:5]})
+
+    def _handle_fsrs_train(self) -> None:
+        """P0：后台训练个性化 FSRS 参数（POST 立即返回，状态走 /api/fsrs/status）。"""
+        reviews = rows("""
+            SELECT problem_id AS cid, result AS rating, created_at AS ts
+            FROM reviews WHERE completed = 1 AND result BETWEEN 1 AND 4
+            ORDER BY id
+        """)
+        sample = [(int(r["cid"]), int(r["rating"]), str(r["ts"])) for r in reviews]
+        if not fsrs_bridge.fsrs_available():
+            self.json_response({"started": False, "error": "FSRS 未启用（vendor 缺失）"}, 409)
+            return
+        if len(sample) < 10:
+            self.json_response({"started": False, "error": f"复习记录不足（需 ≥10 条，当前 {len(sample)} 条）"}, 409)
+            return
+        started = fsrs_bridge.train_async(sample)
+        self.json_response({"started": started, "sample_count": len(sample)})
 
     @staticmethod
     def _error_distribution() -> list[dict[str, Any]]:
@@ -895,6 +1067,13 @@ class Handler(SimpleHTTPRequestHandler):
                     {"role": "user", "content": "测试连接"},
                 ], max_tokens=20)
                 self.json_response({"ok": True, "reply": reply})
+                return
+            if path == "/api/fsrs/train":
+                self._handle_fsrs_train()
+                return
+            if path == "/api/fsrs/retention":
+                ok = fsrs_bridge.set_desired_retention(data.get("value", 0))
+                self.json_response({"ok": ok})
                 return
             self.json_response({"error": "接口不存在"}, 404)
         except Exception as exc:

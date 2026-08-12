@@ -222,6 +222,7 @@
       padding: 8mm; font-size: 12px; color: #000; background: #fff;
     }
     #printArea h2 { font-size: 16px; margin: 0 0 10px; }
+    .print-answer-line { border-bottom: 1px solid #333; height: 26px; margin: 10px 0 14px; }
     .print-item { border-bottom: 1px solid #999; padding: 8px 0; page-break-inside: avoid; }
     .print-item .print-title { font-weight: 700; font-size: 13px; margin-bottom: 4px; }
     .print-item .print-meta { color: #333; margin-bottom: 4px; }
@@ -274,9 +275,29 @@
       <div id="deckHealth" class="hint-text">—</div>
     </div>
 
+    <div class="card">
+      <div class="card-title">复习压力指数（PI）</div>
+      <div id="pressureCard" class="hint-text">—</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">明日遗忘预测 <span class="hint-text">（FSRS 检索概率 R）</span></div>
+      <div id="forgetCard" class="hint-text">—</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">今日任务清单</div>
+      <div id="taskCard" class="hint-text">—</div>
+    </div>
+
     <div class="card" id="topicsCard">
       <div class="card-title">薄弱知识点</div>
       <div id="topicsList"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">顽固错题 <span class="hint-text">（重复出错 ≥2 次）</span></div>
+      <div id="stubbornList" class="text-sm"></div>
     </div>
 
     <div class="card">
@@ -346,7 +367,8 @@
     <div class="flex-between mb-8">
       <h2 style="font-size:18px">错题工作台</h2>
       <button class="btn btn-primary btn-sm" onclick="openProblemModal()">+ 新增题目</button>
-      <button class="btn btn-secondary btn-sm" onclick="printProblems()">🖨 打印错题集</button>
+      <button class="btn btn-secondary btn-sm" onclick="printProblems()">🖨 错题集</button>
+      <button class="btn btn-secondary btn-sm" onclick="printQuizSheet()">📝 考前自测卷</button>
     </div>
     <div class="flex gap-12 mb-8">
       <div class="form-group" style="flex:1;margin:0">
@@ -391,9 +413,39 @@
         <label class="text-sm text-muted" for="interleaveToggle">交错练习（按知识点混合排序）</label>
         <input type="checkbox" id="interleaveToggle" onchange="toggleInterleave(this.checked)">
       </div>
+      <button class="btn btn-secondary btn-sm" onclick="startFlashReview()">⚡ 闪电复习</button>
     </div>
     <div id="reviewProgress"></div>
     <div id="reviewList"></div>
+  </div>
+
+  <!-- ── P0 闪电复习（翻卡）── -->
+  <div class="modal-overlay" id="flashModal">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="flashTitle" style="max-width:640px">
+      <div class="modal-header">
+        <h3 id="flashTitle">⚡ 闪电复习</h3>
+        <button class="modal-close" onclick="closeModal('flashModal')" aria-label="关闭">&times;</button>
+      </div>
+      <div class="flash-body" id="flashBody" onclick="flashFlip()">
+        <div class="flash-count text-sm text-muted mb-8" id="flashCount"></div>
+        <div class="flash-front">
+          <div class="text-muted text-sm mb-8" id="flashMeta"></div>
+          <pre class="flash-content" id="flashContent">加载中...</pre>
+        </div>
+        <div class="flash-back hidden" id="flashBack">
+          <div class="print-hdr">我的尝试</div>
+          <pre class="flash-content" id="flashAttempt"></pre>
+          <div class="print-hdr">对策</div>
+          <pre class="flash-content" id="flashFix"></pre>
+        </div>
+        <p class="hint-text text-center">点击卡片翻面查看答案；记住键盘 ← 忘了 / → 记得</p>
+      </div>
+      <div class="modal-footer flex gap-12">
+        <button class="btn btn-danger" onclick="flashRate(1)">😖 忘了</button>
+        <button class="btn btn-primary" onclick="flashRate(4)">😎 记得</button>
+        <button class="btn btn-secondary" onclick="closeModal('flashModal')">暂停</button>
+      </div>
+    </div>
   </div>
 
   <!-- ── 口试页 ── -->
@@ -563,6 +615,24 @@
         <button class="btn btn-primary" onclick="savePrefs()">保存偏好</button>
       </div>
       <p class="hint-text mt-12">讲解深度/例题数会注入 AI 提示；每日复习目标与通知配合提醒你完成当日计划。</p>
+    </div>
+
+    <div class="card">
+      <div class="card-title">间隔复习（FSRS）</div>
+      <p class="text-sm text-muted mb-8" id="fsrsStatus">加载中…</p>
+      <div class="form-group" style="margin-bottom:8px">
+        <label for="fsrsRetention">目标保持率（0.75-0.97，推荐 0.9）</label>
+        <div class="flex gap-8 items-center">
+          <input type="range" id="fsrsRetention" min="0.75" max="0.97" step="0.01" value="0.9" style="flex:1" oninput="document.getElementById('fsrsRetentionVal').textContent = this.value">
+          <span id="fsrsRetentionVal" class="text-sm" style="min-width:44px">0.9</span>
+        </div>
+      </div>
+      <div class="flex gap-12 items-center">
+        <button class="btn btn-secondary btn-sm" onclick="saveFsrsRetention()">保存保持率</button>
+        <button class="btn btn-primary btn-sm" onclick="trainFsrs()" id="trainFsrsBtn">🎓 用我的复习历史训练个性化参数</button>
+        <button class="btn btn-secondary btn-sm" onclick="resetFsrs()">重置为默认参数</button>
+      </div>
+      <p class="hint-text mt-12">个性化训练需本机安装 torch/pandas/tqdm（用户可选装，属于可选项）；未安装时自动继续用默认参数。训练在后台进行，结果会显示在状态里。</p>
     </div>
   </div>
 

@@ -52,6 +52,42 @@ class TestFsrsBridge(unittest.TestCase):
         finally:
             fsrs_bridge._FSRS_AVAILABLE = saved
 
+    def test_desired_retention_persist_and_validate(self):
+        """P0：目标保持率可设置并持久化；非法值拒绝。"""
+        self.assertTrue(fsrs_bridge.set_desired_retention(0.85))
+        self.assertAlmostEqual(fsrs_bridge._desired_retention(), 0.85)
+        self.assertFalse(fsrs_bridge.set_desired_retention(0.5))
+        self.assertFalse(fsrs_bridge.set_desired_retention("abc"))
+        self.assertTrue(fsrs_bridge.set_desired_retention(0.9))
+        self.assertAlmostEqual(fsrs_bridge._desired_retention(), 0.9)
+
+    def test_retrievability_bounds(self):
+        """P0：检索概率预测在 [0,1] 且新卡最近复习 R 高。"""
+        if not fsrs_bridge._FSRS_AVAILABLE:
+            self.skipTest("FSRS vendored 缺失")
+        r = fsrs_bridge.retrievability(prev_interval=1, last_review="2026-08-11",
+                                       current=date(2026, 8, 12))
+        self.assertGreaterEqual(r, 0.0)
+        self.assertLessEqual(r, 1.0)
+        # 无 FSRS 时降级为 0
+        saved = fsrs_bridge._FSRS_AVAILABLE
+        fsrs_bridge._FSRS_AVAILABLE = False
+        try:
+            self.assertEqual(fsrs_bridge.retrievability(1), 0.0)
+        finally:
+            fsrs_bridge._FSRS_AVAILABLE = saved
+
+    def test_train_missing_deps_degrades(self):
+        """P0：训练依赖缺失 → (False, reason)，调度不受影响。"""
+        if not fsrs_bridge._FSRS_AVAILABLE:
+            self.skipTest("FSRS vendored 缺失")
+        ok, payload = fsrs_bridge.train_parameters(
+            [(i, 3, f"2026-08-{i:02d}T10:00:00") for i in range(1, 12)]
+        )
+        self.assertFalse(ok)
+        self.assertIn("reason", payload)
+        self.assertGreaterEqual(next_interval_days(3, 5), 1)  # 仍可调度
+
 
 if __name__ == "__main__":
     unittest.main()
