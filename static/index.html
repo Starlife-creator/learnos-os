@@ -237,14 +237,14 @@
   <div class="nav-brand">物理学习 OS
     <button class="theme-toggle" id="themeToggle" aria-label="切换深色/浅色模式" title="切换主题">🌓</button>
   </div>
-  <button class="nav-item active" data-page="dashboard">概览</button>
-  <button class="nav-item" data-page="problems">错题</button>
-  <button class="nav-item" data-page="review">复习 <span class="nav-badge hidden" id="dueBadge">0</span></button>
-  <button class="nav-item" data-page="oral">口试</button>
-  <a class="nav-item" href="concept_map.html" style="text-decoration:none">图谱</a>
-  <button class="nav-item" data-page="rag">教材库</button>
-  <button class="nav-item" data-page="exam">考试</button>
-  <button class="nav-item" data-page="settings">设置</button>
+  <button class="nav-item active" data-page="dashboard"><span data-i18n="nav.dashboard">概览</span></button>
+  <button class="nav-item" data-page="problems"><span data-i18n="nav.problems">错题</span></button>
+  <button class="nav-item" data-page="review"><span data-i18n="nav.review">复习</span> <span class="nav-badge hidden" id="dueBadge">0</span></button>
+  <button class="nav-item" data-page="oral"><span data-i18n="nav.oral">口试</span></button>
+  <a class="nav-item" href="concept_map.html" style="text-decoration:none"><span data-i18n="nav.graph">图谱</span></a>
+  <button class="nav-item" data-page="rag"><span data-i18n="nav.rag">教材库</span></button>
+  <button class="nav-item" data-page="exam"><span data-i18n="nav.exam">考试</span></button>
+  <button class="nav-item" data-page="settings"><span data-i18n="nav.settings">设置</span></button>
 </nav>
 
 <div class="container">
@@ -252,92 +252,92 @@
   <!-- ── 概览页 ── -->
   <div id="page-dashboard" class="page active">
     <div class="stats-grid" id="statsGrid">
-      <div class="stat-card"><div class="stat-value" id="statTotal">-</div><div class="stat-label">题目总数</div></div>
-      <div class="stat-card"><div class="stat-value" id="statDue">-</div><div class="stat-label">待复习</div></div>
-      <div class="stat-card"><div class="stat-value" id="statMastered">-</div><div class="stat-label">已掌握</div></div>
-      <div class="stat-card"><div class="stat-value" id="statAvg">-</div><div class="stat-label">平均掌握度</div></div>
+      <div class="stat-card"><div class="stat-value" id="statTotal">-</div><div class="stat-label" data-i18n="stat.total">题目总数</div></div>
+      <div class="stat-card"><div class="stat-value" id="statDue">-</div><div class="stat-label" data-i18n="stat.due">待复习</div></div>
+      <div class="stat-card"><div class="stat-value" id="statMastered">-</div><div class="stat-label" data-i18n="stat.mastered">已掌握</div></div>
+      <div class="stat-card"><div class="stat-value" id="statAvg">-</div><div class="stat-label" data-i18n="stat.avg">平均掌握度</div></div>
     </div>
 
     <div class="card">
-      <div class="card-title">掌握度趋势</div>
+      <div class="card-title" data-i18n="card.trend">掌握度趋势</div>
       <svg class="trend-svg" id="trendSvg" viewBox="0 0 300 120" preserveAspectRatio="none"></svg>
-      <div class="hint-text" id="trendHint">完成复习后会记录掌握度变化</div>
+      <div class="hint-text" id="trendHint" data-i18n="card.trendHint">完成复习后会记录掌握度变化</div>
     </div>
 
     <div class="card">
-      <div class="card-title">未来 7 天复习压力</div>
+      <div class="card-title" data-i18n="card.due7">未来 7 天复习压力</div>
       <div id="dueChart" style="display:flex;align-items:flex-end;gap:10px;height:90px;padding:4px 0"></div>
       <div class="hint-text" id="dueChartHint">—</div>
     </div>
 
     <div class="card">
-      <div class="card-title">卡组健康度</div>
+      <div class="card-title" data-i18n="card.deckHealth">卡组健康度</div>
       <div id="deckHealth" class="hint-text">—</div>
     </div>
 
     <div class="card">
-      <div class="card-title">复习压力指数（PI）</div>
+      <div class="card-title" data-i18n="card.pressure">复习压力指数（PI）</div>
       <div id="pressureCard" class="hint-text">—</div>
     </div>
 
     <div class="card">
-      <div class="card-title">明日遗忘预测 <span class="hint-text">（FSRS 检索概率 R）</span></div>
+      <div class="card-title" data-i18n="card.forget">明日遗忘预测 <span class="hint-text">（FSRS 检索概率 R）</span></div>
       <div id="forgetCard" class="hint-text">—</div>
     </div>
 
     <div class="card">
-      <div class="card-title">今日任务清单</div>
+      <div class="card-title" data-i18n="card.tasks">今日任务清单</div>
       <div id="taskCard" class="hint-text">—</div>
     </div>
 
     <div class="card" id="topicsCard">
-      <div class="card-title">薄弱知识点</div>
+      <div class="card-title" data-i18n="card.weakTopics">薄弱知识点</div>
       <div id="topicsList"></div>
     </div>
 
     <div class="card">
-      <div class="card-title">顽固错题 <span class="hint-text">（重复出错 ≥2 次）</span></div>
+      <div class="card-title" data-i18n="card.stubborn">顽固错题 <span class="hint-text">（重复出错 ≥2 次）</span></div>
       <div id="stubbornList" class="text-sm"></div>
     </div>
 
     <div class="card" id="gameCard">
-      <div class="card-title">动力值（XP / 连胜 / 徽章）</div>
+      <div class="card-title" data-i18n="card.game">动力值（XP / 连胜 / 徽章）</div>
       <div class="text-muted text-sm">加载中...</div>
     </div>
 
     <div class="card" id="telemetryCard">
-      <div class="card-title">AI 调用健康度 <span class="hint-text">（近 7 天，仅元数据）</span></div>
+      <div class="card-title" data-i18n="card.telemetry">AI 调用健康度 <span class="hint-text">（近 7 天，仅元数据）</span></div>
       <div class="text-muted text-sm">加载中...</div>
     </div>
 
     <div class="card" id="forgettingCard">
-      <div class="card-title">记忆保持曲线（D4） <span class="hint-text">实测 R vs FSRS 预测</span></div>
+      <div class="card-title" data-i18n="card.forgetCurve">记忆保持曲线（D4） <span class="hint-text">实测 R vs FSRS 预测</span></div>
       <svg id="forgetSvg" viewBox="0 0 340 150" width="100%" height="150"></svg>
       <div id="forgetStats" class="text-sm"></div>
     </div>
 
     <div class="card" id="weeklyCard">
-      <div class="card-title">本周周报 <span class="hint-text">（周一至今）</span></div>
+      <div class="card-title" data-i18n="card.weekly">本周周报 <span class="hint-text">（周一至今）</span></div>
       <div class="text-muted text-sm">加载中...</div>
     </div>
 
     <div class="card">
-      <div class="card-title">错因分布</div>
+      <div class="card-title" data-i18n="card.errorDist">错因分布</div>
       <div id="errorDist"></div>
     </div>
 
     <div class="card">
-      <div class="card-title">错因趋势 <span class="hint-text">（近 30 天 vs 历史占比）</span></div>
+      <div class="card-title" data-i18n="card.errorTrend">错因趋势 <span class="hint-text">（近 30 天 vs 历史占比）</span></div>
       <div id="errorTrend"></div>
     </div>
 
     <div class="card">
-      <div class="card-title">考试冲刺</div>
+      <div class="card-title" data-i18n="card.sprint">考试冲刺</div>
       <div id="sprintCard">未设置考试日期（设置页 → 学习者档案）</div>
     </div>
 
     <div class="card">
-      <div class="card-title">数据备份</div>
+      <div class="card-title" data-i18n="card.backup">数据备份</div>
       <div class="flex gap-12">
         <button class="btn btn-primary btn-sm" onclick="exportBackup()">一键备份 (全库 JSON)</button>
         <button class="btn btn-secondary btn-sm" onclick="document.getElementById('restoreFile').click()">一键还原</button>
@@ -352,22 +352,22 @@
     </div>
 
     <div class="card">
-      <div class="card-title">最近记录</div>
+      <div class="card-title" data-i18n="card.recent">最近记录</div>
       <div id="recentList"></div>
     </div>
 
     <div class="card" id="courseStatsCard">
-      <div class="card-title">课程掌握度</div>
+      <div class="card-title" data-i18n="card.courseStats">课程掌握度</div>
       <div id="courseStats"></div>
     </div>
 
     <div class="card">
-      <div class="card-title">最近复习活动</div>
+      <div class="card-title" data-i18n="card.recentActivity">最近复习活动</div>
       <div id="recentActivity"></div>
     </div>
 
     <div class="card">
-      <div class="card-title">学习者档案</div>
+      <div class="card-title" data-i18n="card.profile">学习者档案</div>
       <div id="profileBox" class="hint-text">—</div>
       <div class="flex gap-12 mt-12" style="align-items:flex-end">
         <div class="form-group" style="margin:0">
@@ -386,55 +386,55 @@
   <!-- ── 错题页 ── -->
   <div id="page-problems" class="page">
     <div class="flex-between mb-8">
-      <h2 style="font-size:18px">错题工作台</h2>
-      <button class="btn btn-primary btn-sm" onclick="openProblemModal()">+ 新增题目</button>
-      <button class="btn btn-secondary btn-sm" onclick="printProblems()">🖨 错题集</button>
-      <button class="btn btn-secondary btn-sm" onclick="printQuizSheet()">📝 考前自测卷</button>
+      <h2 style="font-size:18px" data-i18n="prob.title">错题工作台</h2>
+      <button class="btn btn-primary btn-sm" onclick="openProblemModal()" data-i18n="prob.add">+ 新增题目</button>
+      <button class="btn btn-secondary btn-sm" onclick="printProblems()" data-i18n="prob.printSet">🖨 错题集</button>
+      <button class="btn btn-secondary btn-sm" onclick="printQuizSheet()" data-i18n="prob.quizSheet">📝 考前自测卷</button>
     </div>
     <div class="flex gap-12 mb-8">
       <div class="form-group" style="flex:1;margin:0">
-        <input type="text" id="searchInput" placeholder="搜索标题、知识点、课程..." aria-label="搜索题目">
+        <input type="text" id="searchInput" placeholder="搜索标题、知识点、课程..." aria-label="搜索题目" data-i18n-ph="prob.searchPh" data-i18n-aria="prob.searchAria">
       </div>
       <div class="form-group" style="margin:0">
-        <select id="sortSelect" aria-label="排序方式" onchange="loadProblems(1)">
-          <option value="time">按时间</option>
-          <option value="mastery">按掌握度</option>
+        <select id="sortSelect" aria-label="排序方式" onchange="loadProblems(1)" data-i18n-aria="prob.sortAria">
+          <option value="time" data-i18n="prob.sortTime">按时间</option>
+          <option value="mastery" data-i18n="prob.sortMastery">按掌握度</option>
         </select>
       </div>
     </div>
     <div id="prereqFilterHint" class="hidden" style="border:1px solid var(--warning);background:var(--warning-light,rgba(240,180,60,.12));border-radius:8px;padding:8px 12px;margin-bottom:10px;align-items:center;gap:8px">
-      <span style="font-size:13px;color:var(--warning)">🔍 先修模式：仅显示该概念先修链上的相关错题</span>
-      <button class="btn btn-secondary btn-sm" onclick="clearPrereqFilter()">清除过滤</button>
+      <span style="font-size:13px;color:var(--warning)" data-i18n="prob.prereqHint">🔍 先修模式：仅显示该概念先修链上的相关错题</span>
+      <button class="btn btn-secondary btn-sm" onclick="clearPrereqFilter()" data-i18n="prob.clearFilter">清除过滤</button>
     </div>
     <div id="problemsList"></div>
     <div class="flex gap-12 mt-12 hidden" id="batchBar" style="position:sticky;bottom:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:8px 16px;z-index:50">
-      <span class="text-sm">已选 <strong id="batchCount">0</strong> 题</span>
-      <button class="btn btn-secondary btn-sm" onclick="batchAction('star')">☆ 收藏/取消</button>
-      <button class="btn btn-danger btn-sm" onclick="batchAction('delete')">删除</button>
+      <span class="text-sm" data-i18n="prob.selected">已选 <strong id="batchCount">0</strong> <span data-i18n="prob.items">题</span></span>
+      <button class="btn btn-secondary btn-sm" onclick="batchAction('star')" data-i18n="prob.star">☆ 收藏/取消</button>
+      <button class="btn btn-danger btn-sm" onclick="batchAction('delete')" data-i18n="prob.delete">删除</button>
     </div>
     <div class="flex gap-12 mt-12" id="pager" style="justify-content:center"></div>
     <div class="mt-12">
-      <button class="btn btn-secondary btn-sm" onclick="toggleFormulaPanel()">📐 公式速查</button>
+      <button class="btn btn-secondary btn-sm" onclick="toggleFormulaPanel()" data-i18n="prob.formula">📐 公式速查</button>
     </div>
     <div class="card hidden mt-12" id="formulaPanel">
-      <div class="card-title">物理公式速查</div>
+      <div class="card-title" data-i18n="prob.formulaTitle">物理公式速查</div>
       <div id="formulaContent" class="text-sm"></div>
     </div>
   </div>
 
   <!-- ── 复习页 ── -->
   <div id="page-review" class="page">
-    <h2 style="font-size:18px;margin-bottom:14px">今日复习</h2>
+    <h2 style="font-size:18px;margin-bottom:14px" data-i18n="review.title">今日复习</h2>
     <div class="card" id="todaySummaryCard">
-      <div class="card-title">今日复盘</div>
+      <div class="card-title" data-i18n="review.summary">今日复盘</div>
       <p class="text-sm text-muted" id="todaySummaryText">加载中...</p>
     </div>
     <div class="flex-between mb-8">
       <div class="flex gap-8 align-center">
-        <label class="text-sm text-muted" for="interleaveToggle">交错练习（按知识点混合排序）</label>
+        <label class="text-sm text-muted" for="interleaveToggle" data-i18n="review.interleave">交错练习（按知识点混合排序）</label>
         <input type="checkbox" id="interleaveToggle" onchange="toggleInterleave(this.checked)">
       </div>
-      <button class="btn btn-secondary btn-sm" onclick="startFlashReview()">⚡ 闪电复习</button>
+      <button class="btn btn-secondary btn-sm" onclick="startFlashReview()" data-i18n="review.flash">⚡ 闪电复习</button>
     </div>
     <div id="reviewProgress"></div>
     <div id="reviewList"></div>
@@ -444,7 +444,7 @@
   <div class="modal-overlay" id="flashModal">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="flashTitle" style="max-width:640px">
       <div class="modal-header">
-        <h3 id="flashTitle">⚡ 闪电复习</h3>
+        <h3 id="flashTitle" data-i18n="review.flashTitle">⚡ 闪电复习</h3>
         <button class="modal-close" onclick="closeModal('flashModal')" aria-label="关闭">&times;</button>
       </div>
       <div class="flash-body" id="flashBody" onclick="flashFlip()">
@@ -454,31 +454,31 @@
           <pre class="flash-content" id="flashContent">加载中...</pre>
         </div>
         <div class="flash-back hidden" id="flashBack">
-          <div class="print-hdr">我的尝试</div>
+          <div class="print-hdr" data-i18n="review.myAttempt">我的尝试</div>
           <pre class="flash-content" id="flashAttempt"></pre>
-          <div class="print-hdr">对策</div>
+          <div class="print-hdr" data-i18n="review.fixAction">对策</div>
           <pre class="flash-content" id="flashFix"></pre>
         </div>
-        <p class="hint-text text-center">点击卡片翻面查看答案；记住键盘 ← 忘了 / → 记得</p>
+        <p class="hint-text text-center" data-i18n="review.flashHint">点击卡片翻面查看答案；记住键盘 ← 忘了 / → 记得</p>
       </div>
       <div class="modal-footer flex gap-12">
-        <button class="btn btn-danger" onclick="flashRate(1)">😖 忘了</button>
-        <button class="btn btn-primary" onclick="flashRate(4)">😎 记得</button>
-        <button class="btn btn-secondary" onclick="closeModal('flashModal')">暂停</button>
+        <button class="btn btn-danger" onclick="flashRate(1)" data-i18n="review.forgot">😖 忘了</button>
+        <button class="btn btn-primary" onclick="flashRate(4)" data-i18n="review.remember">😎 记得</button>
+        <button class="btn btn-secondary" onclick="closeModal('flashModal')" data-i18n="review.pause">暂停</button>
       </div>
     </div>
   </div>
 
   <!-- ── 口试页 ── -->
   <div id="page-oral" class="page">
-    <h2 style="font-size:18px;margin-bottom:14px">AI 口试</h2>
+    <h2 style="font-size:18px;margin-bottom:14px" data-i18n="oral.title">AI 口试</h2>
     <div class="card" id="oralStartCard">
-      <div class="card-title">开始口试</div>
-      <p class="text-sm text-muted mb-8">输入一个知识点，AI 将围绕它进行五轮追问，检验你是否真正理解。</p>
+      <div class="card-title" data-i18n="oral.start">开始口试</div>
+      <p class="text-sm text-muted mb-8" data-i18n="oral.startHint">输入一个知识点，AI 将围绕它进行五轮追问，检验你是否真正理解。</p>
       <div class="form-group">
-        <input type="text" id="oralTopic" placeholder="例如：刚体转动惯量" onkeydown="if(event.key==='Enter')startOral()">
+        <input type="text" id="oralTopic" placeholder="例如：刚体转动惯量" data-i18n-ph="oral.topicPh" onkeydown="if(event.key==='Enter')startOral()">
       </div>
-      <button class="btn btn-primary" onclick="startOral()">开始口试</button>
+      <button class="btn btn-primary" onclick="startOral()" data-i18n="oral.startBtn">开始口试</button>
     </div>
     <div class="card hidden" id="oralChatCard">
       <div class="flex-between mb-8">
@@ -487,60 +487,60 @@
       </div>
       <div class="chat-box" id="oralChat"></div>
       <div class="form-group">
-        <textarea id="oralAnswer" placeholder="输入你的回答..." rows="2" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();respondOral()}"></textarea>
+        <textarea id="oralAnswer" placeholder="输入你的回答..." data-i18n-ph="oral.answerPh" rows="2" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();respondOral()}"></textarea>
       </div>
-      <button class="btn btn-primary" onclick="respondOral()">回答</button>
-      <button class="btn btn-secondary" onclick="resetOral()">重新开始</button>
+      <button class="btn btn-primary" onclick="respondOral()" data-i18n="oral.answer">回答</button>
+      <button class="btn btn-secondary" onclick="resetOral()" data-i18n="oral.restart">重新开始</button>
     </div>
   </div>
 
   <!-- ── 教材库（B3 RAG）── -->
   <div id="page-rag" class="page">
-    <h2 style="font-size:18px;margin-bottom:14px">教材库（个人资料 RAG）</h2>
+    <h2 style="font-size:18px;margin-bottom:14px" data-i18n="rag.title">教材库（个人资料 RAG）</h2>
     <div class="card">
-      <div class="card-title">摄取教材 / 课件 / 笔记</div>
-      <p class="text-sm text-muted mb-8">路径须在程序工作区内（md/txt 直读；PDF 需 vendor/ 内含 pdfminer，否则请转为 md/txt）。摄取后解答提示会自动引用对应教材片段。</p>
+      <div class="card-title" data-i18n="rag.ingestTitle">摄取教材 / 课件 / 笔记</div>
+      <p class="text-sm text-muted mb-8" data-i18n="rag.ingestHint">路径须在程序工作区内（md/txt 直读；PDF 需 vendor/ 内含 pdfminer，否则请转为 md/txt）。摄取后解答提示会自动引用对应教材片段。</p>
       <div class="flex gap-8">
-        <input type="text" id="ragPath" class="form-input" placeholder="如 materials/力学笔记.md 或 materials/（目录）" style="flex:1" onkeydown="if(event.key==='Enter')ingestRag()">
-        <button class="btn btn-primary" onclick="ingestRag()">摄取</button>
+        <input type="text" id="ragPath" class="form-input" placeholder="如 materials/力学笔记.md 或 materials/（目录）" data-i18n-ph="rag.pathPh" style="flex:1" onkeydown="if(event.key==='Enter')ingestRag()">
+        <button class="btn btn-primary" onclick="ingestRag()" data-i18n="rag.ingest">摄取</button>
       </div>
       <p class="text-sm text-muted mt-8" id="ragStatus"></p>
-      <div class="card-title mt-16">已摄取文档</div>
+      <div class="card-title mt-16" data-i18n="rag.docsTitle">已摄取文档</div>
       <div id="ragDocList"></div>
-      <div class="card-title mt-16">搜索（BM25 + FTS5 可选）</div>
+      <div class="card-title mt-16" data-i18n="rag.searchTitle">搜索（BM25 + FTS5 可选）</div>
       <div class="flex gap-8">
-        <input type="text" id="ragQuery" class="form-input" placeholder="输入问题，如：法拉第定律的适用条件" style="flex:1" onkeydown="if(event.key==='Enter')searchRag()">
-        <button class="btn btn-secondary" onclick="searchRag()">搜索</button>
+        <input type="text" id="ragQuery" class="form-input" placeholder="输入问题，如：法拉第定律的适用条件" data-i18n-ph="rag.searchPh" style="flex:1" onkeydown="if(event.key==='Enter')searchRag()">
+        <button class="btn btn-secondary" onclick="searchRag()" data-i18n="rag.search">搜索</button>
       </div>
       <div id="ragResultList" class="mt-12"></div>
     </div>
     <div class="card mt-16">
-      <div class="card-title">试卷 OCR（B2：扫图 PDF / 图片 → 文本）</div>
+      <div class="card-title" data-i18n="rag.ocrTitle">试卷 OCR（B2：扫图 PDF / 图片 → 文本）</div>
       <p class="text-sm text-muted mb-8" id="ocrProbe">检测能力中…</p>
       <div class="flex gap-8">
-        <input type="text" id="ocrPath" class="form-input" placeholder="如 exam_papers/期末卷.pdf 或 材料/卷子照片.png（须在工作区内）" style="flex:1" onkeydown="if(event.key==='Enter')runOcr()">
-        <button class="btn btn-secondary" onclick="runOcr()">OCR 提取</button>
-        <button class="btn btn-secondary btn-sm" onclick="copyOcrResult()">复制全文</button>
+        <input type="text" id="ocrPath" class="form-input" placeholder="如 exam_papers/期末卷.pdf 或 材料/卷子照片.png（须在工作区内）" data-i18n-ph="rag.ocrPathPh" style="flex:1" onkeydown="if(event.key==='Enter')runOcr()">
+        <button class="btn btn-secondary" onclick="runOcr()" data-i18n="rag.ocrBtn">OCR 提取</button>
+        <button class="btn btn-secondary btn-sm" onclick="copyOcrResult()" data-i18n="rag.copyText">复制全文</button>
       </div>
-      <p class="text-sm text-muted mt-8">文本层 PDF 直接提取（pdfminer）；扫描版需 paddleocr + pypdfium2（可选项，缺失时提示降级路径）。识别结果请人工核对，再自行录入错题或提问。</p>
+      <p class="text-sm text-muted mt-8" data-i18n="rag.ocrHint">文本层 PDF 直接提取（pdfminer）；扫描版需 paddleocr + pypdfium2（可选项，缺失时提示降级路径）。识别结果请人工核对，再自行录入错题或提问。</p>
       <div id="ocrResultList" class="mt-12"></div>
     </div>
   </div>
 
   <!-- ── 考试页（B4 就绪度）── -->
   <div id="page-exam" class="page">
-    <h2 style="font-size:18px;margin-bottom:14px">真题对齐与考试就绪度</h2>
+    <h2 style="font-size:18px;margin-bottom:14px" data-i18n="exam.title">真题对齐与考试就绪度</h2>
     <div class="card">
-      <div class="card-title">新建试卷（录入你的真题，自有版权）</div>
+      <div class="card-title" data-i18n="exam.newPaper">新建试卷（录入你的真题，自有版权）</div>
       <div class="flex gap-8">
-        <input type="text" id="examName" class="form-input" placeholder="试卷名称，如 2026 期末力学卷" style="flex:1.4" onkeydown="if(event.key==='Enter')createExamPaper()">
-        <input type="text" id="examDate" class="form-input" placeholder="考试日期（可选）" style="flex:.8">
+        <input type="text" id="examName" class="form-input" placeholder="试卷名称，如 2026 期末力学卷" data-i18n-ph="exam.namePh" style="flex:1.4" onkeydown="if(event.key==='Enter')createExamPaper()">
+        <input type="text" id="examDate" class="form-input" placeholder="考试日期（可选）" data-i18n-ph="exam.datePh" style="flex:.8">
         <div class="form-group" style="flex:.6">
-          <input type="number" id="examTarget" class="form-input" value="80" min="1" max="100" title="目标分（%）">
+          <input type="number" id="examTarget" class="form-input" value="80" min="1" max="100" title="目标分（%）" data-i18n-aria="exam.targetTitle">
         </div>
-        <button class="btn btn-primary" onclick="createExamPaper()">新建</button>
+        <button class="btn btn-primary" onclick="createExamPaper()" data-i18n="exam.create">新建</button>
       </div>
-      <p class="hint-text">就绪度 = Σ(考点权重 × 错题本该考点平均掌握度) / Σ权重。目标分可在表格编辑后保存。</p>
+      <p class="hint-text" data-i18n="exam.readinessHint">就绪度 = Σ(考点权重 × 错题本该考点平均掌握度) / Σ权重。目标分可在表格编辑后保存。</p>
       <div id="examOverview" class="mt-12"></div>
       <div id="examPaperList"></div>
     </div>
@@ -549,111 +549,122 @@
   <!-- ── 设置页 ── -->
   <div id="page-settings" class="page">
     <div class="card">
-      <div class="card-title">AI 设置</div>
+      <div class="card-title" data-i18n="set.aiTitle">AI 设置</div>
       <div class="form-group">
-        <label for="setApiBase">API 地址</label>
+        <label for="setApiBase" data-i18n="set.apiBase">API 地址</label>
         <input type="text" id="setApiBase" placeholder="https://api.openai.com/v1">
         <p class="hint-text" id="ollamaStatus">正在探测本地模型（Ollama）…</p>
       </div>
       <div class="form-group">
-        <label for="setApiKey">API Key</label>
+        <label for="setApiKey" data-i18n="set.apiKey">API Key</label>
         <input type="password" id="setApiKey" placeholder="sk-...">
-        <p class="hint-text">密钥不写入数据库（R4）。默认仅存于本次运行内存；填写下方主口令后可加密保存到工作区 keys.enc 文件。</p>
+        <p class="hint-text" data-i18n="set.keyHint">密钥不写入数据库（R4）。默认仅存于本次运行内存；填写下方主口令后可加密保存到工作区 keys.enc 文件。</p>
       </div>
       <div class="form-group">
-        <label for="setMasterPassword">keys.enc 主口令（可选）</label>
-        <input type="password" id="setMasterPassword" placeholder="用于加密保存 API Key">
+        <label for="setMasterPassword" data-i18n="set.masterLabel">keys.enc 主口令（可选）</label>
+        <input type="password" id="setMasterPassword" placeholder="用于加密保存 API Key" data-i18n-ph="set.masterPh">
       </div>
       <div class="form-row">
         <div class="form-group">
-          <label for="setModel">模型名称（默认）</label>
+          <label for="setModel" data-i18n="set.model">模型名称（默认）</label>
           <input type="text" id="setModel" placeholder="gpt-4o-mini">
         </div>
         <div class="form-group">
-          <label for="setTemp">Temperature</label>
+          <label for="setTemp" data-i18n="set.temp">Temperature</label>
           <input type="text" id="setTemp" placeholder="0.3">
         </div>
       </div>
       <div class="form-row">
         <div class="form-group">
-          <label for="setFastModel">轻量模型 fast（可选）</label>
-          <input type="text" id="setFastModel" placeholder="提示/标签用，留空则用默认模型">
+          <label for="setFastModel" data-i18n="set.fastModel">轻量模型 fast（可选）</label>
+          <input type="text" id="setFastModel" placeholder="提示/标签用，留空则用默认模型" data-i18n-ph="set.fastPh">
         </div>
         <div class="form-group">
-          <label for="setHeavyModel">推理模型 heavy（可选）</label>
-          <input type="text" id="setHeavyModel" placeholder="变式/苏格拉底用，留空则用默认模型">
+          <label for="setHeavyModel" data-i18n="set.heavyModel">推理模型 heavy（可选）</label>
+          <input type="text" id="setHeavyModel" placeholder="变式/苏格拉底用，留空则用默认模型" data-i18n-ph="set.heavyPh">
         </div>
       </div>
       <div class="form-group">
-        <label for="setVisionModel">视觉模型 vision（可选，拍照录题用）</label>
-        <input type="text" id="setVisionModel" placeholder="如 qwen-vl-max / gpt-4o，留空则用默认模型">
-        <p class="hint-text">用于 B1 拍照/截图识别题目；未配置时图片仅作附件，需手动录入。</p>
+        <label for="setVisionModel" data-i18n="set.visionModel">视觉模型 vision（可选，拍照录题用）</label>
+        <input type="text" id="setVisionModel" placeholder="如 qwen-vl-max / gpt-4o，留空则用默认模型" data-i18n-ph="set.visionPh">
+        <p class="hint-text" data-i18n="set.visionHint">用于 B1 拍照/截图识别题目；未配置时图片仅作附件，需手动录入。</p>
       </div>
       <div class="flex gap-12">
-        <button class="btn btn-primary" onclick="saveSettings()">保存</button>
-        <button class="btn btn-secondary" onclick="testSettings()">测试连接</button>
+        <button class="btn btn-primary" onclick="saveSettings()" data-i18n="set.save">保存</button>
+        <button class="btn btn-secondary" onclick="testSettings()" data-i18n="set.test">测试连接</button>
       </div>
       <p class="text-sm text-muted mt-12" id="keyStatus"></p>
     </div>
 
     <div class="card">
-      <div class="card-title">学习偏好</div>
+      <div class="card-title" data-i18n="set.prefsTitle">学习偏好</div>
       <div class="form-row">
         <div class="form-group">
-          <label for="prefDepth">讲解深度（AI 提示用）</label>
+          <label for="prefDepth" data-i18n="set.depth">讲解深度（AI 提示用）</label>
           <select id="prefDepth" class="form-input">
-            <option value="1">浅：要点提示即可</option>
-            <option value="2">中：解题方向 + 关键关系（默认）</option>
-            <option value="3">深：完整讲解 + 归纳</option>
+            <option value="1" data-i18n="set.depth1">浅：要点提示即可</option>
+            <option value="2" data-i18n="set.depth2">中：解题方向 + 关键关系（默认）</option>
+            <option value="3" data-i18n="set.depth3">深：完整讲解 + 归纳</option>
           </select>
         </div>
         <div class="form-group">
-          <label for="prefExamples">每题附带例题数</label>
+          <label for="prefExamples" data-i18n="set.examples">每题附带例题数</label>
           <select id="prefExamples" class="form-input">
-            <option value="0">0（不给例题）</option>
-            <option value="1">1 道（默认）</option>
-            <option value="2">2 道</option>
-            <option value="3">3 道</option>
+            <option value="0" data-i18n="set.ex0">0（不给例题）</option>
+            <option value="1" data-i18n="set.ex1">1 道（默认）</option>
+            <option value="2" data-i18n="set.ex2">2 道</option>
+            <option value="3" data-i18n="set.ex3">3 道</option>
           </select>
         </div>
       </div>
       <div class="form-row">
         <div class="form-group" style="flex:1">
-          <label for="prefDailyTarget">每日复习目标（题数，0 = 不限）</label>
+          <label for="prefDailyTarget" data-i18n="set.dailyTarget">每日复习目标（题数，0 = 不限）</label>
           <input type="number" id="prefDailyTarget" min="0" step="1" placeholder="0">
         </div>
         <div class="form-group" style="flex:1">
-          <label>复习提醒</label>
+          <label data-i18n="set.notify">复习提醒</label>
           <div class="flex gap-12 items-center" style="padding-top:8px">
             <label class="flex gap-8 items-center text-sm">
-              <input type="checkbox" id="prefNotify"> 浏览器通知
+              <input type="checkbox" id="prefNotify"> <span data-i18n="set.notifyCheck">浏览器通知</span>
             </label>
-            <button class="btn btn-secondary btn-sm" onclick="requestNotifyPermission()">授权通知权限</button>
+            <button class="btn btn-secondary btn-sm" onclick="requestNotifyPermission()" data-i18n="set.notifyAuth">授权通知权限</button>
           </div>
         </div>
       </div>
       <div class="flex gap-12">
-        <button class="btn btn-primary" onclick="savePrefs()">保存偏好</button>
+        <button class="btn btn-primary" onclick="savePrefs()" data-i18n="set.savePrefs">保存偏好</button>
       </div>
-      <p class="hint-text mt-12">讲解深度/例题数会注入 AI 提示；每日复习目标与通知配合提醒你完成当日计划。</p>
+      <p class="hint-text mt-12" data-i18n="set.prefsHint">讲解深度/例题数会注入 AI 提示；每日复习目标与通知配合提醒你完成当日计划。</p>
     </div>
 
     <div class="card">
-      <div class="card-title">间隔复习（FSRS）</div>
+      <div class="card-title" data-i18n="set.fsrsTitle">间隔复习（FSRS）</div>
       <p class="text-sm text-muted mb-8" id="fsrsStatus">加载中…</p>
       <div class="form-group" style="margin-bottom:8px">
-        <label for="fsrsRetention">目标保持率（0.75-0.97，推荐 0.9）</label>
+        <label for="fsrsRetention" data-i18n="set.retention">目标保持率（0.75-0.97，推荐 0.9）</label>
         <div class="flex gap-8 items-center">
           <input type="range" id="fsrsRetention" min="0.75" max="0.97" step="0.01" value="0.9" style="flex:1" oninput="document.getElementById('fsrsRetentionVal').textContent = this.value">
           <span id="fsrsRetentionVal" class="text-sm" style="min-width:44px">0.9</span>
         </div>
       </div>
       <div class="flex gap-12 items-center">
-        <button class="btn btn-secondary btn-sm" onclick="saveFsrsRetention()">保存保持率</button>
-        <button class="btn btn-primary btn-sm" onclick="trainFsrs()" id="trainFsrsBtn">🎓 用我的复习历史训练个性化参数</button>
-        <button class="btn btn-secondary btn-sm" onclick="resetFsrs()">重置为默认参数</button>
+        <button class="btn btn-secondary btn-sm" onclick="saveFsrsRetention()" data-i18n="set.saveRetention">保存保持率</button>
+        <button class="btn btn-primary btn-sm" onclick="trainFsrs()" id="trainFsrsBtn" data-i18n="set.train">🎓 用我的复习历史训练个性化参数</button>
+        <button class="btn btn-secondary btn-sm" onclick="resetFsrs()" data-i18n="set.reset">重置为默认参数</button>
       </div>
-      <p class="hint-text mt-12">个性化训练需本机安装 torch/pandas/tqdm（用户可选装，属于可选项）；未安装时自动继续用默认参数。训练在后台进行，结果会显示在状态里。</p>
+      <p class="hint-text mt-12" data-i18n="set.fsrsHint">个性化训练需本机安装 torch/pandas/tqdm（用户可选装，属于可选项）；未安装时自动继续用默认参数。训练在后台进行，结果会显示在状态里。</p>
+    </div>
+
+    <div class="card">
+      <div class="card-title" data-i18n="set.lang">界面语言</div>
+      <div class="form-group">
+        <select id="langSelect" class="form-input" onchange="setLang(this.value)">
+          <option value="zh-CN">中文（简体）</option>
+          <option value="en-US">English</option>
+        </select>
+        <p class="hint-text" data-i18n="set.langPh">切换后立即生效（存于浏览器）</p>
+      </div>
     </div>
   </div>
 
@@ -663,7 +674,7 @@
 <div class="modal-overlay" id="problemModal">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
     <div class="modal-header">
-      <h3 id="modalTitle">题目详情</h3>
+      <h3 id="modalTitle" data-i18n="modal.detail">题目详情</h3>
       <button class="modal-close" onclick="closeModal('problemModal')" aria-label="关闭">&times;</button>
     </div>
     <div id="modalBody"></div>
@@ -674,63 +685,63 @@
 <div class="modal-overlay" id="editModal">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="editModalTitle">
     <div class="modal-header">
-      <h3 id="editModalTitle">新增题目</h3>
+      <h3 id="editModalTitle" data-i18n="modal.addTitle">新增题目</h3>
       <button class="modal-close" onclick="closeModal('editModal')" aria-label="关闭">&times;</button>
     </div>
     <input type="hidden" id="editId">
     <div class="form-group">
-      <label for="editTitle">标题 *</label>
+      <label for="editTitle" data-i18n="modal.titleReq">标题 *</label>
       <input type="text" id="editTitle">
     </div>
     <div class="form-row">
       <div class="form-group">
-        <label for="editCourse">课程</label>
-        <input type="text" id="editCourse" placeholder="大学物理">
+        <label for="editCourse" data-i18n="modal.course">课程</label>
+        <input type="text" id="editCourse" placeholder="大学物理" data-i18n-ph="modal.coursePh">
       </div>
       <div class="form-group">
-        <label for="editTopic">知识点</label>
-        <input type="text" id="editTopic" placeholder="刚体力学">
+        <label for="editTopic" data-i18n="modal.topic">知识点</label>
+        <input type="text" id="editTopic" placeholder="刚体力学" data-i18n-ph="modal.topicPh">
       </div>
     </div>
     <div class="form-group">
-      <label for="editContent">题目内容 *</label>
+      <label for="editContent" data-i18n="modal.content">题目内容 *</label>
       <textarea id="editContent" rows="4" oninput="checkDuplicates()"></textarea>
       <p class="hint-text" id="dupHint"></p>
     </div>
     <div class="form-group">
-      <label>题目图片（截图后按 Ctrl+V 粘贴，或点击下方选择文件）</label>
+      <label data-i18n="modal.photo">题目图片（截图后按 Ctrl+V 粘贴，或点击下方选择文件）</label>
       <div id="photoDrop" class="photo-drop" tabindex="0">
-        粘贴图片到此处（Ctrl+V）
+        <span data-i18n="modal.photoDrop">粘贴图片到此处（Ctrl+V）</span>
       </div>
       <div id="photoPreviewWrap" class="hidden"></div>
       <div class="flex gap-8" style="margin-top:6px;align-items:center">
         <input type="file" id="editPhotoFile" accept="image/png,image/jpeg" class="hidden">
-        <button class="btn btn-secondary btn-sm" type="button" onclick="document.getElementById('editPhotoFile').click()">选择图片</button>
-        <button class="btn btn-primary btn-sm hidden" type="button" onclick="extractPhoto()" id="extractPhotoBtn">AI 识别题目</button>
-        <button class="btn btn-danger btn-sm hidden" type="button" onclick="clearPhoto()" id="clearPhotoBtn">移除图片</button>
+        <button class="btn btn-secondary btn-sm" type="button" onclick="document.getElementById('editPhotoFile').click()" data-i18n="modal.selectImg">选择图片</button>
+        <button class="btn btn-primary btn-sm hidden" type="button" onclick="extractPhoto()" id="extractPhotoBtn" data-i18n="modal.aiExtract">AI 识别题目</button>
+        <button class="btn btn-danger btn-sm hidden" type="button" onclick="clearPhoto()" id="clearPhotoBtn" data-i18n="modal.removeImg">移除图片</button>
       </div>
       <input type="hidden" id="editMediaPath">
-      <p class="hint-text" id="photoHint">无视觉模型时图片仅作附件保存，可手动录入题目。</p>
+      <p class="hint-text" id="photoHint" data-i18n="modal.photoHint">无视觉模型时图片仅作附件保存，可手动录入题目。</p>
     </div>
     <div class="form-group">
       <div class="flex gap-8" style="align-items:center;margin-bottom:6px">
-        <label for="editTagsWrap" style="margin:0">标签（知识点/题型/难度/方法）</label>
-        <button class="btn btn-secondary btn-sm" type="button" onclick="extractTags()" id="extractTagsBtn">AI 自动打标签</button>
+        <label for="editTagsWrap" style="margin:0" data-i18n="modal.tags">标签（知识点/题型/难度/方法）</label>
+        <button class="btn btn-secondary btn-sm" type="button" onclick="extractTags()" id="extractTagsBtn" data-i18n="modal.autoTags">AI 自动打标签</button>
       </div>
       <div id="editTagsWrap" class="tag-chips"></div>
-      <input type="text" id="editTagInput" class="form-input" placeholder="回车添加自定义标签" style="margin-top:6px" onkeydown="tagInputKeydown(event)">
+      <input type="text" id="editTagInput" class="form-input" placeholder="回车添加自定义标签" data-i18n-ph="modal.tagInputPh" style="margin-top:6px" onkeydown="tagInputKeydown(event)">
       <p class="hint-text" id="editTagsHint"></p>
     </div>
     <div class="form-group">
       <div class="flex gap-8" style="align-items:center;margin-bottom:6px">
-        <label for="editAttempt" style="margin:0">我的尝试</label>
-        <button class="btn btn-secondary btn-sm" type="button" onclick="startVoiceInput('editAttempt')" id="voiceBtn" title="语音输入（Chrome/Edge）">🎤 语音输入</button>
+        <label for="editAttempt" style="margin:0" data-i18n="modal.myAttempt">我的尝试</label>
+        <button class="btn btn-secondary btn-sm" type="button" onclick="startVoiceInput('editAttempt')" id="voiceBtn" title="语音输入（Chrome/Edge）" data-i18n="modal.voice">🎤 语音输入</button>
       </div>
-      <textarea id="editAttempt" rows="3" placeholder="写出你自己的解题过程..."></textarea>
+      <textarea id="editAttempt" rows="3" placeholder="写出你自己的解题过程..." data-i18n-ph="modal.attemptPh"></textarea>
     </div>
     <div class="form-row">
       <div class="form-group">
-        <label for="editErrorType">错误类型</label>
+        <label for="editErrorType" data-i18n="modal.errorType">错误类型</label>
         <select id="editErrorType">
           <option value="待诊断">待诊断</option>
           <option value="概念错误">概念错误</option>
@@ -742,25 +753,25 @@
         </select>
       </div>
       <div class="form-group">
-        <label for="editMastery">掌握度 (1-5，题目自身)</label>
+        <label for="editMastery" data-i18n="modal.masterySelf">掌握度 (1-5，题目自身)</label>
         <select id="editMastery">
-          <option value="1">1 - 完全不会</option>
-          <option value="2">2 - 有思路</option>
-          <option value="3">3 - 基本会做</option>
-          <option value="4">4 - 熟练</option>
-          <option value="5">5 - 精通</option>
+          <option value="1" data-i18n="modal.m1">1 - 完全不会</option>
+          <option value="2" data-i18n="modal.m2">2 - 有思路</option>
+          <option value="3" data-i18n="modal.m3">3 - 基本会做</option>
+          <option value="4" data-i18n="modal.m4">4 - 熟练</option>
+          <option value="5" data-i18n="modal.m5">5 - 精通</option>
         </select>
-        <p class="hint-text">注：复习评分采用 1-4 分制（忘记/模糊/基本正确/完全掌握），与上面 1-5 的「题目掌握度」是两套独立指标。</p>
+        <p class="hint-text" data-i18n="modal.masteryHint">注：复习评分采用 1-4 分制（忘记/模糊/基本正确/完全掌握），与上面 1-5 的「题目掌握度」是两套独立指标。</p>
       </div>
     </div>
     <div class="form-group">
       <label style="display:flex;align-items:center;gap:6px;font-size:14px">
-        <input type="checkbox" id="editStarred" style="width:auto;accent-color:var(--warning)"> ⭐ 收藏此题
+        <input type="checkbox" id="editStarred" style="width:auto;accent-color:var(--warning)"> <span data-i18n="modal.star">⭐ 收藏此题</span>
       </label>
     </div>
     <div class="flex gap-12 mt-12">
-      <button class="btn btn-primary" onclick="saveProblem()">保存</button>
-      <button class="btn btn-secondary" onclick="closeModal('editModal')">取消</button>
+      <button class="btn btn-primary" onclick="saveProblem()" data-i18n="modal.save">保存</button>
+      <button class="btn btn-secondary" onclick="closeModal('editModal')" data-i18n="modal.cancel">取消</button>
     </div>
   </div>
 </div>
@@ -768,11 +779,11 @@
 <!-- ── 确认弹窗 ── -->
 <div class="modal-overlay" id="confirmModal">
   <div class="modal" role="alertdialog" aria-modal="true" style="max-width:400px">
-    <div class="modal-header"><h3 id="confirmTitle">确认</h3></div>
+    <div class="modal-header"><h3 id="confirmTitle" data-i18n="modal.confirm">确认</h3></div>
     <p class="text-sm" id="confirmMsg"></p>
     <div class="flex gap-12 mt-16" style="justify-content:flex-end">
-      <button class="btn btn-secondary" id="confirmCancel">取消</button>
-      <button class="btn btn-danger" id="confirmOk">确定</button>
+      <button class="btn btn-secondary" id="confirmCancel" data-i18n="modal.cancel">取消</button>
+      <button class="btn btn-danger" id="confirmOk" data-i18n="modal.ok">确定</button>
     </div>
   </div>
 </div>

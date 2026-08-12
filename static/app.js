@@ -3,6 +3,69 @@ const API = '';
 const X_HEADER = 'X-Requested-With';
 const X_VALUE = 'PhysicsStudyOS';
 
+// ── F2 双语：语言加载 / 翻译 / DOM 应用 ──
+const LOCALES = ['zh-CN', 'en-US'];
+let _dict = {};
+let _lang = '';
+
+function currentLang() {
+  const saved = localStorage.getItem('lang');
+  return LOCALES.includes(saved) ? saved : 'zh-CN';
+}
+
+async function loadLocale(lang) {
+  _lang = lang;
+  localStorage.setItem('lang', lang);
+  document.documentElement.lang = lang === 'en-US' ? 'en' : 'zh-CN';
+  try {
+    const res = await fetch(`/locale/${lang}.json`, { cache: 'no-cache' });
+    _dict = await res.json();
+  } catch (e) {
+    _dict = {};
+  }
+}
+
+function t(key, fallback) {
+  return _dict[key] || fallback || key;
+}
+
+function applyI18n(root) {
+  const scope = root || document;
+  scope.querySelectorAll('[data-i18n]').forEach(el => {
+    const text = t(el.getAttribute('data-i18n'));
+    el.innerHTML = text; // 键值含 HTML 标签（如 ⭐）时以 JSON 为准，避免 XSS 需键值为纯文本
+  });
+  scope.querySelectorAll('[data-i18n-ph]').forEach(el => {
+    el.setAttribute('placeholder', t(el.getAttribute('data-i18n-ph')));
+  });
+  scope.querySelectorAll('[data-i18n-aria]').forEach(el => {
+    el.setAttribute('aria-label', t(el.getAttribute('data-i18n-aria')));
+  });
+  const sel = document.getElementById('langSelect');
+  if (sel) sel.value = _lang;
+}
+
+async function setLang(lang) {
+  if (!LOCALES.includes(lang)) return;
+  await loadLocale(lang);
+  applyI18n(document);
+  refreshForLang();
+  toast(_lang === 'en-US' ? 'Language switched to English' : '语言已切换');
+}
+
+function refreshForLang() {
+  const active = document.querySelector('.page.active');
+  if (!active) return;
+  const page = active.id;
+  if (page === 'page-dashboard') loadDashboard();
+  else if (page === 'page-problems') loadProblems(1);
+  else if (page === 'page-review') loadReviews();
+  else if (page === 'page-oral') { /* 动态对话内容不翻译 */ }
+  else if (page === 'page-rag') { loadRagDocs(); loadRagStatus(); }
+  else if (page === 'page-exam') loadExamPapers();
+  else if (page === 'page-settings') { loadSettings(); loadPrefs(); loadFsrsStatus(); }
+}
+
 function uid() {
   return 'req-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
 }
