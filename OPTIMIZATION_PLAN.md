@@ -331,7 +331,7 @@ LOG.addFilter(SecretRedactor())
 
 ## 五、第三轮实施完成记录（2026-08-02）
 
-**全部待办项已落地并验证。** 改动严格限制在 `E:\tool\biancheng\AI project 1\physics-study-os\` 内。
+**全部待办项已落地并验证。** 改动严格限制在 `E:\tool\biancheng\AI project 2\physics-study-os\` 内。
 
 ### 改动映射
 

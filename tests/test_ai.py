@@ -9,6 +9,10 @@ from ai import api_endpoint, fallback_hint, problem_prompt, get_cached_settings,
 import config
 import db
 
+# 测试临时数据严格限制在工作区内（tests/.tmp/），不留任何外部痕迹
+_TEST_TMP_DIR = Path(__file__).resolve().parent / ".tmp"
+_TEST_TMP_DIR.mkdir(exist_ok=True)
+
 
 class TestApiEndpoint(unittest.TestCase):
     def test_append_chat_completions(self):
@@ -94,17 +98,32 @@ class TestProblemPrompt(unittest.TestCase):
         msgs = problem_prompt(self.problem, 1)
         self.assertIn("E = kQ/r^2", msgs[1]["content"])
 
+    def test_error_type_injected(self):
+        """C6：错因进入提示并给出针对性要求。"""
+        self.problem["error_type"] = "careless"
+        msgs = problem_prompt(self.problem, 1)
+        self.assertIn("粗心笔误", msgs[1]["content"])
+        self.assertIn("符号正负号", msgs[1]["content"])
+
+    def test_unknown_error_type_ignored(self):
+        self.problem["error_type"] = "乱七八糟"
+        msgs = problem_prompt(self.problem, 1)
+        self.assertNotIn("（该学生标记的错因", msgs[1]["content"])
+
 
 class TestSettingsCache(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls._tmpdir = tempfile.mkdtemp(prefix="cache_")
+        cls._tmp = tempfile.TemporaryDirectory(prefix="cache_", dir=_TEST_TMP_DIR)
         cls._orig_db = config.DB_PATH
-        config.DB_PATH = Path(cls._tmpdir) / "cache_test.db"
+        config.DB_PATH = Path(cls._tmp.name) / "cache_test.db"
+        db.DB_PATH = config.DB_PATH  # db 模块按值绑定，需同步替换
         db.init_db()
 
     @classmethod
     def tearDownClass(cls):
+        cls._tmp.cleanup()
+        db.DB_PATH = cls._orig_db
         config.DB_PATH = cls._orig_db
 
     def test_cache_returns_dict(self):

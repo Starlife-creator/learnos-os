@@ -30,6 +30,7 @@ API_BASE_ENV = os.environ.get("PHYSICS_OS_API_BASE", "").strip()
 MODEL_ENV = os.environ.get("PHYSICS_OS_MODEL", "").strip()
 
 LOG_FILE = APP_DIR / "physics_study.log"
+MEDIA_DIR = APP_DIR / "media"
 
 
 class SecretRedactor(logging.Filter):
@@ -56,6 +57,12 @@ def setup_logging() -> None:
         return
     LOG.setLevel(logging.INFO)
     LOG.propagate = False
+    # Windows 控制台默认 GBK，强制 UTF-8 避免中文日志乱码
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
     fmt = logging.Formatter("[%(asctime)s] %(levelname)s %(name)s: %(message)s", datefmt="%H:%M:%S")
     redactor = SecretRedactor()
 
@@ -89,7 +96,21 @@ CREATE TABLE IF NOT EXISTS problems (
     ease_factor REAL NOT NULL DEFAULT 2.5,
     repetition INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    starred INTEGER NOT NULL DEFAULT 0,
+    error_path TEXT NOT NULL DEFAULT '',
+    trap_note TEXT NOT NULL DEFAULT '',
+    shortcut TEXT NOT NULL DEFAULT '',
+    fix_action TEXT NOT NULL DEFAULT '',
+    state INTEGER NOT NULL DEFAULT 0,
+    stability REAL NOT NULL DEFAULT 0.0,
+    difficulty REAL NOT NULL DEFAULT 0.0,
+    tags TEXT NOT NULL DEFAULT '[]',
+    tags_suggested TEXT NOT NULL DEFAULT '[]',
+    tags_status TEXT NOT NULL DEFAULT '',
+    variants TEXT NOT NULL DEFAULT '[]',
+    concept_ids TEXT NOT NULL DEFAULT '[]',
+    media_path TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS hints (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,9 +143,12 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 """
 
+# D1（R4 合规）：密钥一律不落库。仅保存非敏感配置。
 DEFAULT_SETTINGS = {
     "api_base": "https://api.openai.com/v1",
-    "api_key": "",
     "model": "",
     "temperature": "0.3",
+    "fast_model": "",
+    "heavy_model": "",
+    "vision_model": "",
 }

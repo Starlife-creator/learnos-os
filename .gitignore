@@ -43,6 +43,13 @@ Thumbs.db
 
 # Runtime logs (RotatingFileHandler output)
 *.log
+*.log.*
+
+# Test-local temp data (workspace-confined)
+tests/.tmp/
+
+# B1: uploaded photos (user data, generated at runtime)
+media/
 
 # Build dependencies (PyInstaller)
 .builddeps/

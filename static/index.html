@@ -5,7 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="color-scheme" content="light dark">
 <title>个人物理学习 OS</title>
-<link rel="stylesheet" href="/vendor/katex.min.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0f172a">
+  <link rel="icon" type="image/png" href="icon-192.png">
+  <link rel="stylesheet" href="/vendor/katex.min.css">
 <script defer src="/vendor/katex.min.js"></script>
 <script defer src="/vendor/auto-render.min.js"></script>
 <script defer src="/app.js"></script>
@@ -109,6 +112,9 @@
   .tag-green { background: var(--success-light); color: var(--success); }
   .tag-red { background: var(--danger-light); color: var(--danger); }
   .tag-amber { background: var(--warning-light); color: var(--warning); }
+  .btn-link { background: none; border: none; color: var(--accent); cursor: pointer; padding: 2px 4px; font-size: 13px; }
+  .btn-link:hover { text-decoration: underline; }
+  .rag-sources { margin-top: 8px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
   .tag-gray { background: var(--border); color: var(--text-2); }
 
   /* ── 提示卡片 ── */
@@ -130,6 +136,11 @@
   .chat-msg.assistant .bubble { background: var(--surface); border: 1px solid var(--border); }
   .chat-msg.user .bubble { background: var(--accent); color: #fff; }
   .chat-msg.thinking .bubble { background: var(--surface); border: 1px dashed var(--border); color: var(--text-2); font-style: italic; }
+  .photo-drop { border: 2px dashed var(--border); border-radius: 8px; padding: 14px; text-align: center; color: var(--text-2); font-size: 13px; cursor: pointer; }
+  .photo-drop.hover { border-color: var(--accent); color: var(--accent); }
+  .photo-preview { display: inline-block; position: relative; margin: 6px 6px 0 0; }
+  .photo-preview img { max-width: 140px; max-height: 140px; border-radius: 6px; border: 1px solid var(--border); }
+  #modalBody img.photo-full { max-width: 100%; border-radius: 8px; border: 1px solid var(--border); margin: 6px 0; }
 
   /* ── 空状态 / 加载 ── */
   .empty { text-align: center; padding: 40px 20px; color: var(--text-2); }
@@ -145,6 +156,13 @@
   .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
   .modal-header h3 { font-size: 16px; }
   .modal-close { cursor: pointer; font-size: 20px; color: var(--text-2); border: none; background: none; }
+  .tag-chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 28px; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 2px 10px; font-size: 13px; cursor: default; }
+  .chip .chip-x { cursor: pointer; opacity: .6; }
+  .chip .chip-x:hover { opacity: 1; color: var(--danger); }
+  .chip.pending { border-color: var(--warning); background: rgba(255,193,7,.12); }
+  .chip.pending .chip-x { color: var(--warning); }
+  .form-input { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); font-size: 14px; box-sizing: border-box; }
 
   /* ── Toast ── */
   .toast { position: fixed; bottom: 24px; right: 24px; padding: 12px 20px; border-radius: 8px; color: #fff; font-size: 14px; z-index: 300; animation: slideIn .3s; max-width: 80vw; }
@@ -167,6 +185,12 @@
   /* ── 趋势图 ── */
   .trend-svg { width: 100%; height: 120px; }
 
+  /* ── 导航角标 + 错因分布 ── */
+  .nav-badge { display:inline-block; min-width:16px; height:16px; line-height:16px; padding:0 5px; margin-left:4px; border-radius:8px; background:var(--danger); color:#fff; font-size:11px; text-align:center; vertical-align:1px; }
+  .error-bar-row { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+  .error-bar-track { flex:1; height:8px; background:var(--border); border-radius:4px; overflow:hidden; }
+  .error-bar-fill { height:100%; border-radius:4px; }
+
   /* ── 响应式 ── */
   @media (max-width: 640px) {
     .nav { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -186,6 +210,24 @@
     .flex { flex-wrap: wrap; }
     .gap-12 { gap: 8px; }
   }
+
+  /* ── C7 打印错题集：仅输出打印区 ── */
+  #printArea { display: none; }
+  @media print {
+    body * { visibility: hidden; }
+    #printArea, #printArea * { visibility: visible; }
+    #printArea {
+      display: block !important;
+      position: absolute; left: 0; top: 0; width: 100%;
+      padding: 8mm; font-size: 12px; color: #000; background: #fff;
+    }
+    #printArea h2 { font-size: 16px; margin: 0 0 10px; }
+    .print-item { border-bottom: 1px solid #999; padding: 8px 0; page-break-inside: avoid; }
+    .print-item .print-title { font-weight: 700; font-size: 13px; margin-bottom: 4px; }
+    .print-item .print-meta { color: #333; margin-bottom: 4px; }
+    .print-item pre { white-space: pre-wrap; font-family: inherit; margin: 4px 0; }
+    .print-item .print-hdr { color: #666; font-weight: 700; margin-top: 6px; }
+  }
 </style>
 </head>
 <body>
@@ -196,8 +238,11 @@
   </div>
   <button class="nav-item active" data-page="dashboard">概览</button>
   <button class="nav-item" data-page="problems">错题</button>
-  <button class="nav-item" data-page="review">复习</button>
+  <button class="nav-item" data-page="review">复习 <span class="nav-badge hidden" id="dueBadge">0</span></button>
   <button class="nav-item" data-page="oral">口试</button>
+  <a class="nav-item" href="concept_map.html" style="text-decoration:none">图谱</a>
+  <button class="nav-item" data-page="rag">教材库</button>
+  <button class="nav-item" data-page="exam">考试</button>
   <button class="nav-item" data-page="settings">设置</button>
 </nav>
 
@@ -218,19 +263,50 @@
       <div class="hint-text" id="trendHint">完成复习后会记录掌握度变化</div>
     </div>
 
+    <div class="card">
+      <div class="card-title">未来 7 天复习压力</div>
+      <div id="dueChart" style="display:flex;align-items:flex-end;gap:10px;height:90px;padding:4px 0"></div>
+      <div class="hint-text" id="dueChartHint">—</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">卡组健康度</div>
+      <div id="deckHealth" class="hint-text">—</div>
+    </div>
+
     <div class="card" id="topicsCard">
       <div class="card-title">薄弱知识点</div>
       <div id="topicsList"></div>
     </div>
 
     <div class="card">
+      <div class="card-title">错因分布</div>
+      <div id="errorDist"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">错因趋势 <span class="hint-text">（近 30 天 vs 历史占比）</span></div>
+      <div id="errorTrend"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">考试冲刺</div>
+      <div id="sprintCard">未设置考试日期（设置页 → 学习者档案）</div>
+    </div>
+
+    <div class="card">
       <div class="card-title">数据备份</div>
       <div class="flex gap-12">
+        <button class="btn btn-primary btn-sm" onclick="exportBackup()">一键备份 (全库 JSON)</button>
+        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('restoreFile').click()">一键还原</button>
+        <input type="file" id="restoreFile" accept="application/json" class="hidden" onchange="importBackup(this)">
         <button class="btn btn-secondary btn-sm" onclick="exportData()">导出数据 (JSON)</button>
+        <button class="btn btn-secondary btn-sm" onclick="exportAnki()">导出 Anki-CSV</button>
+        <button class="btn btn-secondary btn-sm" onclick="exportIcs()">导出复习日程 .ics</button>
         <button class="btn btn-secondary btn-sm" onclick="document.getElementById('importFile').click()">导入数据</button>
         <input type="file" id="importFile" accept="application/json" class="hidden" onchange="importData(this)">
       </div>
-      <p class="hint-text mt-12">导入前会自动备份当前数据库；导入采用参数化写入，不会造成注入或数据损坏。</p>
+      <p class="hint-text mt-12">一键备份包含全部表（错题/复习/口语/知识图谱/考试）。还原前现库会自动保存为 .bak 文件；导入采用参数化写入，不会造成注入或数据损坏。</p>
     </div>
 
     <div class="card">
@@ -247,6 +323,22 @@
       <div class="card-title">最近复习活动</div>
       <div id="recentActivity"></div>
     </div>
+
+    <div class="card">
+      <div class="card-title">学习者档案</div>
+      <div id="profileBox" class="hint-text">—</div>
+      <div class="flex gap-12 mt-12" style="align-items:flex-end">
+        <div class="form-group" style="margin:0">
+          <label for="profExamDate" style="font-size:12px">考试日期</label>
+          <input type="date" id="profExamDate">
+        </div>
+        <div class="form-group" style="margin:0">
+          <label for="profExamScore" style="font-size:12px">目标分</label>
+          <input type="text" id="profExamScore" placeholder="如 85">
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="saveProfile()">更新目标</button>
+      </div>
+    </div>
   </div>
 
   <!-- ── 错题页 ── -->
@@ -254,6 +346,7 @@
     <div class="flex-between mb-8">
       <h2 style="font-size:18px">错题工作台</h2>
       <button class="btn btn-primary btn-sm" onclick="openProblemModal()">+ 新增题目</button>
+      <button class="btn btn-secondary btn-sm" onclick="printProblems()">🖨 打印错题集</button>
     </div>
     <div class="flex gap-12 mb-8">
       <div class="form-group" style="flex:1;margin:0">
@@ -265,6 +358,10 @@
           <option value="mastery">按掌握度</option>
         </select>
       </div>
+    </div>
+    <div id="prereqFilterHint" class="hidden" style="border:1px solid var(--warning);background:var(--warning-light,rgba(240,180,60,.12));border-radius:8px;padding:8px 12px;margin-bottom:10px;align-items:center;gap:8px">
+      <span style="font-size:13px;color:var(--warning)">🔍 先修模式：仅显示该概念先修链上的相关错题</span>
+      <button class="btn btn-secondary btn-sm" onclick="clearPrereqFilter()">清除过滤</button>
     </div>
     <div id="problemsList"></div>
     <div class="flex gap-12 mt-12 hidden" id="batchBar" style="position:sticky;bottom:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:8px 16px;z-index:50">
@@ -285,6 +382,16 @@
   <!-- ── 复习页 ── -->
   <div id="page-review" class="page">
     <h2 style="font-size:18px;margin-bottom:14px">今日复习</h2>
+    <div class="card" id="todaySummaryCard">
+      <div class="card-title">今日复盘</div>
+      <p class="text-sm text-muted" id="todaySummaryText">加载中...</p>
+    </div>
+    <div class="flex-between mb-8">
+      <div class="flex gap-8 align-center">
+        <label class="text-sm text-muted" for="interleaveToggle">交错练习（按知识点混合排序）</label>
+        <input type="checkbox" id="interleaveToggle" onchange="toggleInterleave(this.checked)">
+      </div>
+    </div>
     <div id="reviewProgress"></div>
     <div id="reviewList"></div>
   </div>
@@ -314,6 +421,58 @@
     </div>
   </div>
 
+  <!-- ── 教材库（B3 RAG）── -->
+  <div id="page-rag" class="page">
+    <h2 style="font-size:18px;margin-bottom:14px">教材库（个人资料 RAG）</h2>
+    <div class="card">
+      <div class="card-title">摄取教材 / 课件 / 笔记</div>
+      <p class="text-sm text-muted mb-8">路径须在程序工作区内（md/txt 直读；PDF 需 vendor/ 内含 pdfminer，否则请转为 md/txt）。摄取后解答提示会自动引用对应教材片段。</p>
+      <div class="flex gap-8">
+        <input type="text" id="ragPath" class="form-input" placeholder="如 materials/力学笔记.md 或 materials/（目录）" style="flex:1" onkeydown="if(event.key==='Enter')ingestRag()">
+        <button class="btn btn-primary" onclick="ingestRag()">摄取</button>
+      </div>
+      <p class="text-sm text-muted mt-8" id="ragStatus"></p>
+      <div class="card-title mt-16">已摄取文档</div>
+      <div id="ragDocList"></div>
+      <div class="card-title mt-16">搜索（BM25 + FTS5 可选）</div>
+      <div class="flex gap-8">
+        <input type="text" id="ragQuery" class="form-input" placeholder="输入问题，如：法拉第定律的适用条件" style="flex:1" onkeydown="if(event.key==='Enter')searchRag()">
+        <button class="btn btn-secondary" onclick="searchRag()">搜索</button>
+      </div>
+      <div id="ragResultList" class="mt-12"></div>
+    </div>
+    <div class="card mt-16">
+      <div class="card-title">试卷 OCR（B2：扫图 PDF / 图片 → 文本）</div>
+      <p class="text-sm text-muted mb-8" id="ocrProbe">检测能力中…</p>
+      <div class="flex gap-8">
+        <input type="text" id="ocrPath" class="form-input" placeholder="如 exam_papers/期末卷.pdf 或 材料/卷子照片.png（须在工作区内）" style="flex:1" onkeydown="if(event.key==='Enter')runOcr()">
+        <button class="btn btn-secondary" onclick="runOcr()">OCR 提取</button>
+        <button class="btn btn-secondary btn-sm" onclick="copyOcrResult()">复制全文</button>
+      </div>
+      <p class="text-sm text-muted mt-8">文本层 PDF 直接提取（pdfminer）；扫描版需 paddleocr + pypdfium2（可选项，缺失时提示降级路径）。识别结果请人工核对，再自行录入错题或提问。</p>
+      <div id="ocrResultList" class="mt-12"></div>
+    </div>
+  </div>
+
+  <!-- ── 考试页（B4 就绪度）── -->
+  <div id="page-exam" class="page">
+    <h2 style="font-size:18px;margin-bottom:14px">真题对齐与考试就绪度</h2>
+    <div class="card">
+      <div class="card-title">新建试卷（录入你的真题，自有版权）</div>
+      <div class="flex gap-8">
+        <input type="text" id="examName" class="form-input" placeholder="试卷名称，如 2026 期末力学卷" style="flex:1.4" onkeydown="if(event.key==='Enter')createExamPaper()">
+        <input type="text" id="examDate" class="form-input" placeholder="考试日期（可选）" style="flex:.8">
+        <div class="form-group" style="flex:.6">
+          <input type="number" id="examTarget" class="form-input" value="80" min="1" max="100" title="目标分（%）">
+        </div>
+        <button class="btn btn-primary" onclick="createExamPaper()">新建</button>
+      </div>
+      <p class="hint-text">就绪度 = Σ(考点权重 × 错题本该考点平均掌握度) / Σ权重。目标分可在表格编辑后保存。</p>
+      <div id="examOverview" class="mt-12"></div>
+      <div id="examPaperList"></div>
+    </div>
+  </div>
+
   <!-- ── 设置页 ── -->
   <div id="page-settings" class="page">
     <div class="card">
@@ -321,15 +480,20 @@
       <div class="form-group">
         <label for="setApiBase">API 地址</label>
         <input type="text" id="setApiBase" placeholder="https://api.openai.com/v1">
+        <p class="hint-text" id="ollamaStatus">正在探测本地模型（Ollama）…</p>
       </div>
       <div class="form-group">
         <label for="setApiKey">API Key</label>
         <input type="password" id="setApiKey" placeholder="sk-...">
-        <p class="hint-text">密钥仅保存在本次运行的内存中（重启后失效），不会写入数据库文件。</p>
+        <p class="hint-text">密钥不写入数据库（R4）。默认仅存于本次运行内存；填写下方主口令后可加密保存到工作区 keys.enc 文件。</p>
+      </div>
+      <div class="form-group">
+        <label for="setMasterPassword">keys.enc 主口令（可选）</label>
+        <input type="password" id="setMasterPassword" placeholder="用于加密保存 API Key">
       </div>
       <div class="form-row">
         <div class="form-group">
-          <label for="setModel">模型名称</label>
+          <label for="setModel">模型名称（默认）</label>
           <input type="text" id="setModel" placeholder="gpt-4o-mini">
         </div>
         <div class="form-group">
@@ -337,11 +501,68 @@
           <input type="text" id="setTemp" placeholder="0.3">
         </div>
       </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="setFastModel">轻量模型 fast（可选）</label>
+          <input type="text" id="setFastModel" placeholder="提示/标签用，留空则用默认模型">
+        </div>
+        <div class="form-group">
+          <label for="setHeavyModel">推理模型 heavy（可选）</label>
+          <input type="text" id="setHeavyModel" placeholder="变式/苏格拉底用，留空则用默认模型">
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="setVisionModel">视觉模型 vision（可选，拍照录题用）</label>
+        <input type="text" id="setVisionModel" placeholder="如 qwen-vl-max / gpt-4o，留空则用默认模型">
+        <p class="hint-text">用于 B1 拍照/截图识别题目；未配置时图片仅作附件，需手动录入。</p>
+      </div>
       <div class="flex gap-12">
         <button class="btn btn-primary" onclick="saveSettings()">保存</button>
         <button class="btn btn-secondary" onclick="testSettings()">测试连接</button>
       </div>
       <p class="text-sm text-muted mt-12" id="keyStatus"></p>
+    </div>
+
+    <div class="card">
+      <div class="card-title">学习偏好</div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="prefDepth">讲解深度（AI 提示用）</label>
+          <select id="prefDepth" class="form-input">
+            <option value="1">浅：要点提示即可</option>
+            <option value="2">中：解题方向 + 关键关系（默认）</option>
+            <option value="3">深：完整讲解 + 归纳</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="prefExamples">每题附带例题数</label>
+          <select id="prefExamples" class="form-input">
+            <option value="0">0（不给例题）</option>
+            <option value="1">1 道（默认）</option>
+            <option value="2">2 道</option>
+            <option value="3">3 道</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group" style="flex:1">
+          <label for="prefDailyTarget">每日复习目标（题数，0 = 不限）</label>
+          <input type="number" id="prefDailyTarget" min="0" step="1" placeholder="0">
+        </div>
+        <div class="form-group" style="flex:1">
+          <label>复习提醒</label>
+          <div class="flex gap-12 items-center" style="padding-top:8px">
+            <label class="flex gap-8 items-center text-sm">
+              <input type="checkbox" id="prefNotify"> 浏览器通知
+            </label>
+            <button class="btn btn-secondary btn-sm" onclick="requestNotifyPermission()">授权通知权限</button>
+          </div>
+        </div>
+      </div>
+      <div class="flex gap-12">
+        <button class="btn btn-primary" onclick="savePrefs()">保存偏好</button>
+      </div>
+      <p class="hint-text mt-12">讲解深度/例题数会注入 AI 提示；每日复习目标与通知配合提醒你完成当日计划。</p>
     </div>
   </div>
 
@@ -382,10 +603,38 @@
     </div>
     <div class="form-group">
       <label for="editContent">题目内容 *</label>
-      <textarea id="editContent" rows="4"></textarea>
+      <textarea id="editContent" rows="4" oninput="checkDuplicates()"></textarea>
+      <p class="hint-text" id="dupHint"></p>
     </div>
     <div class="form-group">
-      <label for="editAttempt">我的尝试</label>
+      <label>题目图片（截图后按 Ctrl+V 粘贴，或点击下方选择文件）</label>
+      <div id="photoDrop" class="photo-drop" tabindex="0">
+        粘贴图片到此处（Ctrl+V）
+      </div>
+      <div id="photoPreviewWrap" class="hidden"></div>
+      <div class="flex gap-8" style="margin-top:6px;align-items:center">
+        <input type="file" id="editPhotoFile" accept="image/png,image/jpeg" class="hidden">
+        <button class="btn btn-secondary btn-sm" type="button" onclick="document.getElementById('editPhotoFile').click()">选择图片</button>
+        <button class="btn btn-primary btn-sm hidden" type="button" onclick="extractPhoto()" id="extractPhotoBtn">AI 识别题目</button>
+        <button class="btn btn-danger btn-sm hidden" type="button" onclick="clearPhoto()" id="clearPhotoBtn">移除图片</button>
+      </div>
+      <input type="hidden" id="editMediaPath">
+      <p class="hint-text" id="photoHint">无视觉模型时图片仅作附件保存，可手动录入题目。</p>
+    </div>
+    <div class="form-group">
+      <div class="flex gap-8" style="align-items:center;margin-bottom:6px">
+        <label for="editTagsWrap" style="margin:0">标签（知识点/题型/难度/方法）</label>
+        <button class="btn btn-secondary btn-sm" type="button" onclick="extractTags()" id="extractTagsBtn">AI 自动打标签</button>
+      </div>
+      <div id="editTagsWrap" class="tag-chips"></div>
+      <input type="text" id="editTagInput" class="form-input" placeholder="回车添加自定义标签" style="margin-top:6px" onkeydown="tagInputKeydown(event)">
+      <p class="hint-text" id="editTagsHint"></p>
+    </div>
+    <div class="form-group">
+      <div class="flex gap-8" style="align-items:center;margin-bottom:6px">
+        <label for="editAttempt" style="margin:0">我的尝试</label>
+        <button class="btn btn-secondary btn-sm" type="button" onclick="startVoiceInput('editAttempt')" id="voiceBtn" title="语音输入（Chrome/Edge）">🎤 语音输入</button>
+      </div>
       <textarea id="editAttempt" rows="3" placeholder="写出你自己的解题过程..."></textarea>
     </div>
     <div class="form-row">
@@ -436,6 +685,8 @@
     </div>
   </div>
 </div>
+
+<div id="printArea" aria-hidden="true"></div>
 
 </body>
 </html>

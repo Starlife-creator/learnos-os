@@ -1,0 +1,15 @@
+{
+  "name": "物理学习 OS",
+  "short_name": "物理OS",
+  "description": "本地物理错题学习系统：错题管理、间隔复习、知识图谱、真题演练",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

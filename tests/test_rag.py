@@ -1,0 +1,164 @@
+"""B3 个人资料 RAG 测试：摄取、BM25 检索、溯源、越界拒绝、hint 联动。"""
+import json
+import tempfile
+import threading
+import unittest
+import urllib.error
+import urllib.request
+from http.server import ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import quote
+
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import config
+import db
+from handler import Handler
+import rag
+
+_TMP = Path(__file__).resolve().parent / ".tmp"
+_TMP.mkdir(exist_ok=True)
+
+
+class TestRag(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temp_dir = tempfile.TemporaryDirectory(prefix="rag_", dir=_TMP)
+        cls._orig_db = config.DB_PATH
+        config.DB_PATH = Path(cls.temp_dir.name) / "rag_test.db"
+        db.DB_PATH = config.DB_PATH
+        db.init_db()
+        cls.materials = Path(cls.temp_dir.name) / "materials"
+        cls.materials.mkdir()
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.server.server_address[1]
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        db.DB_PATH = cls._orig_db
+        config.DB_PATH = cls._orig_db
+        cls.temp_dir.cleanup()
+
+    def request(self, path, method="GET", payload=None):
+        data = None if payload is None else json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}{path}",
+            data=data,
+            method=method,
+            headers={"Content-Type": "application/json", "X-Requested-With": "PhysicsStudyOS"},
+        )
+        with urllib.request.urlopen(req, timeout=8) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+
+    def request_error(self, path, method="GET", payload=None):
+        data = None if payload is None else json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}{path}",
+            data=data,
+            method=method,
+            headers={"Content-Type": "application/json", "X-Requested-With": "PhysicsStudyOS"},
+        )
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(req, timeout=8)
+        return ctx.exception.code, json.loads(ctx.exception.read().decode("utf-8"))
+
+    def _write_note(self, name, text):
+        fp = self.materials / name
+        fp.write_text(text, encoding="utf-8")
+        return fp
+
+    def test_ingest_and_bm25_search(self):
+        fp = self._write_note("力学笔记.md", (
+            "# 牛顿定律\n牛顿第二定律：力是改变物体运动状态的原因。\n"
+            "适用条件：惯性参考系，宏观低速，质量恒定。\n\n"
+            "# 法拉第电磁感应\n磁通量变化产生感应电动势，方向由楞次定律判断。\n"
+            "E = -dΦ/dt。"
+        ))
+        status, r = self.request("/api/rag/ingest", "POST", {"path": str(fp)})
+        self.assertEqual(status, 200)
+        self.assertGreater(r["chunks"], 0)
+        # 检索命中电磁感应片段（BM25）
+        status, r = self.request("/api/rag/search?q=" + quote("法拉第 感应电动势"))
+        self.assertEqual(status, 200)
+        self.assertTrue(r["items"])
+        top = r["items"][0]
+        self.assertIn("法拉第", top["content"])
+        self.assertEqual(top["name"], "力学笔记.md")
+        self.assertIn("source_path", top)
+        # 检索命中牛顿片段
+        status, r = self.request("/api/rag/search?q=" + quote("惯性参考系"))
+        self.assertIn("牛顿", r["items"][0]["content"])
+
+    def test_ingest_gbk_fallback(self):
+        fp = self._write_note("gbk笔记.txt", "动量守恒定律：系统合外力为零时动量守恒。")
+        fp.write_bytes(fp.read_bytes().decode("utf-8").encode("gbk"))
+        status, r = self.request("/api/rag/ingest", "POST", {"path": str(fp)})
+        self.assertEqual(status, 200)
+        status, r = self.request("/api/rag/search?q=" + quote("动量守恒"))
+        self.assertTrue(r["items"])
+
+    def test_outside_workspace_rejected(self):
+        status, r = self.request_error("/api/rag/ingest", "POST", {"path": "C:/Windows/system32"})
+        self.assertEqual(status, 400)
+        self.assertIn("工作区", r["error"])
+
+    def test_ingest_missing_path(self):
+        status, r = self.request_error("/api/rag/ingest", "POST", {"path": "materials/不存在.md"})
+        self.assertEqual(status, 400)
+
+    def test_rag_open_requires_registered_path(self):
+        status, r = self.request_error("/api/rag/open?path=" + quote("materials/未登记.md"))
+        self.assertEqual(status, 400)
+
+    def test_docs_list_and_delete(self):
+        self._write_note("临时文档.md", "热力学第一定律：内能变化等于热量与做功之和。")
+        self.request("/api/rag/ingest", "POST", {"path": str(self.materials)})
+        status, r = self.request("/api/rag/docs")
+        self.assertTrue(any("临时文档" in d["source_path"] for d in r["items"]))
+        target = next(d for d in r["items"] if "临时文档" in d["source_path"])
+        status, r = self.request(f"/api/rag/doc/{target['id']}", "DELETE")
+        self.assertEqual(status, 200)
+        status, r = self.request("/api/rag/docs")
+        self.assertFalse(any(d["id"] == target["id"] for d in r["items"]))
+
+    def test_rag_context_injection(self):
+        self._write_note("光学笔记.md", "光的干涉：频率相同的光在空间叠加形成明暗条纹。")
+        self.request("/api/rag/ingest", "POST", {"path": str(self.materials)})
+        problem = {
+            "id": 0, "topic": "光的干涉", "title": "双缝干涉", "content": "双缝干涉条纹间距？",
+        }
+        msgs, sources = Handler._rag_context(Handler.__new__(Handler), problem)
+        self.assertTrue(sources)
+        self.assertEqual(sources[0]["name"], "光学笔记.md")
+        self.assertIn("光学笔记", msgs[0]["content"])
+
+    def test_direct_bm25(self):
+        self._write_note("纯函数测试.md", "量子力学波函数描述粒子概率分布。")
+        rag.ingest_path(str(self.materials))
+        hits = rag.search("波函数 概率", k=3)
+        self.assertTrue(hits)
+        self.assertIn("波函数", hits[0]["content"])
+
+    def test_bm25_cache_invalidation(self):
+        """C6：摄取/删除后 BM25 缓存失效，检索结果即时更新。"""
+        rag._BM25_CACHE["docs"] = None
+        fp1 = self._write_note("缓存A.md", "基尔霍夫第一定律：节点电流代数和为零。")
+        rag.ingest_path(str(fp1))
+        self.assertTrue(rag.search("基尔霍夫", k=2))
+        fp2 = self._write_note("缓存B.md", "衍射光栅方程：dsinθ = mλ。")
+        rag.ingest_path(str(fp2))
+        hits = rag.search("衍射光栅", k=2)
+        self.assertTrue(any("衍射光栅" in h["content"] for h in hits))
+        doc = rag.list_docs()
+        target = next(d for d in doc if "缓存A" in d["source_path"])
+        rag.delete_doc(target["id"])
+        self.assertFalse(any("基尔霍夫" in h["content"] for h in rag.search("基尔霍夫", k=5)))
+
+
+if __name__ == "__main__":
+    unittest.main()

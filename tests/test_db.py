@@ -10,17 +10,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import config
 import db
 
+# 测试临时数据严格限制在工作区内（tests/.tmp/），不留任何外部痕迹
+_TEST_TMP_DIR = Path(__file__).resolve().parent / ".tmp"
+_TEST_TMP_DIR.mkdir(exist_ok=True)
+
 
 class TestDatabase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls._tmpdir = tempfile.mkdtemp(prefix="db_")
+        cls._tmp = tempfile.TemporaryDirectory(prefix="db_", dir=_TEST_TMP_DIR)
         cls._orig_db = config.DB_PATH
-        config.DB_PATH = Path(cls._tmpdir) / "db_test.db"
+        config.DB_PATH = Path(cls._tmp.name) / "db_test.db"
+        db.DB_PATH = config.DB_PATH  # db 模块按值绑定，需同步替换
         db.init_db()
 
     @classmethod
     def tearDownClass(cls):
+        cls._tmp.cleanup()
+        db.DB_PATH = cls._orig_db
         config.DB_PATH = cls._orig_db
 
     def test_schema_created(self):
@@ -89,26 +96,34 @@ class TestDatabase(unittest.TestCase):
 class TestSettingsDict(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls._tmpdir = tempfile.mkdtemp(prefix="settings_")
+        cls._tmp = tempfile.TemporaryDirectory(prefix="settings_", dir=_TEST_TMP_DIR)
         cls._orig_db = config.DB_PATH
-        config.DB_PATH = Path(cls._tmpdir) / "settings_test.db"
+        config.DB_PATH = Path(cls._tmp.name) / "settings_test.db"
+        db.DB_PATH = config.DB_PATH  # db 模块按值绑定，需同步替换
         db.init_db()
 
     @classmethod
     def tearDownClass(cls):
+        cls._tmp.cleanup()
+        db.DB_PATH = cls._orig_db
         config.DB_PATH = cls._orig_db
         os.environ.pop("PHYSICS_OS_API_KEY", None)
 
     def test_secret_masked_by_default(self):
+        # D1（R4）：DB 中写入 api_key 会被无视——密钥不落库。
         with db.db() as conn:
             conn.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('api_key', 'sk-secret123')")
         s = db.settings_dict()
-        self.assertEqual(s["api_key"], "••••••••")
-        self.assertTrue(s["has_api_key"])
+        self.assertEqual(s["api_key"], "")
+        self.assertFalse(s["has_api_key"])
 
     def test_secret_visible_with_flag(self):
+        # D1（R4）：密钥绝不从 DB 读取，只来自 env/内存/keys.enc。
+        with db.db() as conn:
+            conn.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('api_key', 'sk-secret123')")
         s = db.settings_dict(include_secret=True)
-        self.assertEqual(s["api_key"], "sk-secret123")
+        self.assertEqual(s["api_key"], "")
+        self.assertEqual(s["key_source"], "none")
 
     def test_env_key_overrides(self):
         os.environ["PHYSICS_OS_API_KEY"] = "sk-from-env"
@@ -118,12 +133,23 @@ class TestSettingsDict(unittest.TestCase):
         os.environ.pop("PHYSICS_OS_API_KEY", None)
 
     def test_no_key_returns_empty(self):
-        with db.db() as conn:
-            conn.execute("DELETE FROM settings WHERE key = 'api_key'")
         os.environ.pop("PHYSICS_OS_API_KEY", None)
         s = db.settings_dict()
         self.assertFalse(s["has_api_key"])
         self.assertEqual(s["api_key"], "")
+
+    def test_db_api_key_row_cleared_by_migration(self):
+        # v4 迁移应清除 DB 中的 api_key 残留行（模拟旧库：version 回退到 3）
+        from db import _migrate
+        with db.db() as conn:
+            conn.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('api_key', 'sk-secret123')")
+            conn.execute("DELETE FROM schema_version WHERE version >= 4")
+        with db.db() as conn:
+            _migrate(conn)
+            rest = conn.execute("SELECT value FROM settings WHERE key = 'api_key'").fetchall()
+            ver = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+        self.assertEqual(rest, [])
+        self.assertGreaterEqual(ver, 4)
 
 
 if __name__ == "__main__":

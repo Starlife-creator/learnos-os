@@ -12,15 +12,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import config
 import db
+from ai import set_runtime_key
 from handler import Handler
+
+# 测试临时数据严格限制在工作区内（tests/.tmp/），不留任何外部痕迹
+_TEST_TMP_DIR = Path(__file__).resolve().parent / ".tmp"
+_TEST_TMP_DIR.mkdir(exist_ok=True)
 
 
 class PhysicsStudyOSTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.temp_dir = tempfile.TemporaryDirectory(prefix="e2e_")
+        cls.temp_dir = tempfile.TemporaryDirectory(prefix="e2e_", dir=_TEST_TMP_DIR)
         cls._orig_db = config.DB_PATH
         config.DB_PATH = Path(cls.temp_dir.name) / "e2e_test.db"
+        db.DB_PATH = config.DB_PATH  # db 模块按值绑定，需同步替换
         db.init_db()
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         cls.port = cls.server.server_address[1]
@@ -29,8 +35,10 @@ class PhysicsStudyOSTest(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        set_runtime_key("")  # 清除 runtime 密钥，避免污染其他测试模块的 AI 调用
         cls.server.shutdown()
         cls.server.server_close()
+        db.DB_PATH = cls._orig_db
         config.DB_PATH = cls._orig_db
         cls.temp_dir.cleanup()
 

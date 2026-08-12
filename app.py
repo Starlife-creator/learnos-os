@@ -18,6 +18,12 @@ from handler import Handler
 def main() -> None:
     setup_logging()
     init_db()
+    # C7：每日首次启动自动备份（幂等，失败不阻塞启动）
+    try:
+        from backup import auto_backup_if_due
+        auto_backup_if_due()
+    except Exception as exc:
+        LOG.warning("自动备份失败（可忽略）: %s", exc)
 
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     url = f"http://{HOST}:{PORT}"
