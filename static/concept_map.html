@@ -126,6 +126,7 @@ function make(tag, attrs, text) {
 }
 
 function nodeColor(m) {
+  if (!m || m <= 0.01) return '#cbd5e1';
   if (m >= 0.6) return '#22c55e';
   if (m >= 0.35) return '#eab308';
   return '#ef4444';
@@ -293,12 +294,14 @@ async function loadRelatedProblems(id) {
   const el = document.getElementById('dProblems');
   el.innerHTML = '<p class="muted">加载中…</p>';
   try {
-    const resp = await fetch(`/api/problems/${id}/related`);
+    // B4 语义修正：展示「绑定该概念 + 先修链」上的历史错题，
+    // 而非同课程题目（/api/graph/problems?concept= 与先修模式同源）
+    const resp = await fetch(`/api/graph/problems?concept=${id}`);
     const items = await resp.json();
     el.innerHTML = items.length
-      ? '<p class="muted">相关错题：</p><ul id="problemList">' + items.map(p =>
+      ? '<p class="muted">相关错题（含先修链）：</p><ul id="problemList">' + items.map(p =>
           `<li>${p.title}（掌握 ${p.mastery}/5）</li>`).join('') + '</ul>'
-      : '<p class="muted">暂无相关错题</p>';
+      : '<p class="muted">暂无绑定的历史错题</p>';
   } catch { el.innerHTML = '<p class="muted">加载失败</p>'; }
 }
 

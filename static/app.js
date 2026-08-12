@@ -432,6 +432,56 @@ function drawAnalytics(data) {
   drawGamification((data && data.gamification) || {});
   drawTelemetry((data && data.telemetry) || {});
   drawWeekly((data && data.weekly) || {});
+  if (data && data.forgetting !== undefined) drawForgetCurve(data.forgetting);
+}
+
+// ── D4 遗忘曲线（SVG 纯手绘，零依赖）──
+function drawForgetCurve(f) {
+  const svg = document.getElementById('forgetSvg');
+  const stats = document.getElementById('forgetStats');
+  if (!svg || !f) return;
+  const W = 340, H = 150, padL = 34, padB = 22, padT = 10, padR = 10;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const NS = 'http://www.w3.org/2000/svg';
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+  const mk = (tag, attrs) => { const el = document.createElementNS(NS, tag); for (const k in attrs) el.setAttribute(k, attrs[k]); return el; };
+  const xOf = t => padL + (t / 30) * plotW;
+  const yOf = r => padT + (1 - r) * plotH;
+  // 网格 + 轴
+  for (const g of [0.5, 0.7, 0.9]) {
+    const l = mk('line', { x1: padL, y1: yOf(g), x2: W - padR, y2: yOf(g), stroke: '#e5eaf2', 'stroke-width': 1 });
+    svg.appendChild(l);
+  }
+  svg.appendChild(mk('line', { x1: padL, y1: padT, x2: padL, y2: H - padB, stroke: '#c3cddb', 'stroke-width': 1.2 }));
+  svg.appendChild(mk('line', { x1: padL, y1: H - padB, x2: W - padR, y2: H - padB, stroke: '#c3cddb', 'stroke-width': 1.2 }));
+  // 预测曲线（平均稳定度）
+  if (f.curve && f.curve.length > 1) {
+    const d = f.curve.map((p, i) => `${i ? 'L' : 'M'}${xOf(p.t).toFixed(1)},${yOf(p.r).toFixed(1)}`).join(' ');
+    const path = mk('path', { d, fill: 'none', stroke: '#3b82f6', 'stroke-width': 2 });
+    svg.appendChild(path);
+  }
+  // 实测桶点（蓝点）
+  (f.buckets || []).forEach((b, i) => {
+    if (!b.count) return;
+    const t = [1.5, 5.5, 11, 22, 45, 80][i] || 20;
+    const c = mk('circle', { cx: xOf(t), cy: yOf(b.avg_r), r: 4, fill: '#22c55e', stroke: '#fff', 'stroke-width': 1.5 });
+    svg.appendChild(c);
+  });
+  // 目标保持率虚线
+  const target = (parseFloat(localStorage.getItem('fsrsRetention') || '0.9') || 0.9);
+  const tl = mk('line', { x1: padL, y1: yOf(target), x2: W - padR, y2: yOf(target), stroke: '#f59e0b', 'stroke-width': 1, 'stroke-dasharray': '4 3' });
+  svg.appendChild(tl);
+  // 坐标点标
+  for (const t of [0, 10, 20, 30]) {
+    const lbl = mk('text', { x: xOf(t), y: H - 6, 'text-anchor': 'middle', 'font-size': '9px', fill: '#94a3b8' }, `${t}d`);
+    svg.appendChild(lbl);
+  }
+  if (stats) {
+    const total = f.buckets.reduce((a, b) => a + b.count, 0);
+    stats.innerHTML = total
+      ? `已统计 ${total} 张 FSRS 卡 · 平均稳定度 ${f.avg_stability || 0} 天 · <span class="text-muted">绿点=实测遗忘率（越低越牢），蓝线=预测曲线，黄虚线=目标保持率</span>`
+      : '<span class="text-muted">暂无 FSRS 卡数据（完成几次复习后自动出现）</span>';
+  }
 }
 
 // ── D6 游戏化 ──

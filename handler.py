@@ -805,7 +805,65 @@ class Handler(SimpleHTTPRequestHandler):
                 "avg_mastery": health.get("avg_mastery") or 0,
             },
             "daily_reviews": daily,
+            "forgetting": self._forgetting_curve(today),
         }
+
+    @staticmethod
+    def _forgetting_curve(today: date) -> dict[str, Any]:
+        """D4 遗忘曲线：FSRS 卡按「距上次复习天数」分桶统计实际 R，并给平均稳定度下的预测曲线。"""
+        cards = rows("""
+            SELECT p.stability, p.difficulty, p.state, p.repetition,
+                   (SELECT MAX(created_at) FROM reviews r
+                    WHERE r.problem_id = p.id AND r.completed = 1) AS last_review
+            FROM problems p
+            WHERE p.state > 0 AND p.stability > 0
+        """)
+        buckets = [0, 4, 8, 15, 30, 61, 100000]
+        labels = ["0-3天", "4-7天", "8-14天", "15-30天", "31-60天", "60天+"]
+        bucket_data: list[dict[str, Any]] = []
+        stability_sum = 0.0
+        stability_n = 0
+        for card in cards:
+            ref = (card["last_review"] or "").split("T")[0].split(" ")[0]
+            if not ref:
+                continue
+            try:
+                elapsed = max(0, (today - date.fromisoformat(ref)).days)
+            except ValueError:
+                continue
+            stability = float(card["stability"] or 0)
+            stability_sum += stability
+            stability_n += 1
+            r = fsrs_bridge.retrievability(
+                prev_interval=int(card["repetition"] or 0),
+                state=int(card["state"] or 0),
+                stability=stability,
+                difficulty=float(card["difficulty"] or 0),
+                last_review=ref,
+                current=today,
+            )
+            idx = next((i for i, bound in enumerate(buckets) if elapsed < bound), len(buckets) - 1)
+            entry = bucket_data[idx] if idx < len(bucket_data) else None
+            if not entry:
+                # 惰性初始化：buckets 单调递增，顺序遍历时 idx 必递增
+                bucket_data.append({"label": labels[idx], "count": 0, "r_sum": 0.0, "avg_r": 0.0})
+                entry = bucket_data[-1]
+            entry["count"] += 1
+            entry["r_sum"] += r
+        for entry in bucket_data:
+            entry["avg_r"] = round(entry["r_sum"] / entry["count"], 3) if entry["count"] else 0.0
+        # 预测曲线：平均稳定度下 R(t) t=0..30（无卡则空）
+        curve: list[dict[str, Any]] = []
+        if stability_n:
+            avg_s = round(stability_sum / stability_n, 2)
+            for t in range(0, 31, 3):
+                ref = (today - timedelta(days=t)).isoformat()
+                r = fsrs_bridge.retrievability(
+                    prev_interval=3, state=2, stability=avg_s,
+                    difficulty=5.0, last_review=ref, current=today,
+                )
+                curve.append({"t": t, "r": r})
+        return {"buckets": bucket_data, "curve": curve, "avg_stability": round(stability_sum / stability_n, 2) if stability_n else 0.0}
 
     def _handle_analytics(self) -> None:
         self.json_response(self._analytics_data())

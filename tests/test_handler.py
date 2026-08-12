@@ -620,6 +620,23 @@ class TestEndpoints(unittest.TestCase):
         status, p = self._request("GET", f"/api/problems/{pid}")
         self.assertEqual(p["methods"], [])
 
+    def test_analytics_forgetting_curve(self):
+        """D4：完成 FSRS 复习后 analytics 含遗忘曲线（实测桶 + 预测曲线）。"""
+        pid = self._create_problem(title="D4遗忘曲线", content="求电场强度")
+        _, reviews = self._request("GET", "/api/reviews")
+        rid = next(r["id"] for r in reviews if r["problem_id"] == pid)
+        self._request("POST", f"/api/reviews/{rid}/complete", {"rating": 4})
+        status, data = self._request("GET", "/api/analytics")
+        self.assertEqual(status, 200)
+        f = data["forgetting"]
+        self.assertIn("buckets", f)
+        self.assertIn("curve", f)
+        self.assertGreaterEqual(sum(b["count"] for b in f["buckets"]), 1)
+        self.assertGreater(f["avg_stability"], 0)
+        self.assertGreater(len(f["curve"]), 2)
+        self.assertLessEqual(f["curve"][0]["r"], 1.0)
+        self.assertGreaterEqual(f["curve"][-1]["r"], 0.0)
+
     def test_write_idempotency(self):
         # 相同 X-Request-Id 重复提交应返回首次结果，不产生重复题目
         body = {"title": "幂等题", "content": "test"}
