@@ -117,7 +117,10 @@ const GRAPH_LOCALES = ['zh-CN', 'en-US'];
 let _dict = {};
 function _curLang() {
   const s = localStorage.getItem('lang');
-  return GRAPH_LOCALES.includes(s) ? s : 'zh-CN';
+  if (GRAPH_LOCALES.includes(s)) return s;
+  const nav = (navigator.language || '').toLowerCase();
+  if (nav.startsWith('en')) return 'en-US';
+  return 'zh-CN';
 }
 function t(k, fb) { return _dict[k] || fb || k; }
 function applyGraphI18n(root) {

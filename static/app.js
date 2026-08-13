@@ -10,7 +10,11 @@ let _lang = '';
 
 function currentLang() {
   const saved = localStorage.getItem('lang');
-  return LOCALES.includes(saved) ? saved : 'zh-CN';
+  if (LOCALES.includes(saved)) return saved;
+  // 首次访问：按浏览器语言就近选择（zh 前缀 → zh-CN，en 前缀 → en-US）
+  const nav = (navigator.language || '').toLowerCase();
+  if (nav.startsWith('en')) return 'en-US';
+  return 'zh-CN';
 }
 
 async function loadLocale(lang) {

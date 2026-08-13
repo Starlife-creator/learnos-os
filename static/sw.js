@@ -41,6 +41,21 @@ self.addEventListener('fetch', (event) => {
     );
     return;
   }
+  // 语言词条：网络优先（词条会随版本更新），失败回退缓存
+  if (url.pathname.startsWith('/locale/')) {
+    event.respondWith(
+      fetch(event.request)
+        .then((resp) => {
+          if (resp.ok) {
+            const clone = resp.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return resp;
+        })
+        .catch(() => caches.match(event.request))
+    );
+    return;
+  }
   // 静态资源：缓存优先，网络后备（离线可用）
   event.respondWith(
     caches.match(event.request).then(
