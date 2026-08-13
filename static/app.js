@@ -366,7 +366,7 @@ async function loadDashboard() {
           <div class="list-item-meta">${escapeHtml(p.course)} · ${escapeHtml(p.topic)} · ${escapeHtml(p.error_type)}</div>
         </div>`).join('');
     } else {
-      recentEl.innerHTML = '<div class="empty"><p>还没有记录，去"错题"页添加第一题吧</p></div>';
+      recentEl.innerHTML = '<div class="empty"><p>' + t('msg.noRecent') + '</p></div>';
     }
     drawTrend(d);
     drawAnalytics(d);
@@ -388,7 +388,7 @@ async function loadDashboard() {
           </span>
         </div>`).join('');
     } else {
-      courseEl.innerHTML = '<div class="empty"><p>暂无课程分类</p></div>';
+      courseEl.innerHTML = '<div class="empty"><p>' + t('msg.noCourse') + '</p></div>';
     }
 
     // 最近复习活动
@@ -401,7 +401,7 @@ async function loadDashboard() {
           <span class="tag ${a.result==='4'?'tag-green':a.result==='3'?'tag-blue':'tag-amber'}">${t('label.rev'+a.result)||'?'}</span>
           <span class="text-muted text-sm" style="float:right">${(a.created_at||'').slice(0,16)}</span>
         </div>`).join('');
-    } else { actEl.innerHTML = '<div class="empty"><p>暂无复习活动</p></div>'; }
+    } else { actEl.innerHTML = '<div class="empty"><p>' + t('msg.noActivity') + '</p></div>'; }
   } catch(e) { toast(e.message, 'error'); }
 }
 
@@ -547,7 +547,7 @@ function drawForgetCurve(f) {
     const total = f.buckets.reduce((a, b) => a + b.count, 0);
     stats.innerHTML = total
       ? `已统计 ${total} 张 FSRS 卡 · 平均稳定度 ${f.avg_stability || 0} 天 · <span class="text-muted">绿点=实测遗忘率（越低越牢），蓝线=预测曲线，黄虚线=目标保持率</span>`
-      : '<span class="text-muted">暂无 FSRS 卡数据（完成几次复习后自动出现）</span>';
+      : '<span class="text-muted">' + t('msg.noFsrs') + '</span>';
   }
 }
 
@@ -558,14 +558,14 @@ function drawGamification(g) {
   if (!g || g.total_reviews === undefined) { el.innerHTML = '<div class="text-muted text-sm">' + t('msg.noData') + '</div>'; return; }
   const unlocked = (g.badges || []).filter(b => b.unlocked);
   el.innerHTML = `<div class="flex-between mb-8">
-    <div><span class="text-sm">累计 XP</span><div class="text-xl">${g.total_xp}</div></div>
-    <div><span class="text-sm">今日 XP</span><div class="text-xl">${g.today_xp}</div></div>
-    <div><span class="text-sm">连续天数</span><div class="text-xl">🔥 ${g.streak}</div></div>
-    <div><span class="text-sm">累计复习</span><div class="text-xl">${g.total_reviews}</div></div>
+    <div><span class="text-sm">${t('stat.xpTotal')}</span><div class="text-xl">${g.total_xp}</div></div>
+    <div><span class="text-sm">${t('stat.xpToday')}</span><div class="text-xl">${g.today_xp}</div></div>
+    <div><span class="text-sm">${t('stat.streak')}</span><div class="text-xl">🔥 ${g.streak}</div></div>
+    <div><span class="text-sm">${t('stat.totalRev')}</span><div class="text-xl">${g.total_reviews}</div></div>
   </div>
   <div class="flex wrap gap-8">${(g.badges || []).map(b =>
     `<span class="tag ${b.unlocked ? 'tag-green' : 'tag-gray'}" title="${escapeHtml(b.label)}">${b.unlocked ? '🏅' : '🔒'} ${escapeHtml(b.id.replace('_',' '))}</span>`
-  ).join('') || '<span class="text-muted text-sm">完成复习解锁第一个徽章</span>'}</div>`;
+  ).join('') || '<span class="text-muted text-sm">' + t('stat.badgeFirst') + '</span>'}</div>`;
 }
 
 // ── C6 AI 遥测 ──
@@ -575,12 +575,12 @@ function drawTelemetry(t) {
   if (!t || t.calls === undefined) { el.innerHTML = '<div class="text-muted text-sm">' + t('msg.noData') + '</div>'; return; }
   const rate = t.fail_rate > 0.3 ? 'tag-red' : t.fail_rate > 0.1 ? 'tag-warn' : 'tag-green';
   el.innerHTML = `<div class="flex-between mb-8">
-    <span class="text-sm">近 7 天调用</span><b>${t.calls}</b>
-    <span class="text-sm">失败率</span><span class="tag ${rate}">${(t.fail_rate * 100).toFixed(0)}%</span>
-    <span class="text-sm">平均延迟</span><b>${t.avg_latency_ms}ms</b>
-    <span class="text-sm">估算 Token</span><b>${t.tokens}</b>
+    <span class="text-sm">${t('stat.calls7')}</span><b>${t.calls}</b>
+    <span class="text-sm">${t('stat.failRate')}</span><span class="tag ${rate}">${(t.fail_rate * 100).toFixed(0)}%</span>
+    <span class="text-sm">${t('stat.avgLatency')}</span><b>${t.avg_latency_ms}ms</b>
+    <span class="text-sm">${t('stat.tokens')}</span><b>${t.tokens}</b>
   </div>
-  ${t.slow_routes && t.slow_routes.length ? `<p class="hint-text">最慢路由：${t.slow_routes.map(escapeHtml).join('、')}</p>` : ''}`;
+  ${t.slow_routes && t.slow_routes.length ? `<p class="hint-text">${t('stat.slowRoutes')}：${t.slow_routes.map(escapeHtml).join('、')}</p>` : ''}`;
 }
 
 // ── D5 周报 ──
@@ -591,12 +591,12 @@ function drawWeekly(w) {
   const delta = (w.review_delta || 0);
   const deltaStr = delta > 0 ? `+${delta}` : String(delta);
   el.innerHTML = `<div class="flex-between mb-8">
-    <span class="text-sm">本周（${escapeHtml(w.week_start)} 起）</span>
+    <span class="text-sm">${t('stat.weekRange').replace('{s}', escapeHtml(w.week_start))}</span>
   </div>
   <div class="flex-between mb-8">
-    <span class="text-sm">新增错题</span><b>${w.new_problems}（上周 ${w.prev_problems}）</b>
-    <span class="text-sm">复习次数</span><b>${w.week_reviews}（${deltaStr}）</b>
-    <span class="text-sm">保持率</span><b>${(w.good_rate * 100).toFixed(0)}%</b>
+    <span class="text-sm">${t('stat.newProblem')}</span><b>${w.new_problems}（${t('stat.lastWeek').replace('{n}', w.prev_problems)}）</b>
+    <span class="text-sm">${t('stat.reviewCount')}</span><b>${w.week_reviews}（${deltaStr}）</b>
+    <span class="text-sm">${t('stat.goodRate')}</span><b>${(w.good_rate * 100).toFixed(0)}%</b>
   </div>
   <p class="hint-text">💡 ${escapeHtml(w.tip || '')}</p>`;
 }
@@ -605,7 +605,7 @@ function drawWeekly(w) {
 function drawStubborn(list) {
   const el = document.getElementById('stubbornList');
   if (!el) return;
-  if (!list || !list.length) { el.innerHTML = '暂无反复出错的题目，保持势头 🎉'; return; }
+  if (!list || !list.length) { el.innerHTML = t('msg.noStubborn'); return; }
   el.innerHTML = list.map(p => {
     const rate = p.total_reviews ? Math.round(p.miss_count / p.total_reviews * 100) : 0;
     return `<div class="flex-between mb-8">
@@ -631,7 +631,7 @@ function drawPressure(p) {
 function drawForgetPredict(f) {
   const el = document.getElementById('forgetCard');
   if (!el) return;
-  if (!f.count) { el.innerHTML = '近期待复习的题目不多，暂无遗忘风险'; return; }
+  if (!f.count) { el.innerHTML = t('msg.noRisk'); return; }
   const pct = (r) => (r * 100).toFixed(0) + '%';
   el.innerHTML =
     `<div class="text-sm">近期 ${f.count} 题待复习 · 平均检索概率 ${pct(f.avg_r)} · 高危(R&lt;50%) ${f.high_risk} · 中危(50-70%) ${f.medium_risk}</div>
@@ -643,7 +643,7 @@ function drawForgetPredict(f) {
 function drawTodayTasks(tasks) {
   const el = document.getElementById('taskCard');
   if (!el) return;
-  if (!tasks || !tasks.length) { el.innerHTML = '暂无任务'; return; }
+  if (!tasks || !tasks.length) { el.innerHTML = t('msg.noTask'); return; }
   const icons = { review: '📚', error_focus: '🎯', exam: '🏃', done: '✅' };
   el.innerHTML = tasks.map(t =>
     `<div class="flex-between mb-8"><span class="text-sm">${icons[t.kind] || ''} ${escapeHtml(t.label)}</span>
