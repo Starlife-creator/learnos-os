@@ -4,6 +4,23 @@
 
 ---
 
+## 2026-08-13：F2 收尾「全量剩余文案 i18n + 零依赖体验项」（完成）
+
+原则延续：**零新增依赖、零大文件**（继续用 locale 纯 JSON + 原生实现）。
+
+全量回归：**175 passed + 4 subtests**，`node --check static/app.js` 通过。
+
+- **剩余动态文案批次 1+2+3 全部 t() 化**：3 批脚本共处理 ~330 处动态文案（详情/流式 toasts/分页/复习按钮/标签/趋势/压力/遗忘/今日任务/顽固错题/Feynman 口试/变式/草稿/口试/档案/冲刺/打印/闪电复习/一题多解/Ollama/拍照 OCR/RAG/试卷 OCR/考试就绪度/设置/FSRS/导出导入/公式速查），locale 从 223 键扩到 **684 键**（zh/en 键集一致，DIFF 0）。
+- **修复变量遮蔽 bug**：标签渲染 map 回调 `t` 遮蔽全局翻译函数 → 改名 `tag`；AI 建议 title 用 `t('tag.aiSuggest')`。
+- **公式速查双语**：`_FORMULAS` 数据加 `key` 字段映射 `formula.*` 键，公式内中文术语（胡克定律/完全弹性碰撞/匀强/双缝）改英文。
+- **深色模式三态**：`data-theme` 属性（auto/dark/light）覆盖 CSS 变量（修正原实现只改 color-scheme 元数据、CSS 变量仍跟随系统的缺陷）；循环切换 + toast 提示（theme.* 4 键）；`applyTheme` 在 loadLocale 后执行（title 需 t()）。
+- **PWA 更新提示**：sw.js `SKIP_WAITING` 消息处理 + cache 版本升 v2；app.js 监听 `updatefound`/`installed`（存在 controller 时）显示顶部 `#updateBar`，`controllerchange` 自动刷新。
+- **键盘快捷键**：复习页数字 1-4 直接评分第一张卡片（在复习页激活时优先于切页）；口试 Enter 发送已有。
+- **打印样式增强**：`.print-item` 加 `break-inside: avoid`（避免题目跨页截断）、`page-break-inside` 兼容、图片 `max-height:140mm` + `object-fit:contain`、长文本 `word-wrap`。
+- 剩余 CJK 仅存在于 JS 注释（可读性保留）。
+
+---
+
 ## 2026-08-13：F2 批次「双语 i18n + AI 英文讲解」（完成）
 
 原则延续：**零新增依赖、零大文件**（locale 纯 JSON，无 i18n 库）。

@@ -31,7 +31,7 @@
     --mono: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   }
   @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme]) {
       --bg: #14151a;
       --surface: #1e2027;
       --border: #33363f;
@@ -47,6 +47,21 @@
       --warning-light: #3a2e10;
     }
   }
+  :root[data-theme="dark"] {
+    --bg: #14151a;
+    --surface: #1e2027;
+    --border: #33363f;
+    --text: #e8eaed;
+    --text-2: #9aa0aa;
+    --accent: #60a5fa;
+    --accent-light: #1e3a5f;
+    --danger: #f87171;
+    --danger-light: #3a1d1d;
+    --success: #34d399;
+    --success-light: #14342a;
+    --warning: #fbbf24;
+    --warning-light: #3a2e10;
+  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; transition: background .2s, color .2s; }
   a { color: var(--accent); text-decoration: none; }
@@ -59,6 +74,10 @@
   .nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .nav-brand { margin-right: auto; padding: 14px 22px; font-weight: 700; font-size: 16px; color: var(--text); display: flex; align-items: center; gap: 10px; }
   .theme-toggle { background: none; border: none; cursor: pointer; font-size: 18px; color: var(--text-2); padding: 4px; }
+
+  /* ── PWA 更新提示条 ── */
+  .update-bar { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 1000; display: flex; align-items: center; gap: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 16px; box-shadow: 0 4px 16px rgba(0,0,0,.15); font-size: 14px; }
+  .update-bar.hidden { display: none; }
 
   /* ── 布局 ── */
   .container { max-width: 960px; margin: 0 auto; padding: 24px 20px; }
@@ -223,15 +242,26 @@
     }
     #printArea h2 { font-size: 16px; margin: 0 0 10px; }
     .print-answer-line { border-bottom: 1px solid #333; height: 26px; margin: 10px 0 14px; }
-    .print-item { border-bottom: 1px solid #999; padding: 8px 0; page-break-inside: avoid; }
+    .print-item {
+      border-bottom: 1px solid #999; padding: 8px 0;
+      break-inside: avoid; page-break-inside: avoid;
+    }
+    .print-item:first-of-type { border-top: none; }
     .print-item .print-title { font-weight: 700; font-size: 13px; margin-bottom: 4px; }
     .print-item .print-meta { color: #333; margin-bottom: 4px; }
-    .print-item pre { white-space: pre-wrap; font-family: inherit; margin: 4px 0; }
+    .print-item pre { white-space: pre-wrap; font-family: inherit; margin: 4px 0; word-wrap: break-word; overflow-wrap: break-word; }
     .print-item .print-hdr { color: #666; font-weight: 700; margin-top: 6px; }
+    .print-item img { max-width: 100%; max-height: 140mm; object-fit: contain; break-inside: avoid; page-break-inside: avoid; }
+    #printArea .print-answer-line { page-break-before: auto; }
   }
 </style>
 </head>
 <body>
+
+<div id="updateBar" class="update-bar hidden" role="status">
+  <span data-i18n="update.text">新版本可用</span>
+  <button class="btn btn-primary btn-sm" onclick="applyUpdate()" data-i18n="update.apply">立即更新</button>
+</div>
 
 <nav class="nav">
   <div class="nav-brand">物理学习 OS

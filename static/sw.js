@@ -1,4 +1,4 @@
-const CACHE_NAME = 'physics-os-v1';
+const CACHE_NAME = 'physics-os-v2';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -21,6 +21,11 @@ self.addEventListener('activate', (event) => {
       .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
+});
+
+// 页面确认后跳过等待，立即应用新版本
+self.addEventListener('message', (event) => {
+  if (event.data === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('fetch', (event) => {

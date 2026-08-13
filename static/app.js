@@ -54,7 +54,7 @@ async function setLang(lang) {
   await loadLocale(lang);
   applyI18n(document);
   refreshForLang();
-  toast(_lang === 'en-US' ? 'Language switched to English' : '语言已切换');
+  toast(t('toast.langSwitched'));
 }
 
 function refreshForLang() {
@@ -86,7 +86,7 @@ async function api(path, opts = {}) {
   try {
     const res = await doFetch();
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || '请求失败');
+    if (!res.ok) throw new Error(data.error || t('msg.requestFail'));
     return data;
   } catch (err) {
     // 仅对网络层失败（非 HTTP 错误）重试一次（GET）
@@ -94,7 +94,7 @@ async function api(path, opts = {}) {
       fetchFailed = false;
       const res = await doFetch();
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || '请求失败');
+      if (!res.ok) throw new Error(data.error || t('msg.requestFail'));
       return data;
     }
     throw err;
@@ -173,14 +173,14 @@ let currentTags = [];
 
 function renderTags() {
   const wrap = document.getElementById('editTagsWrap');
-  wrap.innerHTML = currentTags.map((t, i) =>
-    `<span class="chip${t.pending ? ' pending' : ''}" title="${t.pending ? 'AI 建议（置信度不足 0.9），保存确认后生效' : ''}">${escapeHtml(t.text)}<span class="chip-x" onclick="removeTag(${i})" aria-label="移除标签">&times;</span></span>`
+  wrap.innerHTML = currentTags.map((tag, i) =>
+    `<span class="chip${tag.pending ? ' pending' : ''}" title="${tag.pending ? t('tag.aiSuggest') : ''}">${escapeHtml(tag.text)}<span class="chip-x" onclick="removeTag(${i})" aria-label="${t('detail.removeTag')}">&times;</span></span>`
   ).join('');
   const hint = document.getElementById('editTagsHint');
-  const pendingCount = currentTags.filter(t => t.pending).length;
-  if (pendingCount) hint.textContent = `AI 建议已加入（${pendingCount} 项置信度低于 0.9），保存即确认采纳；不想要可直接删除。`;
-  else if (currentTags.length) hint.textContent = '保存后标签生效。';
-  else hint.textContent = '可手动输入，或用 AI 从题目自动提取（无 AI 配置时自动使用关键词规则）。';
+  const pendingCount = currentTags.filter(c => c.pending).length;
+  if (pendingCount) hint.textContent = t('tag.hintPending').replace('{n}', pendingCount);
+  else if (currentTags.length) hint.textContent = t('tag.hintSaved');
+  else hint.textContent = t('tag.hintManual');
 }
 
 function removeTag(i) { currentTags.splice(i, 1); renderTags(); }
@@ -203,10 +203,10 @@ async function extractTags() {
       pending: data.confidence < 0.9 || data.pending === true,
     }));
     renderTags();
-    const source = data.source === 'ai' ? 'AI' : '关键词规则';
+    const source = data.source === 'ai' ? 'AI' : t('tag.sourceRule');
     const conf = Math.round((data.confidence || 0) * 100);
     document.getElementById('editTagsHint').textContent =
-      `${source} 提取，置信度 ${conf}%${data.source !== 'ai' ? '（未配置 AI，已自动降级）' : ''}。保存即确认采纳。`;
+      t('tag.extractResult').replace('{s}', source).replace('{c}', conf).replace('{d}', data.source !== 'ai' ? t('tag.degraded') : '') + '。';
   } catch(e) {
     toast(e.message, 'error');
   } finally {
@@ -307,27 +307,37 @@ document.addEventListener('keydown', (e) => {
   const tag = (document.activeElement && document.activeElement.tagName) || '';
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
   const idx = parseInt(e.key, 10);
-  if (idx >= 1 && idx <= PAGES.length) switchPage(PAGES[idx - 1]);
+  if (idx >= 1 && idx <= PAGES.length) {
+    // 复习页：数字 1-4 直接评分当前第一张卡片
+    if (idx <= 4 && document.getElementById('page-review').classList.contains('active')) {
+      const item = document.querySelector('#reviewList .list-item');
+      if (item) {
+        const btn = item.querySelectorAll('button[onclick*="completeReview"]')[idx - 1];
+        if (btn) { btn.click(); return; }
+      }
+    }
+    switchPage(PAGES[idx - 1]);
+  }
 });
 
-// ── 主题切换 ──
+// ── 主题切换（auto / dark / light）──
+const THEME_ORDER = ['auto', 'dark', 'light'];
 function applyTheme(theme) {
   const root = document.documentElement;
   const meta = document.querySelector('meta[name="color-scheme"]');
-  if (theme === 'dark') { root.style.colorScheme = 'dark'; if (meta) meta.content = 'dark'; }
-  else if (theme === 'light') { root.style.colorScheme = 'light'; if (meta) meta.content = 'light'; }
-  else { root.style.colorScheme = ''; if (meta) meta.content = 'light dark'; }
+  if (theme === 'dark') { root.dataset.theme = 'dark'; if (meta) meta.content = 'dark'; }
+  else if (theme === 'light') { root.dataset.theme = 'light'; if (meta) meta.content = 'light'; }
+  else { delete root.dataset.theme; if (meta) meta.content = 'light dark'; }
+  const btn = document.getElementById('themeToggle');
+  if (btn) btn.title = t('theme.' + theme);
 }
 document.getElementById('themeToggle').addEventListener('click', () => {
-  const cur = document.documentElement.style.colorScheme;
-  const next = cur === 'dark' ? 'light' : 'dark';
+  const cur = document.documentElement.dataset.theme || 'auto';
+  const next = THEME_ORDER[(THEME_ORDER.indexOf(cur) + 1) % THEME_ORDER.length];
   localStorage.setItem('theme', next);
   applyTheme(next);
+  toast(t('theme.switched').replace('{t}', t('theme.' + next)));
 });
-(function initTheme() {
-  const saved = localStorage.getItem('theme');
-  if (saved) applyTheme(saved);
-})();
 
 // ── 概览 ──
 async function loadDashboard() {
@@ -347,7 +357,7 @@ async function loadDashboard() {
         <div class="flex-between mb-8">
           <span class="text-sm">${escapeHtml(t.topic)}</span>
           <span class="flex gap-8 items-center">
-            <span class="tag tag-gray">${t.count}题</span>
+            <span class="tag tag-gray">${t('dash.topicCount').replace('{n}', t.count)}</span>
             ${masteryBar(t.mastery)}
           </span>
         </div>`).join('');
@@ -384,7 +394,7 @@ async function loadDashboard() {
             <span style="flex:1;height:6px;background:var(--border);border-radius:3px;overflow:hidden">
               <span style="display:block;height:100%;width:${(c.avg_mastery/5*100).toFixed(0)}%;background:${c.avg_mastery>=4?'var(--success)':c.avg_mastery>=3?'var(--accent)':'var(--warning)'};border-radius:3px"></span>
             </span>
-            <span class="tag tag-gray">${c.avg_mastery} (${c.count}题${c.due>0?',待复习'+c.due:''})</span>
+            <span class="tag tag-gray">${t('dash.courseCount').replace('{m}', c.avg_mastery).replace('{n}', c.count).replace('{d}', c.due>0 ? t('dash.courseDue').replace('{n}', c.due) : '')}</span>
           </span>
         </div>`).join('');
     } else {
@@ -450,7 +460,7 @@ function drawTrend(data) {
   const hint = document.getElementById('trendHint');
   const log = (data && data.points) || [];
   const summary = (data && data.summary) || {};
-  if (!log.length) { svg.innerHTML = ''; hint.textContent = '完成复习后会记录掌握度变化'; return; }
+  if (!log.length) { svg.innerHTML = ''; hint.textContent = t('trend.empty'); return; }
   const W = 300, H = 120, pad = 10;
   const max = 5, min = 0;
   const n = log.length;
@@ -463,8 +473,8 @@ function drawTrend(data) {
     <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2"/>
     <circle cx="${x(n - 1).toFixed(1)}" cy="${y(last.avg_mastery).toFixed(1)}" r="3" fill="var(--accent)"/>
   `;
-  const acc = summary.week_accuracy ? ` · 近7天正确率 ${summary.week_accuracy}%` : '';
-  hint.textContent = `最近 ${n} 次${acc} · 当前均值 ${last.avg_mastery}`;
+  const acc = summary.week_accuracy ? t('trend.weekAcc').replace('{p}', summary.week_accuracy) : '';
+  hint.textContent = t('trend.summary').replace('{n}', n).replace('{acc}', acc).replace('{m}', last.avg_mastery);
 }
 
 // ── D4 复习分析（压力图 + 卡组健康度）──
@@ -486,11 +496,11 @@ function drawAnalytics(data) {
     </div>`;
   }).join('');
   const total7 = series.reduce((n, s) => n + s.due, 0);
-  hint.textContent = total7 ? `未来 7 天共 ${total7} 道复习任务` : '未来 7 天没有复习任务';
+  hint.textContent = total7 ? t('dash.due7').replace('{n}', total7) : t('dash.due7None');
   const dh = document.getElementById('deckHealth');
   const h = (data && data.deck_health) || {};
   if (dh) dh.innerHTML = h.total ?
-    `新生 ${h.newborn} · 学习中 ${h.learning} · 成长中 ${h.mature}（共 ${h.total} 题，平均复习 ${h.avg_repetition} 次，平均掌握度 ${h.avg_mastery}）` :
+    t('dash.deckHealth').replace('{a}', h.newborn).replace('{b}', h.learning).replace('{c}', h.mature).replace('{t}', h.total).replace('{r}', h.avg_repetition).replace('{m}', h.avg_mastery) :
     t('msg.noData');
   drawPressure((data && data.pressure) || {});
   drawForgetPredict((data && data.forget_predict) || {});
@@ -546,7 +556,7 @@ function drawForgetCurve(f) {
   if (stats) {
     const total = f.buckets.reduce((a, b) => a + b.count, 0);
     stats.innerHTML = total
-      ? `已统计 ${total} 张 FSRS 卡 · 平均稳定度 ${f.avg_stability || 0} 天 · <span class="text-muted">绿点=实测遗忘率（越低越牢），蓝线=预测曲线，黄虚线=目标保持率</span>`
+      ? t('fsrs.stats').replace('{n}', total).replace('{s}', f.avg_stability || 0) + '<span class="text-muted">' + t('fsrs.legend') + '</span>'
       : '<span class="text-muted">' + t('msg.noFsrs') + '</span>';
   }
 }
@@ -610,21 +620,21 @@ function drawStubborn(list) {
     const rate = p.total_reviews ? Math.round(p.miss_count / p.total_reviews * 100) : 0;
     return `<div class="flex-between mb-8">
       <a href="#" onclick="event.preventDefault();viewProblem(${p.id});return false;">${escapeHtml(p.title)}</a>
-      <span class="text-muted">错 ${p.miss_count} 次 · 再错率 ${rate}% · 掌握度 ${p.mastery}/5</span>
+      <span class="text-muted">${t('forgetting.missed').replace('{n}', p.miss_count).replace('{p}', rate).replace('{m}', p.mastery)}</span>
     </div>`;
-  }).join('') + '<p class="hint-text mt-8">再错率 = 评分 ≤2 的复习占比；建议对这些题做「错因专项」+ 变式练习。</p>';
+  }).join('') + '<p class="hint-text mt-8">' + t('stubborn.hint') + '</p>';
 }
 
 // ── P0 复习压力指数（PI）──
 function drawPressure(p) {
   const el = document.getElementById('pressureCard');
   if (!el) return;
-  const color = p.level === '高' ? 'var(--danger,#ef4444)' : p.level === '中' ? 'var(--warning)' : 'var(--success)';
+  const color = p.level === t('pressure.high') ? 'var(--danger,#ef4444)' : p.level === t('pressure.mid') ? 'var(--warning)' : 'var(--success)';
   el.innerHTML = p.total == null ? '—' :
-    `<div class="flex-between"><span class="text-sm">压力分 <b style="color:${color}">${p.score}</b>（${p.level}）</span>
-     <span class="text-sm text-muted">逾期 ${p.overdue} · 今日 ${p.today} · 明日 ${p.tomorrow} · 合计约 ${p.est_minutes} 分钟</span></div>
+    `<div class="flex-between"><span class="text-sm">${t('pressure.score').replace('{s}', p.score)} <b style="color:${color}">${p.level}</b></span>
+     <span class="text-sm text-muted">${t('pressure.detail').replace('{o}', p.overdue).replace('{t}', p.today).replace('{tm}', p.tomorrow).replace('{e}', p.est_minutes)}</span></div>
      <div class="error-bar-track mt-8"><div class="error-bar-fill" style="width:${Math.min(100, p.score)}%;background:${color}"></div></div>
-     <p class="hint-text mt-8">${p.overdue > 0 ? `⚠ 有 ${p.overdue} 题逾期：先清逾期（系统已自动缩短逾期间隔），再按优先级复习。` : '当前无逾期，保持节奏即可。'}</p>`;
+     <p class="hint-text mt-8">${p.overdue > 0 ? t('pressure.overdue').replace('{n}', p.overdue) : t('pressure.noOverdue')}</p>`;
 }
 
 // ── P0 遗忘预测（FSRS R 值）──
@@ -634,9 +644,9 @@ function drawForgetPredict(f) {
   if (!f.count) { el.innerHTML = t('msg.noRisk'); return; }
   const pct = (r) => (r * 100).toFixed(0) + '%';
   el.innerHTML =
-    `<div class="text-sm">近期 ${f.count} 题待复习 · 平均检索概率 ${pct(f.avg_r)} · 高危(R&lt;50%) ${f.high_risk} · 中危(50-70%) ${f.medium_risk}</div>
-     ${f.top && f.top.length ? `<div class="mt-8 text-sm">最易遗忘：${f.top.map(t => `<a href="#" onclick="event.preventDefault();viewProblem(${t.problem_id});return false;">${escapeHtml(t.title)}（R=${pct(t.r)}）</a>`).join('、')}</div>` : ''}
-     <p class="hint-text mt-8">R = 按 FSRS 预测的「明天还记得」概率，R 越低越该先复习。数据随 FSRS 参数个性化而更准。</p>`;
+    `<div class="text-sm">${t('forget.overview').replace('{n}', f.count).replace('{r}', pct(f.avg_r)).replace('{h}', f.high_risk).replace('{m}', f.medium_risk)}</div>
+     ${f.top && f.top.length ? `<div class="mt-8 text-sm">${t('forget.top')}：${f.top.map(t => `<a href="#" onclick="event.preventDefault();viewProblem(${t.problem_id});return false;">${escapeHtml(t.title)}（R=${pct(t.r)}）</a>`).join('、')}</div>` : ''}
+     <p class="hint-text mt-8">${t('forget.rehint')}</p>`;
 }
 
 // ── P0 今日任务清单 ──
@@ -647,7 +657,7 @@ function drawTodayTasks(tasks) {
   const icons = { review: '📚', error_focus: '🎯', exam: '🏃', done: '✅' };
   el.innerHTML = tasks.map(t =>
     `<div class="flex-between mb-8"><span class="text-sm">${icons[t.kind] || ''} ${escapeHtml(t.label)}</span>
-     ${t.kind === 'review' && t.count ? `<a class="btn btn-secondary btn-sm" href="#review">去复习</a>` : ''}</div>`
+     ${t.kind === 'review' && t.count ? `<a class="btn btn-secondary btn-sm" href="#review">${t('task.goReviewBtn')}</a>` : ''}</div>`
   ).join('');
 }
 
@@ -663,10 +673,10 @@ function drawErrorDist(list) {
     return `<div class="error-bar-row">
       <span class="text-sm" style="min-width:88px">${escapeHtml(e.label)}</span>
       <span class="error-bar-track"><span class="error-bar-fill" style="width:${pct}%;background:${colors[Math.round(e.avg_mastery)] || '#94a3b8'}"></span></span>
-      <span class="text-sm text-muted" style="min-width:52px;text-align:right">${e.count} 题 · ${pct}%</span>
+      <span class="text-sm text-muted" style="min-width:52px;text-align:right">${t('errDist.item').replace('{n}', e.count).replace('{p}', pct)}</span>
     </div>`;
   }).join('');
-  el.insertAdjacentHTML('beforeend', '<p class="hint-text mt-8">条形颜色 = 该错因的平均掌握度（红低绿高）</p>');
+  el.insertAdjacentHTML('beforeend', '<p class="hint-text mt-8">' + t('errDist.hint') + '</p>');
 }
 
 // ── 错题（真分页 + 搜索 + 排序）──
@@ -695,11 +705,11 @@ async function loadProblems(page = 1) {
     problemPages = data.pages || 1;
     const items = data.items || data;
     if (!items.length) {
-      listEl.innerHTML = '<div class="empty"><p>暂无题目，点击"新增题目"开始</p></div>';
+      listEl.innerHTML = '<div class="empty"><p>' + t('detail.emptyList') + '</p></div>';
     } else {
       listEl.innerHTML = items.map(p => `
         <div class="list-item" style="display:flex;gap:10px;align-items:flex-start">
-          <input type="checkbox" style="margin-top:3px;accent-color:var(--accent)" onclick="event.stopPropagation();toggleBatch(${p.id},this.checked)" aria-label="选择题目">
+          <input type="checkbox" style="margin-top:3px;accent-color:var(--accent)" onclick="event.stopPropagation();toggleBatch(${p.id},this.checked)" aria-label="${t('detail.pickAria')}">
           <div style="flex:1" onclick="viewProblem(${p.id})">
             <div class="list-item-header">
               <span class="list-item-title">${p.starred ? '⭐ ' : ''}${escapeHtml(p.title)}${miniTrendDots(p.recent_results)}</span>
@@ -717,9 +727,9 @@ function renderPager() {
   const pager = document.getElementById('pager');
   if (problemPages <= 1) { pager.innerHTML = ''; return; }
   pager.innerHTML = `
-    <button class="btn btn-secondary btn-sm" ${problemPage <= 1 ? 'disabled' : ''} onclick="loadProblems(${problemPage - 1})">上一页</button>
+    <button class="btn btn-secondary btn-sm" ${problemPage <= 1 ? 'disabled' : ''} onclick="loadProblems(${problemPage - 1})">${t('pager.prev')}</button>
     <span class="text-sm text-muted">${problemPage} / ${problemPages}</span>
-    <button class="btn btn-secondary btn-sm" ${problemPage >= problemPages ? 'disabled' : ''} onclick="loadProblems(${problemPage + 1})">下一页</button>
+    <button class="btn btn-secondary btn-sm" ${problemPage >= problemPages ? 'disabled' : ''} onclick="loadProblems(${problemPage + 1})">${t('pager.next')}</button>
   `;
 }
 
@@ -729,8 +739,8 @@ async function viewProblem(id) {
     document.getElementById('modalTitle').textContent = (p.starred ? '⭐ ' : '') + p.title;
     let html = `
       <div class="flex gap-8 mb-8">
-        <span class="tag tag-blue">${escapeHtml(p.course || '未分类')}</span>
-        <span class="tag tag-gray">${escapeHtml(p.topic || '无知识点')}</span>
+        <span class="tag tag-blue">${escapeHtml(p.course || t('detail.noCourse'))}</span>
+        <span class="tag tag-gray">${escapeHtml(p.topic || t('detail.noTopic'))}</span>
         ${masteryTag(p.mastery)}
       </div>`;
     if (Array.isArray(p.tags) && p.tags.length) {
@@ -740,64 +750,64 @@ async function viewProblem(id) {
     // A2 先修告警：绑定概念的先修掌握度低时提示
     if (Array.isArray(p.prereq_warnings) && p.prereq_warnings.length) {
       html += `<div style="border:1px solid var(--warning);background:var(--warning-light,rgba(240,180,60,.12));border-radius:8px;padding:10px 12px;margin-bottom:12px">
-        <div style="font-size:13px;font-weight:600;color:var(--warning);margin-bottom:4px">⚠ 先修概念掌握度偏低</div>
+        <div style="font-size:13px;font-weight:600;color:var(--warning);margin-bottom:4px">${t('detail.prereqWarn')}</div>
         ${p.prereq_warnings.map(w =>
-          `<span class="tag tag-warn" style="cursor:pointer;margin:2px" title="点击查看先修相关错题" onclick="openPrereqMode(${w.concept_id})">${escapeHtml(w.name)} ${w.mastery}%</span>`).join('')}
-        <div class="text-sm text-muted" style="margin-top:4px">建议先巩固先修概念再做本题（一键「先修模式」可过滤相关历史错题）</div>
+          `<span class="tag tag-warn" style="cursor:pointer;margin:2px" title="${t('detail.prereqTitle')}" onclick="openPrereqMode(${w.concept_id})">${escapeHtml(w.name)} ${w.mastery}%</span>`).join('')}
+        <div class="text-sm text-muted" style="margin-top:4px">${t('detail.prereqAdvice')}</div>
       </div>`;
     }
     html += `<div class="card" style="border-color:var(--border);margin-bottom:12px">
-      <div class="card-title">题目内容</div>
+      <div class="card-title">${t('detail.content')}</div>
       <p class="text-mono text-sm" style="white-space:pre-wrap">${escapeHtml(p.content)}</p>
-      ${(p.media_list || []).map(m => `<img class="photo-full" src="/${escapeHtml(m)}" alt="题目图片" onclick="window.open('/${escapeHtml(m)}','_blank')">`).join('')}
+      ${(p.media_list || []).map(m => `<img class="photo-full" src="/${escapeHtml(m)}" alt="${t('common.photoAlt')}" onclick="window.open('/${escapeHtml(m)}','_blank')">`).join('')}
     </div>`;
     if (p.my_attempt) {
       html += `<div class="card" style="border-color:var(--border);margin-bottom:12px">
-        <div class="card-title">我的尝试</div>
+        <div class="card-title">${t('detail.myAttempt')}</div>
         <p class="text-mono text-sm" style="white-space:pre-wrap">${escapeHtml(p.my_attempt)}</p>
       </div>`;
     }
-    html += `<div class="card-title mt-16">分级提示</div>
+    html += `<div class="card-title mt-16">${t('detail.hintsTitle')}</div>
       <div class="flex gap-12 mb-8">
-        <button class="btn btn-secondary btn-sm" onclick="getHint(${id},1)" id="hint1btn">① 关键词</button>
-        <button class="btn btn-secondary btn-sm" onclick="getHint(${id},2)" id="hint2btn">② 方向/公式</button>
-        <button class="btn btn-secondary btn-sm" onclick="getHint(${id},3)" id="hint3btn">③ 解题框架</button>
-        <button class="btn btn-secondary btn-sm" onclick="getHint(${id},4)" id="hint4btn">④ 全解析</button>
+        <button class="btn btn-secondary btn-sm" onclick="getHint(${id},1)" id="hint1btn">${t('detail.hint1')}</button>
+        <button class="btn btn-secondary btn-sm" onclick="getHint(${id},2)" id="hint2btn">${t('detail.hint2')}</button>
+        <button class="btn btn-secondary btn-sm" onclick="getHint(${id},3)" id="hint3btn">${t('detail.hint3')}</button>
+        <button class="btn btn-secondary btn-sm" onclick="getHint(${id},4)" id="hint4btn">${t('detail.hint4')}</button>
       </div>
       <div id="hintsArea"></div>`;
     if (p.hints && p.hints.length) {
       p.hints.forEach(h => {
-        html += `<div class="hint-card"><h4>第 ${h.level} 级提示</h4><p>${escapeHtml(h.content)}</p></div>`;
+        html += `<div class="hint-card"><h4>${t('detail.hintLevel').replace('{l}', h.level)}</h4><p>${escapeHtml(h.content)}</p></div>`;
       });
     }
-    html += `<div class="card-title mt-16">一题多解</div>
+    html += `<div class="card-title mt-16">${t('detail.methodsTitle')}</div>
       <div class="flex gap-12 mb-8">
-        <button class="btn btn-secondary btn-sm" onclick="addMethod(${id})">+ 添加解法</button>
+        <button class="btn btn-secondary btn-sm" onclick="addMethod(${id})">${t('detail.addMethod')}</button>
       </div>
       <div id="methodsArea">${renderMethods(p.methods || [], id)}</div>
-      <div class="card-title mt-16">举一反三（变式题）</div>
+      <div class="card-title mt-16">${t('detail.variantsTitle')}</div>
       <div class="flex gap-12 mb-8">
-        <button class="btn btn-secondary btn-sm" onclick="generateVariants(${id})" id="genVariantsBtn">生成 3 道变式</button>
-        <button class="btn btn-primary btn-sm hidden" onclick="saveVariants(${id})" id="saveVariantsBtn">确认保存变式</button>
+        <button class="btn btn-secondary btn-sm" onclick="generateVariants(${id})" id="genVariantsBtn">${t('detail.genVariants')}</button>
+        <button class="btn btn-primary btn-sm hidden" onclick="saveVariants(${id})" id="saveVariantsBtn">${t('detail.saveVariants')}</button>
       </div>
       <div id="variantsArea"></div>
       <div id="savedVariants"></div>
-      <div class="card-title mt-16">Feynman 口述反转</div>
-      <p class="text-sm text-muted" style="margin-bottom:8px">向新手讲解本题概念 → 对照解析找漏点 → 生成自评表，漏点进入复习队列优先重考</p>
+      <div class="card-title mt-16">${t('detail.feynmanTitle')}</div>
+      <p class="text-sm text-muted" style="margin-bottom:8px">${t('detail.feynmanDesc')}</p>
       <div class="flex gap-12 mb-8">
-        <button class="btn btn-secondary btn-sm" onclick="startFeynman(${id})">开始口述讲解</button>
+        <button class="btn btn-secondary btn-sm" onclick="startFeynman(${id})">${t('detail.startFeynman')}</button>
       </div>
       <div id="feynmanReview"></div>`;
     if (p.feynman_self_review) renderFeynmanReview(p.feynman_self_review);
     renderSavedVariants(p.variants);
     html += `<div class="flex gap-12 mt-16">
-      <button class="btn btn-secondary btn-sm" onclick="editProblem(${id})">编辑</button>
-      <button class="btn btn-secondary btn-sm" onclick="toggleStar(${id})">${p.starred ? '★ 已收藏' : '☆ 收藏'}</button>
-      <button class="btn btn-danger btn-sm" onclick="deleteProblem(${id})">删除</button>
+      <button class="btn btn-secondary btn-sm" onclick="editProblem(${id})">${t('detail.edit')}</button>
+      <button class="btn btn-secondary btn-sm" onclick="toggleStar(${id})">${p.starred ? t('detail.starred') : t('detail.star')}</button>
+      <button class="btn btn-danger btn-sm" onclick="deleteProblem(${id})">${t('prob.delete')}</button>
     </div>
     <div id="problemHistory" class="mt-16"></div>
     <div id="relatedProblems" class="mt-16"></div>
-    <p class="text-sm text-muted mt-12" style="opacity:0.6">快捷键：1/2/3/4=提示  s=收藏  e=编辑  d=删除</p>`;
+    <p class="text-sm text-muted mt-12" style="opacity:0.6">${t('detail.shortcut')}</p>`;
     document.getElementById('modalBody').innerHTML = html;
     renderMath(document.getElementById('modalBody'));
     openModal('problemModal');
@@ -827,11 +837,11 @@ async function getHint(id, level) {
   const btn = document.getElementById(`hint${level}btn`);
   btn.disabled = true; btn.textContent = t('msg.loading');
   const area = document.getElementById('hintsArea');
-  const levelName = '第' + '一二三四'[level - 1] + '级提示';
-  const diagnoseHtml = (on) => on ? '<p class="hint-text" style="color:var(--warning)">⚠ 上次复习未通过：若还是卡住，建议先看「薄弱知识点」页重练概念，再回本题（诊断门）。</p>' : '';
+  const levelName = t('hint.levelName').replace('{n}', level);
+  const diagnoseHtml = (on) => on ? '<p class="hint-text" style="color:var(--warning)">' + t('hint.diagnose') + '</p>' : '';
   const card = document.createElement('div');
   card.className = 'hint-card';
-  card.innerHTML = `<h4>${levelName} <span class="tag tag-green">AI</span> <span class="text-muted text-sm">（流式）</span></h4><p id="hintStreamText"></p>`;
+  card.innerHTML = `<h4>${levelName} <span class="tag tag-green">AI</span> <span class="text-muted text-sm">${t('hint.streaming')}</span></h4><p id="hintStreamText"></p>`;
   area.appendChild(card);
   const streamText = card.querySelector('#hintStreamText');
   // C7 SSE 重连：单次流读取，断流抛错由外层重试
@@ -843,13 +853,13 @@ async function getHint(id, level) {
     });
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
-      throw new Error(err.error || `请求失败 (${r.status})`);
+      throw new Error(err.error || t('msg.requestFail') + ` (${r.status})`);
     }
     const ctype = r.headers.get('Content-Type') || '';
     if (!ctype.includes('text/event-stream')) {
       const data = await r.json();
       const srcTag = data.source === 'ai' ? '<span class="tag tag-green">AI</span>' :
-                     data.source === 'fallback' ? '<span class="tag tag-amber">降级</span>' : '<span class="tag tag-gray">缓存</span>';
+                     data.source === 'fallback' ? '<span class="tag tag-amber">' + t('hint.fallbackTag') + '</span>' : '<span class="tag tag-gray">' + t('hint.cacheTag') + '</span>';
       card.querySelector('.tag-green').textContent = srcTag.replace(/<[^>]+>/g, '').trim();
       streamText.textContent = data.content || streamText.textContent;
       if (data.diagnose) card.insertAdjacentHTML('afterbegin', diagnoseHtml(true));
@@ -894,9 +904,9 @@ async function getHint(id, level) {
           if (payload.partial) streamText.textContent = payload.partial;
           if (payload.fallback) {
             streamText.textContent = payload.fallback;
-            card.querySelector('.tag-green').textContent = '降级';
+            card.querySelector('.tag-green').textContent = t('hint.fallbackTag');
             card.querySelector('.tag-green').className = 'tag tag-amber';
-            toast('AI 流式输出中断，已显示离线提示', 'warn');
+            toast(t('toast.aiFormat'), 'warn');
           }
           done = true;
         }
@@ -911,16 +921,16 @@ async function getHint(id, level) {
         ok = await streamOnce();
       } catch (e) {
         if (attempt < 3 && streamText.textContent.length) {
-          toast(`流式连接中断，正在重连（${attempt}/2）...`, 'warn');
+          toast(t('toast.reconnect').replace('{n}', attempt), 'warn');
           await new Promise(res => setTimeout(res, 800));
         } else if (attempt >= 3) {
-          toast('流式连接中断，重连失败', 'error');
+          toast(t('toast.reconnectFail'), 'error');
         } else {
           throw e;
         }
       }
     }
-    if (!ok) toast('流式连接中断', 'error');
+    if (!ok) toast(t('toast.streamLost'), 'error');
     finishHintBtn(btn, levelName);
   } catch(e) {
     toast(e.message, 'error'); btn.disabled = false; btn.textContent = levelName;
@@ -928,7 +938,7 @@ async function getHint(id, level) {
 }
 
 function finishHintBtn(btn, levelName) {
-  btn.textContent = '已查看'; btn.style.opacity = '0.5';
+  btn.textContent = t('hint.viewed'); btn.style.opacity = '0.5';
 }
 
 function openProblemModal() { editProblem(null); }
@@ -937,7 +947,7 @@ async function editProblem(id) {
   const modal = document.getElementById('editModal');
   const titleEl = document.getElementById('editModalTitle');
   if (id) {
-    titleEl.textContent = '编辑题目';
+    titleEl.textContent = t('edit.title');
     try {
       const p = await api(`/api/problems/${id}`);
       document.getElementById('editId').value = p.id;
@@ -946,7 +956,7 @@ async function editProblem(id) {
       document.getElementById('editTopic').value = p.topic || '';
       document.getElementById('editContent').value = p.content || '';
       document.getElementById('editAttempt').value = p.my_attempt || '';
-      document.getElementById('editErrorType').value = p.error_type || '待诊断';
+      document.getElementById('editErrorType').value = p.error_type || t('common.pendingDiag');
       document.getElementById('editMastery').value = p.mastery || 1;
       document.getElementById('editStarred').checked = p.starred === 1;
       currentTags = Array.isArray(p.tags) ? p.tags.map(t => ({ text: String(t), pending: p.tags_status === 'suggested' })) : [];
@@ -955,10 +965,10 @@ async function editProblem(id) {
       renderEditPhotos(Array.isArray(p.media_list) ? p.media_list : []);
     } catch(e) { toast(e.message, 'error'); return; }
   } else {
-    titleEl.textContent = '新增题目';
+    titleEl.textContent = t('edit.newTitle');
     document.getElementById('editId').value = '';
     ['editTitle','editCourse','editTopic','editContent','editAttempt'].forEach(i => document.getElementById(i).value = '');
-    document.getElementById('editErrorType').value = '待诊断';
+    document.getElementById('editErrorType').value = t('common.pendingDiag');
     document.getElementById('editMastery').value = 1;
     currentTags = [];
     renderTags();
@@ -987,7 +997,7 @@ function checkDuplicates() {
       if (!r.duplicates || !r.duplicates.length) return;
       const links = r.duplicates.map(d =>
         `<a href="#" onclick="event.preventDefault();viewProblem(${d.id});return false;">#${d.id}（${(d.similarity*100).toFixed(0)}%）</a>`).join('、');
-      el.innerHTML = `⚠ 发现 ${r.duplicates.length} 道相似题：${links}`;
+      el.innerHTML = t('dup.found').replace('{n}', r.duplicates.length).replace('{l}', links);
     } catch(e) { /* 静默 */ }
   }, 800);
 }
@@ -997,10 +1007,10 @@ function startVoiceInput(targetId) {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   const btn = document.getElementById('voiceBtn');
   const ta = document.getElementById(targetId);
-  if (!SR) { toast('当前浏览器不支持语音输入（需 Chrome/Edge）', 'warn'); return; }
+  if (!SR) { toast(t('toast.noVoice'), 'warn'); return; }
   if (btn.dataset.rec === '1') {
     btn.dataset.rec = '0';
-    btn.textContent = '🎤 语音输入';
+    btn.textContent = t('voice.start');
     if (_rec) { _rec.stop(); _rec = null; }
     return;
   }
@@ -1009,7 +1019,7 @@ function startVoiceInput(targetId) {
   rec.lang = 'zh-CN';
   rec.interimResults = true;
   btn.dataset.rec = '1';
-  btn.textContent = '⏺ 录音中…（点此停止）';
+  btn.textContent = t('voice.recording');
   rec.onresult = (ev) => {
     let text = '';
     for (let i = 0; i < ev.results.length; i++) text += ev.results[i][0].transcript;
@@ -1018,12 +1028,12 @@ function startVoiceInput(targetId) {
   rec.onend = () => {
     _rec = null;
     btn.dataset.rec = '0';
-    btn.textContent = '🎤 语音输入';
+    btn.textContent = t('voice.start');
   };
   rec.onerror = (e) => {
-    if (e.error !== 'aborted') toast('语音识别失败：' + e.error, 'error');
+    if (e.error !== 'aborted') toast(t('voice.fail') + ': ' + e.error, 'error');
     btn.dataset.rec = '0';
-    btn.textContent = '🎤 语音输入';
+    btn.textContent = t('voice.start');
   };
   rec.start();
 }
@@ -1043,7 +1053,7 @@ async function saveProblem() {
     tags: currentTags.map(t => t.text).filter(Boolean),
     media_path: document.getElementById('editMediaPath').value,
   };
-  if (!body.title.trim() || !body.content.trim()) { toast('标题和题目内容不能为空', 'error'); return; }
+  if (!body.title.trim() || !body.content.trim()) { toast(t('toast.titleRequired'), 'error'); return; }
   try {
     if (id) {
       await api(`/api/problems/${id}`, { method: 'PUT', body });
@@ -1057,7 +1067,7 @@ async function saveProblem() {
 }
 
 async function deleteProblem(id) {
-  const ok = await confirmDialog('确定删除这道题目？相关提示和复习记录也会被删除。');
+  const ok = await confirmDialog(t('confirm.deleteProblem'));
   if (!ok) return;
   let cancelled = false;
   const toastEl = document.createElement('div');
@@ -1067,13 +1077,13 @@ async function deleteProblem(id) {
   const undoLink = document.createElement('a');
   undoLink.href = '#';
   undoLink.style.cssText = 'color:#fff;text-decoration:underline;cursor:pointer';
-  undoLink.textContent = '撤销';
+  undoLink.textContent = t('undo');
   undoLink.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
     cancelled = true;
     toastEl.remove();
-    toast('已取消删除', 'success');
+    toast(t('msg.deleteCancelled'), 'success');
   });
   toastEl.appendChild(document.createTextNode(t('msg.deleted') + ' · '));
   toastEl.appendChild(undoLink);
@@ -1093,7 +1103,7 @@ async function deleteProblem(id) {
 async function toggleStar(id) {
   try {
     await api('/api/problems/batch', { method: 'POST', body: { ids: [id], action: 'star' } });
-    toast('已切换收藏');
+    toast(t('msg.starToggled'));
     closeModal('problemModal'); viewProblem(id);
   } catch(e) { toast(e.message, 'error'); }
 }
@@ -1103,11 +1113,11 @@ async function loadHistory(id) {
     const history = await api(`/api/problems/${id}/history`);
     const el = document.getElementById('problemHistory');
     if (!history.length) { el.innerHTML = ''; return; }
-    el.innerHTML = `<div class="card-title">复习轨迹</div>` +
+    el.innerHTML = `<div class="card-title">${t('history.title')}</div>` +
       history.map(h => {
         const labels = {1:'label.flash1',2:'label.flash2',3:'label.flash3',4:'label.flash4'};
         const cls = h.result === '4' ? 'tag-green' : h.result === '3' ? 'tag-blue' : h.result === '2' ? 'tag-amber' : 'tag-red';
-        return `<span class="tag ${cls}" style="margin:1px 4px" title="${h.due_date} · 间隔${h.interval_days}天">${t(labels[h.result]||'')||h.result}</span>`;
+        return `<span class="tag ${cls}" style="margin:1px 4px" title="${t('history.intervalTitle').replace('{d}', h.due_date).replace('{i}', h.interval_days)}">${t(labels[h.result]||'')||h.result}</span>`;
       }).join(' ');
   } catch(e) {}
 }
@@ -1117,7 +1127,7 @@ async function loadRelated(id) {
     const related = await api(`/api/problems/${id}/related`);
     const el = document.getElementById('relatedProblems');
     if (!related.length) { el.innerHTML = ''; return; }
-    el.innerHTML = `<div class="card-title">同知识点题目</div>` +
+    el.innerHTML = `<div class="card-title">${t('related.title')}</div>` +
       related.map(r => `<span class="tag tag-gray" style="cursor:pointer;margin:1px 4px" onclick="closeModal('problemModal');viewProblem(${r.id})">${escapeHtml(r.title)}</span>`).join('');
   } catch(e) {}
 }
@@ -1140,12 +1150,12 @@ async function batchAction(action) {
   const ids = Array.from(_batchSelected);
   if (!ids.length) return;
   if (action === 'delete') {
-    const ok = await confirmDialog(`确定批量删除 ${ids.length} 道题目？`);
+    const ok = await confirmDialog(t('confirm.batchDelete').replace('{n}', ids.length));
     if (!ok) return;
   }
   try {
     await api('/api/problems/batch', { method: 'POST', body: { ids, action } });
-    toast(`已处理 ${ids.length} 题`);
+    toast(t('msg.processedN').replace('{n}', ids.length));
     _batchSelected.clear();
     document.getElementById('batchBar').classList.add('hidden');
     loadProblems(problemPage);
@@ -1161,8 +1171,8 @@ async function loadTodaySummary() {
     const errParts = Object.entries(s.error_counts || {})
       .map(([k, v]) => `${k}:${v}`).join('、');
     el.innerHTML = `${escapeHtml(s.tip)}` +
-      (s.due_tomorrow > 0 ? `<br><span class="text-muted">明日到期 ${s.due_tomorrow} 题</span>` : '') +
-      (errParts ? `<br><span class="text-muted">错因分布：${escapeHtml(errParts)}</span>` : '');
+      (s.due_tomorrow > 0 ? `<br><span class="text-muted">${t('today.dueTomorrow').replace('{n}', s.due_tomorrow)}</span>` : '') +
+      (errParts ? `<br><span class="text-muted">${t('today.errDist').replace('{s}', escapeHtml(errParts))}</span>` : '');
   } catch(e) { /* 复盘卡片非关键路径，失败静默 */ }
 }
 
@@ -1181,7 +1191,7 @@ async function loadReviews() {
     document.getElementById('interleaveToggle').checked = interleave;
     const list = await api('/api/reviews' + mode);
     if (!list.length) {
-      el.innerHTML = '<div class="empty"><p>今天没有待复习的题目，去看看概览页吧</p></div>';
+      el.innerHTML = '<div class="empty"><p>' + t('review.noneToday') + '</p></div>';
       return;
     }
     const today = new Date().toISOString().slice(0, 10);
@@ -1190,7 +1200,7 @@ async function loadReviews() {
       <div style="height:8px;background:var(--border);border-radius:4px;overflow:hidden;margin-bottom:10px">
         <div style="height:100%;width:0%;background:var(--accent);border-radius:4px;transition:width .3s" id="reviewProgressBar"></div>
       </div>
-      <span class="text-sm text-muted" id="reviewProgressText">今日到期 ${dueCount} 题 · 完成 0</span>
+      <span class="text-sm text-muted" id="reviewProgressText">${t('review.dueProgress').replace('{n}', dueCount).replace('{m}', 0)}</span>
     `;
     let completed = 0;
     const updateProgress = () => {
@@ -1198,25 +1208,25 @@ async function loadReviews() {
       const bar = document.getElementById('reviewProgressBar');
       if (bar) bar.style.width = (completed / (dueCount || 1) * 100).toFixed(0) + '%';
       const text = document.getElementById('reviewProgressText');
-      if (text) text.textContent = `今日到期 ${dueCount} 题 · 完成 ${completed}`;
+      if (text) text.textContent = t('review.dueProgress').replace('{n}', dueCount).replace('{m}', completed);
     };
     window._reviewUpdateProgress = updateProgress;
     el.innerHTML = list.map(r => `
       <div class="list-item">
         <div class="list-item-header">
-          <span class="list-item-title">${escapeHtml(r.title)}${r.variant_id ? ' <span class="tag tag-blue">变式</span>' : ''}${r.feynman_gaps ? ` <span class="tag tag-warn" title="Feynman 自评漏点未清，优先重考">Feynman 漏点×${r.feynman_gaps}</span>` : ''}</span>
+          <span class="list-item-title">${escapeHtml(r.title)}${r.variant_id ? ` <span class="tag tag-blue">${t('review.variantTag')}</span>` : ''}${r.feynman_gaps ? ` <span class="tag tag-warn" title="${t('review.feynmanGapTitle')}">${t('review.feynmanGapTag').replace('{n}', r.feynman_gaps)}</span>` : ''}</span>
           <span class="tag ${r.due_date <= today ? 'tag-red' : 'tag-gray'}">
-            ${r.due_date <= today ? '今日到期' : '即将到期'}
+            ${r.due_date <= today ? t('review.dueToday') : t('review.dueSoon')}
           </span>
         </div>
-        <div class="list-item-meta">${escapeHtml(r.course)} · ${escapeHtml(r.topic)} · 到期日: ${r.due_date} · 间隔: ${r.interval_days}天</div>
+        <div class="list-item-meta">${escapeHtml(r.course)} · ${escapeHtml(r.topic)} · ${t('review.dueLabel')}: ${r.due_date} · ${t('review.intervalLabel').replace('{n}', r.interval_days)}</div>
         <div class="flex gap-8 mt-12 flex-wrap">
-          <button class="btn btn-danger btn-sm" onclick="completeReview(${r.id},1)">忘记</button>
-          <button class="btn btn-secondary btn-sm" onclick="completeReview(${r.id},2)">模糊</button>
-          <button class="btn btn-secondary btn-sm" onclick="completeReview(${r.id},3)">基本正确</button>
-          <button class="btn btn-primary btn-sm" onclick="completeReview(${r.id},4)">完全掌握</button>
-          <button class="btn btn-secondary btn-sm" onclick="rescheduleReview(${r.id})">再复习一次</button>
-          <button class="btn btn-secondary btn-sm" onclick="viewProblem(${r.problem_id})">查看题目</button>
+          <button class="btn btn-danger btn-sm" onclick="completeReview(${r.id},1)">${t('rating.btn1')}</button>
+          <button class="btn btn-secondary btn-sm" onclick="completeReview(${r.id},2)">${t('rating.btn2')}</button>
+          <button class="btn btn-secondary btn-sm" onclick="completeReview(${r.id},3)">${t('rating.btn3')}</button>
+          <button class="btn btn-primary btn-sm" onclick="completeReview(${r.id},4)">${t('rating.btn4')}</button>
+          <button class="btn btn-secondary btn-sm" onclick="rescheduleReview(${r.id})">${t('review.again')}</button>
+          <button class="btn btn-secondary btn-sm" onclick="viewProblem(${r.problem_id})">${t('review.viewProblem')}</button>
         </div>
       </div>`).join('');
   } catch(e) { toast(e.message, 'error'); }
@@ -1226,7 +1236,7 @@ async function completeReview(id, rating) {
   try {
     const r = await api(`/api/reviews/${id}/complete`, { method: 'POST', body: { rating } });
     const labels = {1:'label.mark1',2:'label.mark2',3:'label.mark3',4:'label.mark4'};
-    toast(`${t(labels[rating])} · 下次复习: ${r.next_due} (${r.interval_days}天后)`);
+    toast(t('review.nextDue').replace('{r}', t(labels[rating])).replace('{d}', r.next_due).replace('{i}', r.interval_days));
     if (window._reviewUpdateProgress) window._reviewUpdateProgress();
     loadReviews();
     if (document.getElementById('page-dashboard').classList.contains('active')) loadDashboard();
@@ -1236,7 +1246,7 @@ async function completeReview(id, rating) {
 async function rescheduleReview(id) {
   try {
     await api(`/api/reviews/${id}/reschedule`, { method: 'PUT' });
-    toast('已提前到今天复习');
+    toast(t('msg.rescheduledToday'));
     loadReviews();
   } catch(e) { toast(e.message, 'error'); }
 }
@@ -1255,10 +1265,10 @@ function renderFeynmanReview(sr) {
   const el = document.getElementById('feynmanReview');
   if (!el || !sr) return;
   el.innerHTML = `<div style="border:1px solid var(--border);border-radius:8px;padding:10px;background:var(--surface)">
-    <div style="font-size:13px;font-weight:600;margin-bottom:6px">已保存自评表</div>
-    ${sr.gaps && sr.gaps.length ? `<div class="text-sm" style="margin-bottom:4px"><b style="color:var(--warning)">漏点：</b>${sr.gaps.map(g => `<span class="tag tag-warn" style="margin:2px">${escapeHtml(g)}</span>`).join('')}</div>` : ''}
-    ${sr.wrong && sr.wrong.length ? `<div class="text-sm" style="margin-bottom:4px"><b style="color:var(--danger,#ef4444)">讲错：</b>${sr.wrong.map(g => `<span class="tag tag-red" style="margin:2px">${escapeHtml(g)}</span>`).join('')}</div>` : ''}
-    ${sr.clear && sr.clear.length ? `<div class="text-sm"><b style="color:var(--success,#22c55e)">讲清：</b>${sr.clear.map(g => `<span class="tag tag-green" style="margin:2px">${escapeHtml(g)}</span>`).join('')}</div>` : ''}
+    <div style="font-size:13px;font-weight:600;margin-bottom:6px">${t('feyn.savedTitle')}</div>
+    ${sr.gaps && sr.gaps.length ? `<div class="text-sm" style="margin-bottom:4px"><b style="color:var(--warning)">${t('feyn.gaps')}</b>${sr.gaps.map(g => `<span class="tag tag-warn" style="margin:2px">${escapeHtml(g)}</span>`).join('')}</div>` : ''}
+    ${sr.wrong && sr.wrong.length ? `<div class="text-sm" style="margin-bottom:4px"><b style="color:var(--danger,#ef4444)">${t('feyn.wrong')}</b>${sr.wrong.map(g => `<span class="tag tag-red" style="margin:2px">${escapeHtml(g)}</span>`).join('')}</div>` : ''}
+    ${sr.clear && sr.clear.length ? `<div class="text-sm"><b style="color:var(--success,#22c55e)">${t('feyn.clear')}</b>${sr.clear.map(g => `<span class="tag tag-green" style="margin:2px">${escapeHtml(g)}</span>`).join('')}</div>` : ''}
   </div>`;
 }
 
@@ -1272,8 +1282,8 @@ async function startFeynman(problemId) {
     oralTurn = 1;
     document.getElementById('oralStartCard').classList.add('hidden');
     document.getElementById('oralChatCard').classList.remove('hidden');
-    document.getElementById('oralTopicDisplay').textContent = 'Feynman 口述反转';
-    document.getElementById('oralTurn').textContent = '第 1 / 3 步';
+    document.getElementById('oralTopicDisplay').textContent = t('detail.feynmanTitle');
+    document.getElementById('oralTurn').textContent = t('feyn.stepOf').replace('{n}', 1).replace('{m}', 3);
     document.getElementById('oralChat').innerHTML = `<div class="chat-msg assistant"><div class="bubble">${escapeHtml(r.reply)}</div></div>`;
     renderMath(document.getElementById('oralChat'));
     document.getElementById('oralAnswer').value = '';
@@ -1286,16 +1296,16 @@ async function showFeynmanSelfReview() {
   try {
     const r = await api(`/api/feynman/${oralSessionId}/self-review`);
     const sr = r.saved || r.draft;
-    if (!sr) { toast('自评表为空', 'error'); return; }
+    if (!sr) { toast(t('feyn.selfEmpty'), 'error'); return; }
     const chatEl = document.getElementById('oralChat');
     chatEl.innerHTML += `<div class="chat-msg assistant"><div class="bubble">
-      <div class="card-title" style="font-size:14px">自评表（确认后保存）</div>
-      ${sr.gaps && sr.gaps.length ? `<div class="text-sm"><b>漏点：</b>${sr.gaps.map(g => `<span class="tag tag-warn" style="margin:2px">${escapeHtml(g)}</span>`).join('')}</div>` : ''}
-      ${sr.wrong && sr.wrong.length ? `<div class="text-sm"><b>讲错：</b>${sr.wrong.map(g => `<span class="tag tag-red" style="margin:2px">${escapeHtml(g)}</span>`).join('')}</div>` : ''}
-      ${sr.clear && sr.clear.length ? `<div class="text-sm"><b>讲清：</b>${sr.clear.map(g => `<span class="tag tag-green" style="margin:2px">${escapeHtml(g)}</span>`).join('')}</div>` : ''}
+      <div class="card-title" style="font-size:14px">${t('feyn.reviewTitle')}</div>
+      ${sr.gaps && sr.gaps.length ? `<div class="text-sm"><b>${t('feyn.gaps')}</b>${sr.gaps.map(g => `<span class="tag tag-warn" style="margin:2px">${escapeHtml(g)}</span>`).join('')}</div>` : ''}
+      ${sr.wrong && sr.wrong.length ? `<div class="text-sm"><b>${t('feyn.wrong')}</b>${sr.wrong.map(g => `<span class="tag tag-red" style="margin:2px">${escapeHtml(g)}</span>`).join('')}</div>` : ''}
+      ${sr.clear && sr.clear.length ? `<div class="text-sm"><b>${t('feyn.clear')}</b>${sr.clear.map(g => `<span class="tag tag-green" style="margin:2px">${escapeHtml(g)}</span>`).join('')}</div>` : ''}
       <div class="flex gap-8 mt-8">
-        <button class="btn btn-primary btn-sm" onclick="confirmFeynmanSelfReview()">确认保存</button>
-        <button class="btn btn-secondary btn-sm" onclick="this.closest('.bubble').remove()">关闭</button>
+        <button class="btn btn-primary btn-sm" onclick="confirmFeynmanSelfReview()">${t('common.confirmSave')}</button>
+        <button class="btn btn-secondary btn-sm" onclick="this.closest('.bubble').remove()">${t('common.close')}</button>
       </div>
     </div></div>`;
     chatEl.scrollTop = chatEl.scrollHeight;
@@ -1311,7 +1321,7 @@ async function confirmFeynmanSelfReview() {
       gaps: sr.gaps || [], wrong: sr.wrong || [], clear: sr.clear || [],
     }});
     window._feynmanSr = null;
-    toast('自评表已保存，漏点将进入复习队列优先重考');
+    toast(t('feyn.savedToast'));
     _feynmanMode = false;
   } catch(e) { toast(e.message, 'error'); }
 }
@@ -1325,11 +1335,11 @@ function renderSavedVariants(variants) {
   if (!variants || !variants.length) { el.innerHTML = ''; return; }
   el.innerHTML = variants.map((v, i) => {
     const q = v.correct !== undefined && v.total !== undefined ?
-      ` <span class="tag ${v.correct / v.total >= 0.8 ? 'tag-green' : 'tag-amber'}">正确率 ${v.correct}/${v.total}</span>` : '';
-    return `<div class="hint-card"><h4>变式 ${i + 1}（${escapeHtml(v.mode || '未分类')}）${q}</h4>
+      ` <span class="tag ${v.correct / v.total >= 0.8 ? 'tag-green' : 'tag-amber'}">${t('variant.rate').replace('{c}', v.correct).replace('{t}', v.total)}</span>` : '';
+    return `<div class="hint-card"><h4>${t('variant.item').replace('{i}', i + 1).replace('{m}', escapeHtml(v.mode || t('variant.uncat')))}${q}</h4>
       <p>${escapeHtml(v.title)}</p>
       <p class="text-mono text-sm" style="white-space:pre-wrap">${escapeHtml(v.content)}</p>
-      <p class="text-sm text-muted">答案：${escapeHtml(v.answer || '—')}</p></div>`;
+      <p class="text-sm text-muted">${t('variant.answer').replace('{a}', escapeHtml(v.answer || '—'))}</p></div>`;
   }).join('');
 }
 
@@ -1342,13 +1352,13 @@ async function generateVariants(id) {
     const area = document.getElementById('variantsArea');
     area.innerHTML = draftVariants.map((v, i) => `
       <div class="hint-card">
-        <h4>${escapeHtml(v.mode || '变式')} ${i + 1}</h4>
+        <h4>${t('variant.draftItem').replace('{m}', escapeHtml(v.mode || t('review.variantTag'))).replace('{i}', i + 1)}</h4>
         <p>${escapeHtml(v.title)}</p>
         <p class="text-mono text-sm" style="white-space:pre-wrap">${escapeHtml(v.content)}</p>
-        <p class="text-sm text-muted">参考答案：${escapeHtml(v.answer || '—')}</p>
-      </div>`).join('') || '<p class="text-sm text-muted">未能生成变式</p>';
+        <p class="text-sm text-muted">${t('variant.ref').replace('{a}', escapeHtml(v.answer || '—'))}</p>
+      </div>`).join('') || '<p class="text-sm text-muted">' + t('variant.none') + '</p>';
     document.getElementById('saveVariantsBtn').classList.remove('hidden');
-    toast(r.source === 'local' ? '已用离线模板生成变式（未配置 AI 时自动降级）' : '已生成 3 道变式草稿，确认后才会保存');
+    toast(r.source === 'local' ? t('variant.genLocal') : t('variant.genDraft'));
   } catch(e) { toast(e.message, 'error'); } finally { btn.disabled = false; }
 }
 
@@ -1359,7 +1369,7 @@ async function saveVariants(id) {
     draftVariants = [];
     document.getElementById('variantsArea').innerHTML = '';
     document.getElementById('saveVariantsBtn').classList.add('hidden');
-    toast(`已保存 ${r.count} 道变式（共 ${r.total} 道）`);
+    toast(t('variant.saved').replace('{n}', r.count).replace('{t}', r.total));
     const p = await api(`/api/problems/${id}`);
     renderSavedVariants(p.variants);
   } catch(e) { toast(e.message, 'error'); }
@@ -1376,13 +1386,13 @@ async function draftOralCard() {
     const d = _oralDraft;
     const chatEl = document.getElementById('oralChat');
     chatEl.innerHTML += `<div class="chat-msg assistant"><div class="bubble">
-      <div class="card-title" style="font-size:14px">复习卡草稿</div>
-      <div class="text-sm"><b>标题：</b>${escapeHtml(d.title || '')}</div>
-      <div class="text-sm" style="white-space:pre-wrap"><b>题目：</b>${escapeHtml(d.content || '')}</div>
-      <div class="text-sm"><b>知识点：</b>${escapeHtml(d.topic || '')} · <b>错因：</b>${escapeHtml(d.error_type || '')}</div>
+      <div class="card-title" style="font-size:14px">${t('draft.cardTitle')}</div>
+      <div class="text-sm"><b>${t('draft.title')}</b>${escapeHtml(d.title || '')}</div>
+      <div class="text-sm" style="white-space:pre-wrap"><b>${t('draft.content')}</b>${escapeHtml(d.content || '')}</div>
+      <div class="text-sm">${t('draft.topicErr').replace('{t}', escapeHtml(d.topic || '')).replace('{e}', escapeHtml(d.error_type || ''))}</div>
       <div class="flex gap-8 mt-8">
-        <button class="btn btn-primary btn-sm" onclick="saveOralCard()">确认保存为错题</button>
-        <button class="btn btn-secondary btn-sm" onclick="this.closest('.bubble').remove()">不要</button>
+        <button class="btn btn-primary btn-sm" onclick="saveOralCard()">${t('draft.saveAs')}</button>
+        <button class="btn btn-secondary btn-sm" onclick="this.closest('.bubble').remove()">${t('common.discard')}</button>
       </div>
     </div></div>`;
     chatEl.scrollTop = chatEl.scrollHeight;
@@ -1394,12 +1404,12 @@ async function saveOralCard() {
   try {
     const d = _oralDraft;
     await api('/api/problems', { method: 'POST', body: {
-      title: d.title || '口试复盘', content: d.content || '', topic: d.topic || '',
-      error_type: d.error_type || '概念理解', my_attempt: d.my_attempt || '',
+      title: d.title || t('oral.cardTitle'), content: d.content || '', topic: d.topic || '',
+      error_type: d.error_type || t('oral.defaultErr'), my_attempt: d.my_attempt || '',
       tags: d.tags || [],
     }});
     _oralDraft = null;
-    toast('已保存为错题卡，可在「错题」页查看');
+    toast(t('oral.savedToast'));
   } catch(e) { toast(e.message, 'error'); }
 }
 
@@ -1410,15 +1420,15 @@ let oralTurn = 0;
 async function startOral() {
   _feynmanMode = false;
   const topic = document.getElementById('oralTopic').value.trim();
-  if (!topic) { toast('请输入口试主题', 'error'); return; }
+  if (!topic) { toast(t('oral.needTopic'), 'error'); return; }
   try {
     const r = await api('/api/oral/start', { method: 'POST', body: { topic } });
     oralSessionId = r.session_id;
     oralTurn = 1;
     document.getElementById('oralStartCard').classList.add('hidden');
     document.getElementById('oralChatCard').classList.remove('hidden');
-    document.getElementById('oralTopicDisplay').textContent = `主题: ${topic}`;
-    document.getElementById('oralTurn').textContent = `第 1 / 5 轮`;
+    document.getElementById('oralTopicDisplay').textContent = t('oral.topicDisplay').replace('{t}', topic);
+    document.getElementById('oralTurn').textContent = t('oral.roundOf').replace('{n}', 1).replace('{m}', 5);
     document.getElementById('oralChat').innerHTML = `<div class="chat-msg assistant"><div class="bubble">${escapeHtml(r.reply)}</div></div>`;
     renderMath(document.getElementById('oralChat'));
     document.getElementById('oralAnswer').value = '';
@@ -1431,7 +1441,7 @@ function showThinking() {
   const div = document.createElement('div');
   div.className = 'chat-msg assistant thinking';
   div.id = 'oralThinking';
-  div.innerHTML = '<div class="bubble">AI 思考中…</div>';
+  div.innerHTML = '<div class="bubble">' + t('oral.thinking') + '</div>';
   chatEl.appendChild(div);
   chatEl.scrollTop = chatEl.scrollHeight;
 }
@@ -1454,22 +1464,22 @@ async function respondOral() {
     renderMath(chatEl);
     chatEl.scrollTop = chatEl.scrollHeight;
     if (r.finished) {
-      document.getElementById('oralTurn').textContent = _feynmanMode ? 'Feynman 已完成' : '口试已结束';
-      document.getElementById('oralAnswer').placeholder = '已结束，可重新开始';
+      document.getElementById('oralTurn').textContent = _feynmanMode ? t('oral.feynDone') : t('oral.ended');
+      document.getElementById('oralAnswer').placeholder = t('oral.restartHint');
       if (_feynmanMode) {
         chatEl.innerHTML += `<div class="chat-msg assistant"><div class="bubble">
-          <button class="btn btn-primary btn-sm" onclick="showFeynmanSelfReview()">生成并确认自评表</button>
-          <span class="text-sm text-muted">漏点将标记到本题复习队列</span>
+          <button class="btn btn-primary btn-sm" onclick="showFeynmanSelfReview()">${t('oral.selfReviewBtn')}</button>
+          <span class="text-sm text-muted">${t('oral.gapHint')}</span>
         </div></div>`;
       } else {
         chatEl.innerHTML += `<div class="chat-msg assistant"><div class="bubble">
-          <button class="btn btn-primary btn-sm" onclick="draftOralCard()">生成复习卡草稿</button>
-          <span class="text-sm text-muted">将本场薄弱点转成一张错题卡（确认后才会保存）</span>
+          <button class="btn btn-primary btn-sm" onclick="draftOralCard()">${t('oral.draftBtn')}</button>
+          <span class="text-sm text-muted">${t('oral.draftHint')}</span>
         </div></div>`;
       }
       chatEl.scrollTop = chatEl.scrollHeight;
     } else {
-      document.getElementById('oralTurn').textContent = _feynmanMode ? `第 ${oralTurn + 1} / 3 步` : `第 ${oralTurn} / 5 轮`;
+      document.getElementById('oralTurn').textContent = _feynmanMode ? t('feyn.stepOf').replace('{n}', oralTurn + 1).replace('{m}', 3) : t('oral.roundOf').replace('{n}', oralTurn).replace('{m}', 5);
       document.getElementById('oralAnswer').disabled = false;
       document.getElementById('oralAnswer').focus();
     }
@@ -1503,7 +1513,7 @@ function drawErrorTrend(list) {
     const cls = up ? 'tag-red' : down ? 'tag-green' : 'tag-gray';
     return `<div class="flex-between mb-8">
       <span class="text-sm" style="min-width:88px">${escapeHtml(t.label)}</span>
-      <span class="text-sm text-muted" style="flex:1">近30天 ${t.recent_count} 题（${t.recent_pct}%） · 历史 ${t.total_pct}%</span>
+      <span class="text-sm text-muted" style="flex:1">${t('errTrend.range').replace('{n}', t.recent_count).replace('{p}', t.recent_pct).replace('{h}', t.total_pct)}</span>
       <span class="tag ${cls}">${arrow} ${up ? '+' : ''}${t.delta}%</span>
     </div>`;
   }).join('');
@@ -1513,20 +1523,20 @@ function drawErrorTrend(list) {
 function renderSprint(goal, stats) {
   const el = document.getElementById('sprintCard');
   if (!el) return;
-  if (!goal || !goal.exam_date) { el.innerHTML = '未设置考试日期（设置页 → 学习者档案）'; return; }
+  if (!goal || !goal.exam_date) { el.innerHTML = t('sprint.noGoal'); return; }
   const days = Math.ceil((new Date(goal.exam_date) - new Date()) / 86400000);
-  const target = goal.exam_target_score ? `目标 ${goal.exam_target_score} 分` : '';
+  const target = goal.exam_target_score ? t('sprint.target').replace('{s}', goal.exam_target_score) : '';
   const total = stats ? (stats.total || 0) : 0;
   const mastered = stats ? (stats.mastered || 0) : 0;
   const remaining = Math.max(0, total - mastered);
   let plan = '';
   if (days > 0 && remaining > 0) {
     const perDay = Math.ceil(remaining / days);
-    plan = `距考试 <b>${days} 天</b>，未掌握 <b>${remaining}</b> 题 → 每天至少 <b>${perDay}</b> 题`;
+    plan = t('sprint.plan').replace('{d}', days).replace('{r}', remaining).replace('{p}', perDay);
   } else if (days <= 0) {
-    plan = `<span class="tag tag-red">考试已到/已过</span>`;
+    plan = `<span class="tag tag-red">${t('sprint.passed')}</span>`;
   } else {
-    plan = '全部题目已掌握 🎉';
+    plan = t('sprint.done');
   }
   el.innerHTML = `<div class="text-sm">${plan}</div>
     <div class="text-sm text-muted mt-8">${escapeHtml(goal.exam_date || '')} ${escapeHtml(target)}</div>`;
@@ -1543,16 +1553,16 @@ async function loadProfile(dash) {
       `${escapeHtml(e.error_type)}×${e.count}`).join('、');
     const pace = p.pace || {};
     const goal = p.goal || {};
-    let goalText = '未设定目标';
+    let goalText = t('profile.noGoal');
     if (goal.exam_date) {
       const days = Math.ceil((new Date(goal.exam_date) - new Date()) / 86400000);
-      goalText = `考试 ${goal.exam_date}（剩 ${days} 天）` + (goal.exam_target_score ? `，目标 ${goal.exam_target_score} 分` : '');
+      goalText = t('profile.goalText').replace('{d}', goal.exam_date).replace('{n}', days) + (goal.exam_target_score ? '，' + t('sprint.target').replace('{s}', goal.exam_target_score) : '');
     }
     el.innerHTML =
-      `<b>知识点</b>：${topicLine || '暂无'}<br>` +
-      `<b>错因</b>：${errLine || '无'}<br>` +
-      `<b>节奏</b>：近7天复习 ${pace.week_reviews} 次、新增 ${pace.week_new_problems} 题，常活跃 ${pace.peak_hour} 时<br>` +
-      `<b>目标</b>：${escapeHtml(goalText)}`;
+      t('profile.topicLine').replace('{v}', topicLine || t('profile.noneTopics')) + '<br>' +
+      t('profile.errLine').replace('{v}', errLine || t('profile.noneErrors')) + '<br>' +
+      t('profile.paceLine').replace('{r}', pace.week_reviews).replace('{n}', pace.week_new_problems).replace('{h}', pace.peak_hour) + '<br>' +
+      t('profile.goalLine').replace('{v}', escapeHtml(goalText));
     document.getElementById('profExamDate').value = goal.exam_date || '';
     document.getElementById('profExamScore').value = goal.exam_target_score || '';
     renderSprint(goal, dash ? dash.stats : null);
@@ -1568,7 +1578,7 @@ async function saveProfile() {
         exam_target_score: document.getElementById('profExamScore').value,
       },
     });
-    toast('目标已更新');
+    toast(t('profile.saved'));
     loadProfile();
   } catch(e) { toast(e.message, 'error'); }
 }
@@ -1581,16 +1591,16 @@ async function printProblems() {
   try {
     const data = await api('/api/problems?' + params.toString());
     const items = data.items || data;
-    if (!items.length) { toast('暂无题目可打印', 'warn'); return; }
+    if (!items.length) { toast(t('print.noItems'), 'warn'); return; }
     const area = document.getElementById('printArea');
     const sorted = [...items].sort((a, b) => (b.mastery || 0) - (a.mastery || 0));
-    area.innerHTML = `<h2>物理错题集（共 ${items.length} 题，${new Date().toLocaleDateString()}）</h2>` +
+    area.innerHTML = `<h2>${t('print.bookTitle').replace('{n}', items.length).replace('{d}', new Date().toLocaleDateString())}</h2>` +
       sorted.map(p => `<div class="print-item">
-        <div class="print-title">${escapeHtml(p.title || '未命名')} · 掌握度 ${p.mastery}/5</div>
-        <div class="print-meta">${escapeHtml(p.course || '')} · ${escapeHtml(p.topic || '')} · 错因：${escapeHtml(p.error_type || '待诊断')}</div>
+        <div class="print-title">${t('print.pTitle').replace('{t}', escapeHtml(p.title || t('print.unnamed'))).replace('{m}', p.mastery)}</div>
+        <div class="print-meta">${t('print.meta').replace('{c}', escapeHtml(p.course || '')).replace('{t}', escapeHtml(p.topic || '')).replace('{e}', escapeHtml(p.error_type || t('common.pendingDiag')))}</div>
         <pre>${escapeHtml(p.content || '')}</pre>
-        ${p.my_attempt ? `<div class="print-hdr">我的尝试</div><pre>${escapeHtml(p.my_attempt)}</pre>` : ''}
-        ${p.fix_action ? `<div class="print-hdr">对策</div><pre>${escapeHtml(p.fix_action)}</pre>` : ''}
+        ${p.my_attempt ? `<div class="print-hdr">${t('print.myAttempt')}</div><pre>${escapeHtml(p.my_attempt)}</pre>` : ''}
+        ${p.fix_action ? `<div class="print-hdr">${t('print.fixAction')}</div><pre>${escapeHtml(p.fix_action)}</pre>` : ''}
       </div>`).join('');
     window.print();
   } catch(e) { toast(e.message, 'error'); }
@@ -1603,13 +1613,13 @@ async function printQuizSheet() {
   try {
     const data = await api('/api/problems?' + params.toString());
     const items = data.items || data;
-    if (items.length < 3) { toast('题太少，至少 3 题才能组卷', 'warn'); return; }
+    if (items.length < 3) { toast(t('print.tooFew'), 'warn'); return; }
     const quiz = [...items]
       .sort((a, b) => (a.mastery || 0) - (b.mastery || 0))
       .slice(0, 30);
     const buckets = {};
     for (const p of quiz) {
-      const k = p.topic || '未分类';
+      const k = p.topic || t('variant.uncat');
       (buckets[k] = buckets[k] || []).push(p);
     }
     const ordered = [];
@@ -1624,12 +1634,12 @@ async function printQuizSheet() {
     }
     const minutes = Math.max(5, Math.round(quiz.length * 1.5));
     document.getElementById('printArea').innerHTML =
-      `<h2>物理考前自测卷（${quiz.length} 题 · 建议 ${minutes} 分钟 · ${new Date().toLocaleDateString()}）</h2>
-      <p class="hint-text">本卷不含答案与对策；完成后请到系统中核对「我的尝试」。</p>
+      `<h2>${t('print.quizTitle').replace('{n}', quiz.length).replace('{m}', minutes).replace('{d}', new Date().toLocaleDateString())}</h2>
+      <p class="hint-text">${t('print.quizHint')}</p>
       ${ordered.map((p, i) => `<div class="print-item">
-        <div class="print-title">第 ${i+1} 题 · ${escapeHtml(p.course || '')} · ${escapeHtml(p.topic || '')}</div>
+        <div class="print-title">${t('print.quizItem').replace('{i}', i + 1).replace('{c}', escapeHtml(p.course || '')).replace('{t}', escapeHtml(p.topic || ''))}</div>
         <pre>${escapeHtml(p.content || '')}</pre>
-        <div class="print-answer-line">我的作答：</div>
+        <div class="print-answer-line">${t('print.answerLine')}</div>
       </div>`).join('')}`;
     window.print();
   } catch(e) { toast(e.message, 'error'); }
@@ -1642,7 +1652,7 @@ let _flashDone = 0;
 
 async function startFlashReview() {
   const list = await api('/api/reviews');
-  if (!list.length) { toast('今天没有待复习的题目', 'warn'); return; }
+  if (!list.length) { toast(t('flash.noToday'), 'warn'); return; }
   _flashQueue = list;
   _flashIdx = 0;
   _flashDone = 0;
@@ -1653,12 +1663,12 @@ async function startFlashReview() {
       <pre class="flash-content" id="flashContent">${t('msg.loading')}</pre>
     </div>
     <div class="flash-back hidden" id="flashBack">
-      <div class="print-hdr">我的尝试</div>
+      <div class="print-hdr">${t('print.myAttempt')}</div>
       <pre class="flash-content" id="flashAttempt"></pre>
-      <div class="print-hdr">对策</div>
+      <div class="print-hdr">${t('print.fixAction')}</div>
       <pre class="flash-content" id="flashFix"></pre>
     </div>
-    <p class="hint-text text-center">点击卡片翻面查看答案；记住键盘 ← 忘了 / → 记得</p>`;
+    <p class="hint-text text-center">${t('flash.hint')}</p>`;
   document.querySelector('#flashModal .modal-footer').classList.remove('hidden');
   openModal('flashModal');
   _flashRender();
@@ -1668,12 +1678,12 @@ function _flashRender() {
   const r = _flashQueue[_flashIdx];
   if (!r) { _flashFinish(); return; }
   document.getElementById('flashCount').textContent =
-    `第 ${_flashIdx + 1} / ${_flashQueue.length} 题（已答 ${_flashDone}）`;
+    t('flash.count').replace('{n}', _flashIdx + 1).replace('{m}', _flashQueue.length).replace('{d}', _flashDone);
   document.getElementById('flashMeta').textContent =
-    `${escapeHtml(r.course || '')} · ${escapeHtml(r.topic || '')} · 错因：${escapeHtml(r.error_type || '待诊断')}`;
-  document.getElementById('flashContent').textContent = r.content || '(无题干)';
-  document.getElementById('flashAttempt').textContent = r.my_attempt || '(无记录)';
-  document.getElementById('flashFix').textContent = r.fix_action || '(无对策)';
+    t('flash.meta').replace('{c}', escapeHtml(r.course || '')).replace('{t}', escapeHtml(r.topic || '')).replace('{e}', escapeHtml(r.error_type || t('common.pendingDiag')));
+  document.getElementById('flashContent').textContent = r.content || t('flash.noContent');
+  document.getElementById('flashAttempt').textContent = r.my_attempt || t('flash.noAttempt');
+  document.getElementById('flashFix').textContent = r.fix_action || t('flash.noFix');
   flashFlip(true);
 }
 
@@ -1698,8 +1708,8 @@ async function flashRate(rating) {
 function _flashFinish() {
   const el = document.getElementById('flashBody');
   el.innerHTML = `<div class="text-center" style="padding:30px 0">
-    <h3 style="margin-bottom:12px">🎉 完成闪电复习</h3>
-    <p class="text-muted">本次共 ${_flashQueue.length} 题，全部已按记忆情况记入 FSRS 调度。</p>
+    <h3 style="margin-bottom:12px">${t('flash.doneTitle')}</h3>
+    <p class="text-muted">${t('flash.doneDesc').replace('{n}', _flashQueue.length)}</p>
   </div>`;
   document.querySelector('#flashModal .modal-footer').classList.add('hidden');
   loadReviews();
@@ -1714,27 +1724,27 @@ document.addEventListener('keydown', e => {
 // ── A8 一题多解 ──
 function renderMethods(methods, id) {
   if (!Array.isArray(methods) || !methods.length) {
-    return '<p class="text-sm text-muted">暂无其他解法。可在复习时「换一种思路重做」，会记得更牢。</p>';
+    return '<p class="text-sm text-muted">' + t('method.none') + '</p>';
   }
   return '<div class="flex column gap-8">' + methods.map((m, i) =>
     `<div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px">
       <div class="flex-between mb-4">
-        <b class="text-sm">解法 ${i + 1}</b>
-        <button class="btn btn-secondary btn-sm" onclick="removeMethod(${id},${i})">删除</button>
+        <b class="text-sm">${t('method.title').replace('{i}', i + 1)}</b>
+        <button class="btn btn-secondary btn-sm" onclick="removeMethod(${id},${i})">${t('method.delete')}</button>
       </div>
       <p class="text-mono text-sm" style="white-space:pre-wrap">${escapeHtml(m)}</p>
     </div>`).join('') + '</div>';
 }
 
 async function addMethod(id) {
-  const text = window.prompt('输入一种新解法（可多行，将追加到本题）：', '');
+  const text = window.prompt(t('method.prompt'), '');
   if (text === null) return;
   const p = await api(`/api/problems/${id}`);
   const methods = [...(p.methods || []), text.trim()].filter(Boolean);
   try {
     await api(`/api/problems/${id}`, { method: 'PUT', body: { methods } });
     document.getElementById('methodsArea').innerHTML = renderMethods(methods, id);
-    toast('解法已保存');
+    toast(t('method.saved'));
     renderMath(document.getElementById('methodsArea'));
   } catch(e) { toast(e.message, 'error'); }
 }
@@ -1744,7 +1754,7 @@ async function removeMethod(id, idx) {
   const methods = (p.methods || []).filter((_, i) => i !== idx);
   await api(`/api/problems/${id}`, { method: 'PUT', body: { methods } });
   document.getElementById('methodsArea').innerHTML = renderMethods(methods, id);
-  toast('解法已删除');
+  toast(t('method.deleted'));
 }
 
 // ── 设置 ──
@@ -1755,14 +1765,14 @@ async function probeLocalModels() {
     const r = await api('/api/models/probe');
     if (r.ollama && r.ollama.available) {
       const list = (r.ollama.models || []).slice(0, 5).join(', ');
-      el.innerHTML = `本地模型可用：Ollama（${escapeHtml(list)}…）。API 地址填 <code>http://localhost:11434/v1</code>，密钥留空即可。`;
+      el.innerHTML = t('ollama.available').replace('{l}', escapeHtml(list));
       el.style.color = 'var(--success)';
     } else {
-      el.textContent = '未检测到本地 Ollama（可选）。需要本地模型请自行安装 Ollama，再填 http://localhost:11434/v1 并留空密钥。';
+      el.textContent = t('ollama.noLocal');
       el.style.color = 'var(--text-2)';
     }
   } catch(e) {
-    el.textContent = 'Ollama 探测失败（可选功能，不影响云端使用）';
+    el.textContent = t('ollama.probeFail');
   }
 }
 
@@ -1778,7 +1788,7 @@ function renderEditPhotos(paths) {
   if (_editPhotos.length) {
     wrap.classList.remove('hidden');
     wrap.innerHTML = _editPhotos.map(p =>
-      `<span class="photo-preview"><img src="/${escapeHtml(p)}" alt="题目图片"></span>`).join('');
+      `<span class="photo-preview"><img src="/${escapeHtml(p)}" alt="${t('common.photoAlt')}"></span>`).join('');
     btn.classList.remove('hidden');
     delBtn.classList.remove('hidden');
   } else {
@@ -1804,7 +1814,7 @@ async function attachPhoto(blob) {
   try {
     const path = await uploadPhotoBlob(blob);
     renderEditPhotos([..._editPhotos, path]);
-    toast('图片已上传，可作为附件保存', 'success');
+    toast(t('photo.uploaded'), 'success');
   } catch(e) { toast(e.message, 'error'); }
 }
 
@@ -1813,11 +1823,11 @@ async function extractPhoto() {
   if (!path) return;
   const btn = document.getElementById('extractPhotoBtn');
   btn.disabled = true;
-  btn.textContent = '识别中…';
+  btn.textContent = t('ocr.recognizing');
   try {
     const r = await api('/api/ai/extract-photo', { method: 'POST', body: { media_path: path } });
     if (!r.draft) {
-      toast(r.error || '未配置视觉模型，请手动录入题目', 'info');
+      toast(r.error || t('ocr.noVision'), 'info');
       return;
     }
     const d = r.draft;
@@ -1827,13 +1837,13 @@ async function extractPhoto() {
     if (d.answer) {
       const hint = document.getElementById('editContent').value;
       document.getElementById('editContent').value = hint + (hint ? '\n\n' : '') +
-        `【答案】${d.answer}` + (d.analysis ? `\n【解析】${d.analysis}` : '');
+        t('ocr.answerBlock').replace('{a}', d.answer) + (d.analysis ? t('ocr.analysisBlock').replace('{a}', d.analysis) : '');
     }
-    toast('已填入识别草稿，请核对修改后保存（确认制）', 'success');
+    toast(t('ocr.filled'), 'success');
   } catch(e) { toast(e.message, 'error'); }
   finally {
     btn.disabled = false;
-    btn.textContent = 'AI 识别题目';
+    btn.textContent = t('ocr.btnTitle');
   }
 }
 
@@ -1860,10 +1870,10 @@ document.getElementById('editPhotoFile').addEventListener('change', (e) => {
 // ── B3 教材库 RAG ──
 function ragSourcesHtml(sources) {
   if (!sources || !sources.length) return '';
-  return `<div class="rag-sources"><span class="text-sm text-muted">📚 教材出处：</span>` +
+  return `<div class="rag-sources"><span class="text-sm text-muted">${t('rag.srcLabel')}</span>` +
     sources.map(s =>
       `<button class="btn btn-link btn-sm" onclick="openRagSource('${encodeURIComponent(s.path)}')">` +
-      `${escapeHtml(s.name)}${s.page ? ` · 第${s.page}页` : ''}</button>`).join('') + `</div>`;
+      `${escapeHtml(s.name)}${s.page ? t('rag.pageSuffix').replace('{p}', s.page) : ''}</button>`).join('') + `</div>`;
 }
 
 async function openRagSource(encPath) {
@@ -1874,14 +1884,14 @@ async function openRagSource(encPath) {
 
 async function ingestRag() {
   const path = document.getElementById('ragPath').value.trim();
-  if (!path) { toast('请输入路径', 'error'); return; }
+  if (!path) { toast(t('rag.needPath'), 'error'); return; }
   const status = document.getElementById('ragStatus');
-  status.textContent = '正在摄取…';
+  status.textContent = t('rag.ingesting');
   try {
     const r = await api('/api/rag/ingest', { method: 'POST', body: { path } });
-    status.textContent = `已摄取 ${r.docs || 1} 个文档，共 ${r.chunks} 块` +
-      (r.errors && r.errors.length ? `；跳过：${r.errors.join('；')}` : '');
-    toast('摄取完成');
+    status.textContent = t('rag.ingested').replace('{d}', r.docs || 1).replace('{c}', r.chunks) +
+      (r.errors && r.errors.length ? t('rag.skipped').replace('{s}', r.errors.join('；')) : '');
+    toast(t('rag.ingestDone'));
     loadRagDocs();
   } catch(e) {
     status.textContent = '';
@@ -1894,27 +1904,27 @@ async function loadRagDocs() {
   if (!el) return;
   try {
     const r = await api('/api/rag/docs');
-    if (!r.items.length) { el.innerHTML = '<p class="text-sm text-muted">尚未摄取任何文档</p>'; return; }
+    if (!r.items.length) { el.innerHTML = '<p class="text-sm text-muted">' + t('rag.noDocs') + '</p>'; return; }
     el.innerHTML = r.items.map(d => `
       <div class="list-item" style="padding:8px 0">
         <div class="list-item-header">
           <span class="list-item-title">${escapeHtml(d.source_path)}</span>
-          <span class="tag tag-gray">${d.chunk_count} 块</span>
+          <span class="tag tag-gray">${t('rag.chunkCount').replace('{n}', d.chunk_count)}</span>
         </div>
         <div class="flex gap-8 mt-8">
-          <button class="btn btn-secondary btn-sm" onclick="openRagSource('${encodeURIComponent(d.source_path)}')">打开</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteRagDoc(${d.id})">移除</button>
+          <button class="btn btn-secondary btn-sm" onclick="openRagSource('${encodeURIComponent(d.source_path)}')">${t('rag.open')}</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteRagDoc(${d.id})">${t('rag.remove')}</button>
         </div>
       </div>`).join('');
   } catch(e) { el.innerHTML = `<p class="text-sm text-muted">${escapeHtml(e.message)}</p>`; }
 }
 
 async function deleteRagDoc(id) {
-  const ok = await confirmDialog('移除该文档的索引？（不删除原文件）');
+  const ok = await confirmDialog(t('rag.removeConfirm'));
   if (!ok) return;
   try {
     await api(`/api/rag/doc/${id}`, { method: 'DELETE' });
-    toast('已移除索引');
+    toast(t('rag.removed'));
     loadRagDocs();
   } catch(e) { toast(e.message, 'error'); }
 }
@@ -1931,49 +1941,49 @@ async function loadOcrProbe() {
       r.pdfminer ? 'pdfminer ✓' : 'pdfminer ✗',
       r.renderer ? 'pypdfium2 ✓' : 'pypdfium2 ✗',
     ];
-    el.textContent = 'OCR 能力：' + parts.join(' · ') +
-      (r.paddleocr ? '（扫描版可 OCR）' : '（扫描版需安装 paddleocr；文本层 PDF 不受影响）');
-  } catch(e) { el.textContent = '能力探测失败: ' + e.message; }
+    el.textContent = t('ocr.capability').replace('{s}', parts.join(' · ')) +
+      (r.paddleocr ? t('ocr.scanYes') : t('ocr.scanNo'));
+  } catch(e) { el.textContent = t('ocr.probeFail').replace('{m}', e.message); }
 }
 
 function collectOcrTexts() {
   return Array.from(document.querySelectorAll('.ocr-text'))
-    .map((t, i) => `【第 ${i + 1} 页】\n${t.value}`).join('\n\n');
+    .map((t, i) => t('ocr.pageLabel').replace('{n}', i + 1) + '\n' + t.value).join('\n\n');
 }
 
 async function runOcr() {
   const path = document.getElementById('ocrPath').value.trim();
-  if (!path) { toast('请输入路径', 'error'); return; }
+  if (!path) { toast(t('rag.needPath'), 'error'); return; }
   const el = document.getElementById('ocrResultList');
-  el.innerHTML = '<p class="text-sm text-muted">OCR 提取中（扫描版较慢）…</p>';
+  el.innerHTML = '<p class="text-sm text-muted">' + t('ocr.extracting') + '</p>';
   _ocrResultText = '';
   try {
     const r = await api('/api/ocr/extract', { method: 'POST', body: { path } });
     const pages = r.pages || [];
     _ocrResultText = collectOcrTexts();
     el.innerHTML = `
-      <p class="text-sm text-muted mb-8">引擎: ${escapeHtml(r.engine)} · ${pages.length} 项 · 平均置信度 ${pages[0] ? pages[0].confidence : '-'}</p>
+      <p class="text-sm text-muted mb-8">${t('ocr.engineInfo').replace('{e}', escapeHtml(r.engine)).replace('{n}', pages.length).replace('{c}', pages[0] ? pages[0].confidence : '-')}</p>
       ${pages.map(p => `
         <div class="ocr-page mb-8">
-          <div class="text-sm" style="font-weight:600;margin-bottom:4px">第 ${p.page} 项 <span class="text-muted">（置信度 ${p.confidence}）</span></div>
+          <div class="text-sm" style="font-weight:600;margin-bottom:4px">${t('ocr.itemTitle').replace('{n}', p.page)} <span class="text-muted">${t('ocr.confidence').replace('{c}', p.confidence)}</span></div>
           <textarea class="form-input ocr-text" style="width:100%;min-height:120px;font-family:monospace" oninput="_ocrResultText = collectOcrTexts()">${escapeHtml(p.text)}</textarea>
         </div>`).join('')}`;
     _ocrResultText = collectOcrTexts();
-    toast('OCR 完成，请人工核对');
+    toast(t('ocr.done'));
   } catch(e) {
     el.innerHTML = `<p class="text-sm tag tag-red" style="white-space:pre-line">${escapeHtml(e.message)}</p>`;
   }
 }
 
 async function copyOcrResult() {
-  if (!_ocrResultText) { toast('先执行 OCR 提取', 'error'); return; }
+  if (!_ocrResultText) { toast(t('ocr.needRun'), 'error'); return; }
   try {
     await navigator.clipboard.writeText(_ocrResultText);
-    toast('已复制全文');
+    toast(t('ocr.copied'));
   } catch(e) {
     const ta = document.createElement('textarea');
     ta.value = _ocrResultText; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
-    toast('已复制全文');
+    toast(t('ocr.copied'));
   }
 }
 
@@ -1986,18 +1996,18 @@ async function loadRagSearch(q) {
   const el = document.getElementById('ragResultList');
   if (!el) return;
   if (!q) { el.innerHTML = ''; return; }
-  el.innerHTML = '<div class="loading">搜索中…</div>';
+  el.innerHTML = '<div class="loading">' + t('rag.searching') + '</div>';
   try {
     const r = await api(`/api/rag/search?q=${encodeURIComponent(q)}&k=5`);
-    if (!r.items.length) { el.innerHTML = '<p class="text-sm text-muted">没有匹配的教材片段</p>'; return; }
+    if (!r.items.length) { el.innerHTML = '<p class="text-sm text-muted">' + t('rag.noMatch') + '</p>'; return; }
     el.innerHTML = r.items.map(hit => `
       <div class="hint-card" style="margin-bottom:8px">
         <div class="flex-between">
-          <span class="text-sm" style="font-weight:600">${escapeHtml(hit.name)}${hit.page ? ` · 第${hit.page}页` : ''}</span>
+          <span class="text-sm" style="font-weight:600">${escapeHtml(hit.name)}${hit.page ? t('rag.pageSuffix').replace('{p}', hit.page) : ''}</span>
           <span class="tag tag-gray">${hit.score}</span>
         </div>
         <p class="text-sm" style="margin:6px 0">${escapeHtml(hit.content)}</p>
-        <button class="btn btn-link btn-sm" onclick="openRagSource('${encodeURIComponent(hit.source_path)}')">打开原文 ↗</button>
+        <button class="btn btn-link btn-sm" onclick="openRagSource('${encodeURIComponent(hit.source_path)}')">${t('rag.openSrc')}</button>
       </div>`).join('');
   } catch(e) { el.innerHTML = `<p class="text-sm text-muted">${escapeHtml(e.message)}</p>`; }
 }
@@ -2012,14 +2022,14 @@ function examBar(pct, width) {
 // ── B4 考试就绪度 ──
 async function createExamPaper() {
   const name = document.getElementById('examName').value.trim();
-  if (!name) { toast('请输入试卷名称', 'error'); return; }
+  if (!name) { toast(t('exam.needName'), 'error'); return; }
   try {
     const r = await api('/api/exam/papers', { method: 'POST', body: {
       name,
       exam_date: document.getElementById('examDate').value.trim(),
       target: parseInt(document.getElementById('examTarget').value, 10) || 80,
     }});
-    toast('试卷已创建');
+    toast(t('exam.created'));
     document.getElementById('examName').value = '';
     loadExam();
   } catch(e) { toast(e.message, 'error'); }
@@ -2032,12 +2042,12 @@ async function loadExam() {
     const r = await api('/api/exam/papers');
     const ov = document.getElementById('examOverview');
     if (r.overall === null) {
-      ov.innerHTML = '<p class="text-sm text-muted mt-8">尚未创建试卷。录入真题考点后即可看到就绪度。</p>';
+      ov.innerHTML = '<p class="text-sm text-muted mt-8">' + t('exam.noneYet') + '</p>';
       el.innerHTML = '';
       return;
     }
     ov.innerHTML = `<div class="flex-between mb-8">
-        <span class="text-sm">全局就绪度（全部试卷平均）</span>
+        <span class="text-sm">${t('exam.globalReady')}</span>
         <span class="flex gap-8 items-center">
           <span class="tag ${r.overall >= 80 ? 'tag-green' : r.overall >= 60 ? 'tag-amber' : 'tag-red'}">${r.overall}%</span>
           ${examBar(r.overall, 160)}
@@ -2049,16 +2059,16 @@ async function loadExam() {
         <div class="flex-between">
           <span class="list-item-title">${escapeHtml(p.paper.name)}</span>
           <span class="flex gap-8 items-center">
-            <span class="text-sm text-muted">目标 ${p.paper.target}%</span>
-            <span class="tag ${ready >= p.paper.target ? 'tag-green' : ready >= p.paper.target * 0.75 ? 'tag-amber' : 'tag-red'}">就绪度 ${ready}%</span>
+            <span class="text-sm text-muted">${t('exam.targetLabel').replace('{n}', p.paper.target)}</span>
+            <span class="tag ${ready >= p.paper.target ? 'tag-green' : ready >= p.paper.target * 0.75 ? 'tag-amber' : 'tag-red'}">${t('exam.readyLabel').replace('{n}', ready)}</span>
           </span>
         </div>
-        <div class="list-item-meta">${escapeHtml(p.paper.exam_date || '未定日期')} · ${p.question_count} 题 · 考点命中率 ${p.hit_rate}%${p.gap_to_target > 0 ? ` · 距目标还差 ${p.gap_to_target}%` : ''}</div>
+        <div class="list-item-meta">${t('exam.meta').replace('{d}', escapeHtml(p.paper.exam_date || t('exam.dateNone'))).replace('{n}', p.question_count).replace('{h}', p.hit_rate)}${p.gap_to_target > 0 ? t('exam.gap').replace('{g}', p.gap_to_target) : ''}</div>
         ${examBar(ready)}
-        ${p.gaps.length ? `<p class="text-sm mt-8"><b style="color:var(--warning)">薄弱考点：</b>${p.gaps.map(g => `<span class="tag tag-warn" style="margin:2px">${escapeHtml(g)}</span>`).join('')}</p>` : '<p class="text-sm text-muted mt-8">✓ 全部考点掌握度达标</p>'}
+        ${p.gaps.length ? `<p class="text-sm mt-8"><b style="color:var(--warning)">${t('exam.weakTopics')}</b>${p.gaps.map(g => `<span class="tag tag-warn" style="margin:2px">${escapeHtml(g)}</span>`).join('')}</p>` : '<p class="text-sm text-muted mt-8">' + t('exam.allGood') + '</p>'}
         <div class="flex gap-8 mt-12">
-          <button class="btn btn-secondary btn-sm" onclick="loadExamDetail(${p.paper.id})">查看/录入题目</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteExamPaper(${p.paper.id})">删除试卷</button>
+          <button class="btn btn-secondary btn-sm" onclick="loadExamDetail(${p.paper.id})">${t('exam.viewAdd')}</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteExamPaper(${p.paper.id})">${t('exam.delete')}</button>
         </div>
       </div>`;
     }).join('');
@@ -2077,16 +2087,16 @@ async function loadExamDetail(id) {
       </tr>`).join('');
     const html = `<div class="modal" role="dialog" style="max-width:640px">
       <div class="modal-header">
-        <h3>${escapeHtml(p.paper.name)} — 就绪度 ${p.readiness}%（目标 ${p.paper.target}%）</h3>
+        <h3>${t('exam.detailTitle').replace('{n}', escapeHtml(p.paper.name)).replace('{r}', p.readiness).replace('{t}', p.paper.target)}</h3>
         <button class="modal-close" onclick="this.closest('.modal-overlay').classList.remove('active')">&times;</button>
       </div>
-      <p class="text-sm text-muted">按行录入：题号 / 考点（须与错题本 topic 一致才能计入掌握度）/ 权重（默认 1）。</p>
-      <textarea id="examQInput" rows="6" class="form-input" placeholder="每行：题号|考点|权重&#10;例如：&#10;1|牛顿第二定律|2&#10;2|动量守恒|1"></textarea>
+      <p class="text-sm text-muted">${t('exam.inputHint')}</p>
+      <textarea id="examQInput" rows="6" class="form-input" data-i18n-ph="exam.inputPh"></textarea>
       <div class="flex gap-12 mt-12">
-        <button class="btn btn-primary btn-sm" onclick="saveExamQuestions(${id})">保存题目</button>
-        <button class="btn btn-secondary btn-sm" onclick="this.closest('.modal-overlay').classList.remove('active')">关闭</button>
+        <button class="btn btn-primary btn-sm" onclick="saveExamQuestions(${id})">${t('exam.saveQ')}</button>
+        <button class="btn btn-secondary btn-sm" onclick="this.closest('.modal-overlay').classList.remove('active')">${t('common.close')}</button>
       </div>
-      ${p.questions && p.questions.length ? `<table class="table" style="margin-top:12px"><thead><tr><th>题号</th><th>考点</th><th>权重</th></tr></thead><tbody>${rowsHtml}</tbody></table>` : ''}
+      ${p.questions && p.questions.length ? `<table class="table" style="margin-top:12px"><thead><tr><th>${t('exam.colNo')}</th><th>${t('exam.colTopic')}</th><th>${t('exam.colWeight')}</th></tr></thead><tbody>${rowsHtml}</tbody></table>` : ''}
     </div>`;
     const ov = document.createElement('div');
     ov.className = 'modal-overlay active';
@@ -2098,17 +2108,17 @@ async function loadExamDetail(id) {
 
 async function saveExamQuestions(paperId) {
   const text = document.getElementById('examQInput').value.trim();
-  if (!text) { toast('请输入题目', 'error'); return; }
+  if (!text) { toast(t('exam.needText'), 'error'); return; }
   const questions = [];
   for (const line of text.split('\n')) {
     const parts = line.split('|').map(s => s.trim());
     if (!parts[1]) continue;
     questions.push({ qno: parts[0], topic: parts[1], weight: parseFloat(parts[2]) || 1 });
   }
-  if (!questions.length) { toast('没有有效行（需：题号|考点|权重）', 'error'); return; }
+  if (!questions.length) { toast(t('exam.invalidLine'), 'error'); return; }
   try {
     await api(`/api/exam/papers/${paperId}/questions`, { method: 'POST', body: { questions } });
-    toast(`已添加 ${questions.length} 题`);
+    toast(t('exam.added').replace('{n}', questions.length));
     loadExam();
     const ov = document.querySelector('.modal-overlay');
     if (ov) ov.remove();
@@ -2116,7 +2126,7 @@ async function saveExamQuestions(paperId) {
 }
 
 async function deleteExamPaper(id) {
-  const ok = await confirmDialog('删除该试卷及其全部题目？');
+  const ok = await confirmDialog(t('exam.deleteConfirm'));
   if (!ok) return;
   try {
     await api(`/api/exam/papers/${id}`, { method: 'DELETE' });
@@ -2132,19 +2142,19 @@ async function loadSettings() {
     const s = await api('/api/settings');
     document.getElementById('setApiBase').value = s.api_base || '';
     document.getElementById('setApiKey').value = '';
-    document.getElementById('setApiKey').placeholder = s.has_api_key ? '••••••••（已配置，留空则不变）' : 'sk-...';
+    document.getElementById('setApiKey').placeholder = s.has_api_key ? t('set.keyPh') : 'sk-...';
     document.getElementById('setModel').value = s.model || '';
     document.getElementById('setFastModel').value = s.fast_model || '';
     document.getElementById('setHeavyModel').value = s.heavy_model || '';
     document.getElementById('setVisionModel').value = s.vision_model || '';
     document.getElementById('setMasterPassword').value = '';
-    document.getElementById('setMasterPassword').placeholder = s.key_source === 'keyfile' ? '••••••••（已从 keys.enc 读取密钥）' : '用于加密保存 API Key';
+    document.getElementById('setMasterPassword').placeholder = s.key_source === 'keyfile' ? t('set.masterPhKeyfile') : t('set.masterPh');
     document.getElementById('setTemp').value = s.temperature || '0.3';
     const srcLabel = {
-      environment: '当前使用环境变量中的密钥（优先级最高，不写入数据库）',
-      keyfile: '密钥已从工作区 keys.enc 解密加载（加密文件，不写入数据库）',
-      runtime: '密钥已录入本次运行的内存（重启后失效，不写入数据库）',
-      none: '尚未配置密钥',
+      environment: t('set.srcEnv'),
+      keyfile: t('set.srcKeyfile'),
+      runtime: t('set.srcRuntime'),
+      none: t('set.srcNone'),
     };
     document.getElementById('keyStatus').textContent = srcLabel[s.key_source] || srcLabel.none;
     loadPrefs();
@@ -2177,7 +2187,7 @@ async function savePrefs() {
         daily_review_target: document.getElementById('prefDailyTarget').value,
       },
     });
-    toast('偏好已保存');
+    toast(t('msg.prefsSaved'));
     loadPrefs();
   } catch(e) { toast(e.message, 'error'); }
 }
@@ -2189,22 +2199,22 @@ async function loadFsrsStatus() {
   try {
     const s = await api('/api/fsrs/status');
     if (!s.available) {
-      el.textContent = 'FSRS 未启用（vendor 缺失），当前使用 SM-2 调度。';
+      el.textContent = t('fsrs.disabled');
       el.style.color = 'var(--warning)';
       return;
     }
     const src = s.params_source === 'trained'
-      ? `<b>个性化参数</b>（训练于 ${escapeHtml(s.trained_at)}，样本 ${s.sample_count} 条）`
-      : '<b>默认参数</b>（用复习历史训练后会更贴合你的记忆曲线）';
+      ? t('fsrs.trained').replace('{d}', escapeHtml(s.trained_at)).replace('{n}', s.sample_count)
+      : t('fsrs.default');
     let extra = '';
-    if (s.training) extra = ' <span class="tag tag-amber">训练中…</span>';
-    else if (s.last_train) extra = ` <span class="tag tag-green">上次训练成功</span>`;
-    else if (s.train_error) extra = ` <span class="tag tag-red">上次训练未成功</span>`;
-    el.innerHTML = `FSRS 调度已启用 · ${src} · 目标保持率 ${s.desired_retention}${extra}`;
+    if (s.training) extra = ' <span class="tag tag-amber">' + t('fsrs.training') + '</span>';
+    else if (s.last_train) extra = ` <span class="tag tag-green">${t('fsrs.trainOk')}</span>`;
+    else if (s.train_error) extra = ` <span class="tag tag-red">${t('fsrs.lastFail')}</span>`;
+    el.innerHTML = t('fsrs.enabled').replace('{s}', src).replace('{r}', s.desired_retention) + extra;
     const ret = document.getElementById('fsrsRetention');
     if (ret) { ret.value = s.desired_retention; document.getElementById('fsrsRetentionVal').textContent = s.desired_retention; }
     if (s.training) { setTimeout(loadFsrsStatus, 3000); }
-  } catch(e) { el.textContent = 'FSRS 状态加载失败'; }
+  } catch(e) { el.textContent = t('fsrs.loadFail'); }
 }
 
 async function saveFsrsRetention() {
@@ -2213,7 +2223,7 @@ async function saveFsrsRetention() {
       method: 'POST',
       body: { value: parseFloat(document.getElementById('fsrsRetention').value) },
     });
-    toast(r.ok ? '目标保持率已保存' : '值需在 0.75-0.97 之间', r.ok ? '' : 'error');
+    toast(r.ok ? t('fsrs.retentionSaved') : t('fsrs.retentionRange'), r.ok ? '' : 'error');
     if (r.ok) loadFsrsStatus();
   } catch(e) { toast(e.message, 'error'); }
 }
@@ -2224,10 +2234,10 @@ async function trainFsrs() {
   try {
     const r = await api('/api/fsrs/train', { method: 'POST', body: {} });
     if (r.started) {
-      toast(`已开始训练（${r.sample_count} 条复习记录）…`);
+      toast(t('fsrs.trainingStart').replace('{n}', r.sample_count));
       setTimeout(loadFsrsStatus, 2000);
     } else {
-      toast('无法训练：' + (r.error || '未知原因'), 'error');
+      toast(t('fsrs.trainFail').replace('{m}', r.error || t('fsrs.unknown')), 'error');
     }
   } catch(e) { toast(e.message, 'error'); }
   btn.disabled = false;
@@ -2236,7 +2246,7 @@ async function trainFsrs() {
 async function resetFsrs() {
   try {
     const r = await api('/api/fsrs/reset', { method: 'POST', body: {} });
-    toast(r.ok ? '已重置为默认参数' : '重置失败', r.ok ? '' : 'error');
+    toast(r.ok ? t('fsrs.resetOk') : t('fsrs.resetFail'), r.ok ? '' : 'error');
     if (r.ok) loadFsrsStatus();
   } catch(e) { toast(e.message, 'error'); }
 }
@@ -2256,7 +2266,7 @@ async function saveSettings() {
   if (master) body.master_password = master;
   try {
     await api('/api/settings', { method: 'PUT', body });
-    toast('设置已保存');
+    toast(t('set.saved'));
     loadSettings();
   } catch(e) { toast(e.message, 'error'); }
 }
@@ -2264,14 +2274,14 @@ async function saveSettings() {
 async function testSettings() {
   try {
     const r = await api('/api/settings/test', { method: 'POST', body: {} });
-    if (r.ok) toast('连接成功: ' + r.reply);
-  } catch(e) { toast('连接失败: ' + e.message, 'error'); }
+    if (r.ok) toast(t('set.connOk').replace('{r}', r.reply));
+  } catch(e) { toast(t('set.connFail').replace('{m}', e.message), 'error'); }
 }
 
 // ── 数据导入 / 导出 ──
 function _downloadFromApi(path, filename) {
   return fetch(path, { headers: { 'X-Requested-With': 'PhysicsStudyOS' } })
-    .then(r => { if (!r.ok) throw new Error(`导出失败 (${r.status})`); return r.blob(); })
+    .then(r => { if (!r.ok) throw new Error(t('export.fail').replace('{s}', r.status)); return r.blob(); })
     .then(blob => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -2283,14 +2293,14 @@ function _downloadFromApi(path, filename) {
 async function exportAnki() {
   try {
     await _downloadFromApi('/api/export?format=anki-csv', `physics_study_anki_${new Date().toISOString().slice(0, 10)}.csv`);
-    toast('已导出 Anki-CSV（Anki 桌面端可导入）');
+    toast(t('export.anki'));
   } catch(e) { toast(e.message, 'error'); }
 }
 
 async function exportIcs() {
   try {
     await _downloadFromApi('/api/export?format=ics', `physics_study_review_${new Date().toISOString().slice(0, 10)}.ics`);
-    toast('已导出复习日程 .ics');
+    toast(t('export.ics'));
   } catch(e) { toast(e.message, 'error'); }
 }
 
@@ -2304,7 +2314,7 @@ async function exportData() {
     a.download = `physics_study_${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    toast('已导出数据');
+    toast(t('export.data'));
   } catch(e) { toast(e.message, 'error'); }
 }
 
@@ -2312,7 +2322,7 @@ async function exportData() {
 async function exportBackup() {
   try {
     await _downloadFromApi('/api/export/backup', `physics-study-backup-${new Date().toISOString().slice(0, 10)}.json`);
-    toast('已导出全量备份（含考试/知识图谱/口语/复习）');
+    toast(t('export.backup'));
   } catch(e) { toast(e.message, 'error'); }
 }
 
@@ -2321,13 +2331,13 @@ async function importBackup(input) {
   if (!file) return;
   try {
     const text = await file.text();
-    const ok = await confirmDialog('还原将覆盖当前全部数据（现库会自动保存为 .bak 备份）。确定继续？');
+    const ok = await confirmDialog(t('restore.confirm'));
     if (!ok) { input.value = ''; return; }
     const r = await api('/api/import/restore', { method: 'POST', body: { backup: text } });
     const n = Object.values(r.restored || {}).reduce((s, x) => s + x, 0);
-    toast(`已还原 ${n} 条记录`);
+    toast(t('restore.done').replace('{n}', n));
     loadDashboard();
-  } catch(e) { toast('还原失败: ' + e.message, 'error'); }
+  } catch(e) { toast(t('restore.fail').replace('{m}', e.message), 'error'); }
   input.value = '';
 }
 
@@ -2337,35 +2347,35 @@ async function importData(input) {
   try {
     const text = await file.text();
     const data = JSON.parse(text);
-    const ok = await confirmDialog('导入将覆盖当前全部题目数据（已自动备份）。确定继续？');
+    const ok = await confirmDialog(t('import.confirm'));
     if (!ok) { input.value = ''; return; }
     const r = await api('/api/import', { method: 'POST', body: data });
-    toast(`已导入 ${r.imported} 题（备份: ${r.backup.split(/[\\/]/).pop()}）`);
+    toast(t('import.done').replace('{n}', r.imported).replace('{b}', r.backup.split(/[\\/]/).pop()));
     loadDashboard();
-  } catch(e) { toast('导入失败: ' + e.message, 'error'); }
+  } catch(e) { toast(t('import.fail').replace('{m}', e.message), 'error'); }
   input.value = '';
 }
 
 // ── 公式速查 ──
 const _FORMULAS = [
-  {cat:'运动学',eqs:['v = v₀ + at','s = v₀t + ½at²','v² − v₀² = 2as','ω = dθ/dt']},
-  {cat:'动力学',eqs:['F = ma','F_f ≤ μN','F = −kx（胡克定律）','p = mv']},
-  {cat:'功与能',eqs:['W = F·s·cosθ','K = ½mv²','W = ΔK','U_g = mgh','U_e = ½kx²']},
-  {cat:'动量守恒',eqs:['p_i = p_f','J = Δp = FΔt','完全弹性碰撞：v₁'+"'"+' = (m₁−m₂)/(m₁+m₂)·v₁']},
-  {cat:'圆周运动',eqs:['a_c = v²/r = ω²r','F_c = mv²/r','v = ωr','T = 2π/ω']},
-  {cat:'静电场',eqs:['F = kQq/r²','E = F/q','E = kQ/r²','U = Ed（匀强）']},
-  {cat:'电路',eqs:['V = IR','P = IV = I²R','R_s = R₁+R₂+...','1/R_p = 1/R₁+1/R₂+...']},
-  {cat:'磁场',eqs:['F = qvB·sinθ','F = ILB·sinθ','Φ = BA·cosθ','ε = −dΦ/dt']},
-  {cat:'热学',eqs:['PV = nRT','ΔU = Q − W','η = 1 − T_c/T_h','ΔS = Q_rev/T']},
-  {cat:'波动与光学',eqs:['v = fλ','n = c/v','n₁sinθ₁ = n₂sinθ₂','dsinθ = mλ（双缝）']},
-  {cat:'SI词头',eqs:['n 10⁻⁹','μ 10⁻⁶','m 10⁻³','c 10⁻²','k 10³','M 10⁶','G 10⁹']},
+  {key:'formula.kinematics', eqs:['v = v₀ + at','s = v₀t + ½at²','v² − v₀² = 2as','ω = dθ/dt']},
+  {key:'formula.dynamics', eqs:['F = ma','F_f ≤ μN','F = −kx (Hooke\x27s law)','p = mv']},
+  {key:'formula.workEnergy', eqs:['W = F·s·cosθ','K = ½mv²','W = ΔK','U_g = mgh','U_e = ½kx²']},
+  {key:'formula.momentum', eqs:['p_i = p_f','J = Δp = FΔt','perfectly elastic: v₁'+"'"+' = (m₁−m₂)/(m₁+m₂)·v₁']},
+  {key:'formula.circular', eqs:['a_c = v²/r = ω²r','F_c = mv²/r','v = ωr','T = 2π/ω']},
+  {key:'formula.electro', eqs:['F = kQq/r²','E = F/q','E = kQ/r²','U = Ed (uniform field)']},
+  {key:'formula.circuit', eqs:['V = IR','P = IV = I²R','R_s = R₁+R₂+...','1/R_p = 1/R₁+1/R₂+...']},
+  {key:'formula.magnet', eqs:['F = qvB·sinθ','F = ILB·sinθ','Φ = BA·cosθ','ε = −dΦ/dt']},
+  {key:'formula.thermo', eqs:['PV = nRT','ΔU = Q − W','η = 1 − T_c/T_h','ΔS = Q_rev/T']},
+  {key:'formula.waves', eqs:['v = fλ','n = c/v','n₁sinθ₁ = n₂sinθ₂','dsinθ = mλ (double-slit)']},
+  {key:'formula.si', eqs:['n 10⁻⁹','μ 10⁻⁶','m 10⁻³','c 10⁻²','k 10³','M 10⁶','G 10⁹']},
 ];
 function toggleFormulaPanel() {
   const p = document.getElementById('formulaPanel');
   const content = document.getElementById('formulaContent');
   if (p.classList.contains('hidden')) {
     content.innerHTML = _FORMULAS.map(c =>
-      `<div style="margin-bottom:8px"><strong>${c.cat}</strong>: ${c.eqs.map(e=>escapeHtml(e)).join(' &nbsp;| ')}</div>`
+      `<div style="margin-bottom:8px"><strong>${t('formula.' + c.key)}</strong>: ${c.eqs.map(e=>escapeHtml(e)).join(' &nbsp;| ')}</div>`
     ).join('');
     p.classList.remove('hidden');
     renderMath(content);
@@ -2379,11 +2389,37 @@ const initial = (location.hash || '').replace('#', '').split('?')[0];
 (async () => {
   await loadLocale(currentLang());
   applyI18n(document);
+  const savedTheme = localStorage.getItem('theme');
+  applyTheme(THEME_ORDER.includes(savedTheme) ? savedTheme : 'auto');
   switchPage(PAGES.includes(initial) ? initial : 'dashboard');
 })();
 document.getElementById('searchInput').addEventListener('input', onSearchInput);
 loadOcrProbe();
-// C7 PWA：注册 Service Worker（仅 http/https，离线缓存静态资源）
+// C7 PWA：注册 Service Worker（仅 http/https，离线缓存静态资源）+ 新版本提示
 if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
-  navigator.serviceWorker.register('./sw.js').catch(() => {});
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (refreshing) return;
+    refreshing = true;
+    location.reload();
+  });
+  navigator.serviceWorker.register('./sw.js').then((reg) => {
+    reg.addEventListener('updatefound', () => {
+      const nw = reg.installing;
+      if (!nw) return;
+      nw.addEventListener('statechange', () => {
+        if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+          const bar = document.getElementById('updateBar');
+          if (bar) bar.classList.add('active');
+        }
+      });
+    });
+  }).catch(() => {});
+}
+function applyUpdate() {
+  if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+    navigator.serviceWorker.controller.postMessage('SKIP_WAITING');
+  } else {
+    location.reload();
+  }
 }
