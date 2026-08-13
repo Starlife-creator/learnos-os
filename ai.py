@@ -45,6 +45,35 @@ def set_master_password(password: str | None) -> None:
     invalidate_settings_cache()
 
 
+def unlock_keyfile(password: str | None) -> bool:
+    """用主口令解锁 keys.enc（验证口令并置会话口令）。成功返回 True。
+
+    未验证口令前不设置会话口令，避免错误口令被缓存。
+    """
+    password = (password or "").strip()
+    if not password or not key_file_exists():
+        return False
+    if load_key(password):
+        set_master_password(password)
+        return True
+    return False
+
+
+def reset_session_key() -> None:
+    """清空会话级密钥（模拟重启：内存密钥/主口令失效，keys.enc 文件保留）。"""
+    global _runtime_key, _master_password
+    _runtime_key = None
+    _master_password = None
+    invalidate_settings_cache()
+
+
+def clear_session_key() -> None:
+    """清除内存密钥与 keys.enc（用户主动「清除全部密钥」）。"""
+    reset_session_key()
+    from keystore import clear_key
+    clear_key()
+
+
 def get_cached_settings() -> dict[str, str]:
     """带 TTL 的设置缓存，按 环境变量 > keys.enc > 内存密钥 > DB(非敏感) 合并。"""
     global _settings_cache, _settings_cache_time
@@ -90,6 +119,8 @@ def display_settings() -> dict[str, str]:
         "temperature": eff.get("temperature", "0.3"),
         "has_api_key": has_key,
         "key_source": eff.get("key_source", "none"),
+        # 存在 keys.enc 但当前未解锁（key_source 为 none/runtime）时提示可解锁
+        "key_file_locked": bool(key_file_exists()) and not has_key,
     }
 
 

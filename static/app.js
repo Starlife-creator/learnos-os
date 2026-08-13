@@ -608,7 +608,7 @@ function drawWeekly(w) {
     <span class="text-sm">${t('stat.reviewCount')}</span><b>${w.week_reviews}（${deltaStr}）</b>
     <span class="text-sm">${t('stat.goodRate')}</span><b>${(w.good_rate * 100).toFixed(0)}%</b>
   </div>
-  <p class="hint-text">💡 ${escapeHtml(w.tip || '')}</p>`;
+  <p class="hint-text">${t('report.tip').replace('{t}', t(w.tip_key || 'report.tipWeekNone'))}</p>`;
 }
 
 // ── P0 顽固错题 ──
@@ -1003,9 +1003,9 @@ function checkDuplicates() {
 }
 
 // ── C7 语音输入（webkitSpeechRecognition，Chrome/Edge）──
-function startVoiceInput(targetId) {
+function startVoiceInput(targetId, btnId = 'voiceBtn') {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const btn = document.getElementById('voiceBtn');
+  const btn = document.getElementById(btnId);
   const ta = document.getElementById(targetId);
   if (!SR) { toast(t('toast.noVoice'), 'warn'); return; }
   if (btn.dataset.rec === '1') {
@@ -1170,7 +1170,14 @@ async function loadTodaySummary() {
     if (!el) return;
     const errParts = Object.entries(s.error_counts || {})
       .map(([k, v]) => `${k}:${v}`).join('、');
-    el.innerHTML = `${escapeHtml(s.tip)}` +
+    let tip = t('today.tipNone');
+    if (s.done > 0) {
+      tip = t('today.tipDone').replace('{n}', s.done).replace('{a}', s.accuracy);
+      if (s.hard > 0) tip += t('today.tipHard').replace('{n}', s.hard);
+      if (s.top_error) tip += t('today.tipTop').replace('{s}', escapeHtml(s.top_error));
+      tip += s.done >= 3 && s.accuracy >= 80 ? t('today.tipGood') : t('today.tipRetry');
+    }
+    el.innerHTML = `${tip}` +
       (s.due_tomorrow > 0 ? `<br><span class="text-muted">${t('today.dueTomorrow').replace('{n}', s.due_tomorrow)}</span>` : '') +
       (errParts ? `<br><span class="text-muted">${t('today.errDist').replace('{s}', escapeHtml(errParts))}</span>` : '');
   } catch(e) { /* 复盘卡片非关键路径，失败静默 */ }
@@ -2156,9 +2163,103 @@ async function loadSettings() {
       runtime: t('set.srcRuntime'),
       none: t('set.srcNone'),
     };
-    document.getElementById('keyStatus').textContent = srcLabel[s.key_source] || srcLabel.none;
+    const ksEl = document.getElementById('keyStatus');
+    ksEl.textContent = s.key_file_locked
+      ? t('set.keyFileLocked') + '（' + (srcLabel[s.key_source] || srcLabel.none) + '）'
+      : (srcLabel[s.key_source] || srcLabel.none);
     loadPrefs();
   } catch(e) { toast(e.message, 'error'); }
+}
+
+async function unlockKeystore() {
+  const pwd = document.getElementById('setMasterPassword').value;
+  if (!pwd) { toast(t('set.unlockFail'), 'error'); return; }
+  try {
+    const r = await api('/api/keystore/unlock', { method: 'POST', body: { master_password: pwd } });
+    if (!r.ok) { toast(t('set.unlockFail'), 'error'); return; }
+    toast(t('set.unlockOk'), 'success');
+    document.getElementById('setMasterPassword').value = '';
+    loadSettings();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function clearKeystore() {
+  const ok = await confirmDialog(t('set.clearConfirm'));
+  if (!ok) return;
+  try {
+    await api('/api/keystore/clear', { method: 'POST', body: {} });
+    toast(t('set.clearOk'), 'success');
+    loadSettings();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function showPeriodicReport() {
+  try {
+    const [w, m] = await Promise.all([
+      api('/api/report/weekly'),
+      api('/api/report/monthly'),
+    ]);
+    const html = `
+      <div class="flex gap-8 mb-8">
+        <button class="btn btn-primary btn-sm" onclick="periodicTab('week')">${t('report.weekTab')}</button>
+        <button class="btn btn-secondary btn-sm" onclick="periodicTab('month')">${t('report.monthTab')}</button>
+      </div>
+      <div id="periodicWeek">${periodicWeekHtml(w)}</div>
+      <div id="periodicMonth" class="hidden">${periodicMonthHtml(m)}</div>`;
+    const mb = document.getElementById('modalBody');
+    mb.innerHTML = html;
+    document.getElementById('modalTitle').textContent = t('card.weeklyMore');
+    renderMath(mb);
+    openModal('problemModal');
+  } catch(e) { toast(e.message || t('report.loadFail'), 'error'); }
+}
+
+function periodicTab(tab) {
+  const w = document.getElementById('periodicWeek');
+  const m = document.getElementById('periodicMonth');
+  if (!w || !m) return;
+  w.classList.toggle('hidden', tab !== 'week');
+  m.classList.toggle('hidden', tab !== 'month');
+}
+
+function periodicBarHtml(rows, max) {
+  const m = max || Math.max(1, ...rows.map(r => r.count));
+  return rows.map(r => `
+    <div class="error-bar-row">
+      <span class="text-sm" style="min-width:130px">${escapeHtml(r.label || r.date)}</span>
+      <div class="error-bar-track"><div class="error-bar-fill" style="width:${Math.round(r.count / m * 100)}%;background:var(--accent)"></div></div>
+      <b class="text-sm" style="min-width:32px">${r.count}</b>
+    </div>`).join('') || '<p class="text-sm text-muted">' + t('msg.noData') + '</p>';
+}
+
+function periodicWeekHtml(w) {
+  if (!w || w.week_start === undefined) return '<p class="text-sm text-muted">' + t('msg.noData') + '</p>';
+  const delta = w.review_delta || 0;
+  const deltaStr = delta > 0 ? '+' + delta : String(delta);
+  return `
+    <p class="text-sm text-muted mb-8">${t('report.weekRange').replace('{s}', escapeHtml(w.week_start))}</p>
+    <div class="error-bar-row"><span class="text-sm">${t('report.newProblems')}</span><b>${w.new_problems}</b><span class="text-sm text-muted">${t('report.vsLastWeek').replace('{n}', w.prev_problems)}</span></div>
+    <div class="error-bar-row"><span class="text-sm">${t('report.reviews')}</span><b>${w.week_reviews}</b><span class="text-sm text-muted">${t('report.delta').replace('{d}', deltaStr)}</span></div>
+    <div class="error-bar-row"><span class="text-sm">${t('report.goodRate')}</span><b>${(w.good_rate * 100).toFixed(0)}%</b></div>
+    <p class="hint-text mt-12">${t('report.tip').replace('{t}', t(w.tip_key || 'report.tipWeekNone'))}</p>`;
+}
+
+function periodicMonthHtml(m) {
+  if (!m || m.start === undefined) return '<p class="text-sm text-muted">' + t('msg.noData') + '</p>';
+  const daily = (m.daily || []).map(d => ({ label: d.date, count: d.count }));
+  const errs = (m.top_errors || []).map(e => ({ label: e.label, count: e.count }));
+  return `
+    <p class="text-sm text-muted mb-8">${t('report.monthRange').replace('{s}', escapeHtml(m.start)).replace('{e}', escapeHtml(m.end))}</p>
+    <div class="error-bar-row"><span class="text-sm">${t('report.newProblems')}</span><b>${m.month_new}</b><span class="text-sm text-muted">${t('report.vsLastMonth').replace('{n}', m.prev_new)}</span></div>
+    <div class="error-bar-row"><span class="text-sm">${t('report.reviews')}</span><b>${m.month_revs}</b><span class="text-sm text-muted">${t('report.vsLastMonth').replace('{n}', m.prev_revs)}</span></div>
+    <div class="error-bar-row"><span class="text-sm">${t('report.goodRate')}</span><b>${(m.good_rate * 100).toFixed(0)}%</b></div>
+    <div class="error-bar-row"><span class="text-sm">${t('report.activeDays')}</span><b>${m.active_days}</b></div>
+    <div class="error-bar-row"><span class="text-sm">${t('report.mastered')}</span><b>${m.mastered}</b><span class="text-sm text-muted">/ ${m.total_problems}</span></div>
+    <div class="text-sm text-muted mt-12 mb-8">${t('report.dailyTitle')}</div>
+    ${periodicBarHtml(daily.slice(-14))}
+    <div class="text-sm text-muted mt-12 mb-8">${t('report.topErrors')}</div>
+    ${periodicBarHtml(errs)}
+    <p class="hint-text mt-12">${t('report.tip').replace('{t}', t(m.tip_key || 'report.tipMonthNone'))}</p>`;
 }
 
 async function loadPrefs() {

@@ -162,6 +162,9 @@ class Handler(SimpleHTTPRequestHandler):
             if path == "/api/report/weekly":
                 self._handle_weekly_report()
                 return
+            if path == "/api/report/monthly":
+                self._handle_monthly_report()
+                return
             if path == "/api/reviews":
                 self._handle_list_reviews()
                 return
@@ -289,27 +292,15 @@ class Handler(SimpleHTTPRequestHandler):
             error_counts[et] = error_counts.get(et, 0) + 1
         top_error = sorted(error_counts.items(), key=lambda kv: -kv[1])[:1]
         top_error_label = ERROR_TYPE_LABELS.get(top_error[0][0], top_error[0][0]) if top_error else ""
-        if done_count:
-            accuracy = round((1 - hard / done_count) * 100)
-            tip = f"今日完成 {done_count} 次复习，正确率 {accuracy}%"
-            if hard:
-                tip += f"，有 {hard} 次答错"
-            if top_error_label:
-                tip += f"，主要错因是「{top_error_label}」"
-            if done_count >= 3 and accuracy >= 80:
-                tip += "，保持得很好，明早可只温习 3 张旧卡。"
-            else:
-                tip += "，建议明早先重做今天答错的题目。"
-        else:
-            accuracy = 0
-            tip = "今天还没有完成复习，先做一张卡吧。"
+        accuracy = round((1 - hard / done_count) * 100) if done_count else 0
         self.json_response({
             "date": today,
             "done": done_count,
             "accuracy": accuracy,
+            "hard": hard,
+            "top_error": top_error_label,
             "due_tomorrow": int(due_tomorrow.get("count", 0)),
             "error_counts": error_counts,
-            "tip": tip,
             "warmup": [3] if done_count else [],
         })
 
@@ -470,9 +461,9 @@ class Handler(SimpleHTTPRequestHandler):
         prev_reviews = int(reviews["prev_reviews"] or 0)
         week_good = int(reviews["week_good"] or 0)
         good_rate = round(week_good / week_reviews, 3) if week_reviews else 0.0
-        tip = "本周暂无复习记录。建议从今日到期的最少 1 张卡开始，保持 7 天连续打卡。" if week_reviews == 0 else \
-              "本周投入稳定，继续保持。建议复习完每张卡后写清「对策」，防止重复犯错。" if good_rate >= 0.7 else \
-              "本周记忆保持率不足 70%。建议放慢节奏：把错题按知识点分组，每天只复习 1 个薄弱知识点。"
+        tip_key = "report.tipWeekNone" if week_reviews == 0 else \
+                  "report.tipWeekGood" if good_rate >= 0.7 else \
+                  "report.tipWeekLow"
         return {
             "week_start": week_start.isoformat(),
             "new_problems": new_problems,
@@ -480,9 +471,87 @@ class Handler(SimpleHTTPRequestHandler):
             "week_reviews": week_reviews,
             "prev_reviews": prev_reviews,
             "good_rate": good_rate,
-            "tip": tip,
+            "tip_key": tip_key,
             "review_delta": week_reviews - prev_reviews,
         }
+
+    def _handle_weekly_report(self) -> None:
+        """GET /api/report/weekly：周报详情（供前端详情弹窗）。"""
+        self.json_response(self._weekly_report())
+
+    @staticmethod
+    def _monthly_report() -> dict[str, Any]:
+        """近 30 天周期报告：复习/新增/保持率/错因分布/活跃天数 + 模板建议（零依赖）。"""
+        from datetime import date, timedelta
+        today = date.today()
+        month_start = today - timedelta(days=29)
+        prev_start = month_start - timedelta(days=30)
+        prev_end = month_start - timedelta(days=1)
+        try:
+            with DB_LOCK, db() as conn:
+                probs = conn.execute("""
+                    SELECT
+                      SUM(CASE WHEN date(created_at) >= ? THEN 1 ELSE 0 END) AS month_new,
+                      SUM(CASE WHEN date(created_at) >= ? AND date(created_at) <= ? THEN 1 ELSE 0 END) AS prev_new
+                    FROM problems
+                """, (month_start.isoformat(), prev_start.isoformat(), prev_end.isoformat())).fetchone()
+                revs = conn.execute("""
+                    SELECT
+                      SUM(CASE WHEN date(created_at) >= ? THEN 1 ELSE 0 END) AS month_revs,
+                      SUM(CASE WHEN date(created_at) >= ? AND date(created_at) <= ? THEN 1 ELSE 0 END) AS prev_revs,
+                      SUM(CASE WHEN date(created_at) >= ? AND CAST(result AS INTEGER) >= 3 THEN 1 ELSE 0 END) AS month_good,
+                      COUNT(DISTINCT CASE WHEN date(created_at) >= ? THEN date(created_at) END) AS active_days
+                    FROM reviews WHERE completed = 1
+                """, (month_start.isoformat(), prev_start.isoformat(), prev_end.isoformat(),
+                      month_start.isoformat(), month_start.isoformat())).fetchone()
+                total = conn.execute(
+                    "SELECT COUNT(*) AS c, "
+                    "SUM(CASE WHEN mastery >= 4 THEN 1 ELSE 0 END) AS mastered FROM problems"
+                ).fetchone()
+                errs = conn.execute("""
+                    SELECT p.error_type AS et, COUNT(*) AS c
+                    FROM reviews r JOIN problems p ON p.id = r.problem_id
+                    WHERE r.completed = 1 AND date(r.created_at) >= ?
+                    GROUP BY p.error_type ORDER BY c DESC LIMIT 5
+                """, (month_start.isoformat(),)).fetchall()
+                dailies = conn.execute("""
+                    SELECT date(created_at) AS d, COUNT(*) AS c
+                    FROM reviews WHERE completed = 1 AND date(created_at) >= ?
+                    GROUP BY date(created_at) ORDER BY d
+                """, (month_start.isoformat(),)).fetchall()
+        except Exception as exc:
+            LOG.debug("月报统计失败（可忽略）: %s", exc)
+            return {}
+        month_new = int(probs["month_new"] or 0)
+        prev_new = int(probs["prev_new"] or 0)
+        month_revs = int(revs["month_revs"] or 0)
+        prev_revs = int(revs["prev_revs"] or 0)
+        month_good = int(revs["month_good"] or 0)
+        active = int(revs["active_days"] or 0)
+        good_rate = round(month_good / month_revs, 3) if month_revs else 0.0
+        mastery = int(total["mastered"] or 0)
+        tip_key = "report.tipMonthNone" if month_revs == 0 else \
+                  "report.tipMonthGood" if good_rate >= 0.7 else \
+                  "report.tipMonthLow"
+        return {
+            "start": month_start.isoformat(),
+            "end": today.isoformat(),
+            "month_new": month_new,
+            "prev_new": prev_new,
+            "month_revs": month_revs,
+            "prev_revs": prev_revs,
+            "good_rate": good_rate,
+            "active_days": active,
+            "mastered": mastery,
+            "total_problems": int(total["c"] or 0),
+            "top_errors": [{"label": e["et"], "count": int(e["c"])} for e in errs],
+            "daily": [{"date": d["d"], "count": int(d["c"])} for d in dailies],
+            "tip_key": tip_key,
+        }
+
+    def _handle_monthly_report(self) -> None:
+        """GET /api/report/monthly：近 30 天周期报告详情。"""
+        self.json_response(self._monthly_report())
 
     @staticmethod
     def _stubborn_problems() -> list[dict[str, Any]]:
@@ -1222,6 +1291,16 @@ class Handler(SimpleHTTPRequestHandler):
             if path == "/api/fsrs/retention":
                 ok = fsrs_bridge.set_desired_retention(data.get("value", 0))
                 self.json_response({"ok": ok})
+                return
+            if path == "/api/keystore/unlock":
+                from ai import unlock_keyfile
+                ok = unlock_keyfile(data.get("master_password", ""))
+                self.json_response({"ok": ok, **display_settings()})
+                return
+            if path == "/api/keystore/clear":
+                from ai import clear_session_key
+                clear_session_key()
+                self.json_response({"ok": True, **display_settings()})
                 return
             self.json_response({"error": "接口不存在"}, 404)
         except Exception as exc:

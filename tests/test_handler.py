@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import config
 import db
+import keystore
 from handler import Handler
 
 # 测试临时数据严格限制在工作区内（tests/.tmp/），不留任何外部痕迹
@@ -557,7 +558,8 @@ class TestEndpoints(unittest.TestCase):
         status, data = self._request("GET", "/api/reviews/summary/today")
         self.assertEqual(status, 200)
         self.assertGreaterEqual(data["done"], 1)
-        self.assertIn("tip", data)
+        self.assertIn("hard", data)
+        self.assertIn("top_error", data)
         self.assertIn("accuracy", data)
         self.assertIsInstance(data["error_counts"], dict)
 
@@ -686,6 +688,66 @@ class TestEndpoints(unittest.TestCase):
         r2 = json.loads(conn.getresponse().read().decode())
         conn.close()
         self.assertEqual(r1["id"], r2["id"])
+
+    def test_keystore_unlock_clear_and_periodic_reports(self):
+        """密钥保管（解锁/清除 keys.enc）+ 周期报告详情端点。"""
+        # ── 密钥：写入 keys.enc → 重启（清会话）→ 解锁 → 清除 ──
+        if not keystore.crypto_available():
+            self.skipTest("cryptography 不可用")
+        import ai
+        orig_key_file = keystore.KEY_FILE
+        keystore.KEY_FILE = Path(self._tmp.name) / "keys_test.enc"
+        try:
+            self.assertTrue(keystore.save_key("sk-unlock-test", "pw-ok"))
+            ai.reset_session_key()  # 模拟重启：仅清内存，保留 keys.enc
+            status, s = self._request("GET", "/api/settings")
+            self.assertEqual(status, 200)
+            self.assertTrue(s["key_file_locked"])
+            # 错误口令 → 解锁失败
+            status, r = self._request("POST", "/api/keystore/unlock", {"master_password": "wrong"})
+            self.assertEqual(status, 200)
+            self.assertFalse(r["ok"])
+            # 正确口令 → 解锁成功，key_source=keyfile
+            status, r = self._request("POST", "/api/keystore/unlock", {"master_password": "pw-ok"})
+            self.assertEqual(status, 200)
+            self.assertTrue(r["ok"])
+            self.assertEqual(r["key_source"], "keyfile")
+            self.assertFalse(r["key_file_locked"])
+            # 清除 → keys.enc 删除
+            status, r = self._request("POST", "/api/keystore/clear", {})
+            self.assertEqual(status, 200)
+            self.assertTrue(r["ok"])
+            self.assertFalse(keystore.key_file_exists())
+        finally:
+            ai.reset_session_key()  # 仅清内存，避免误删真实 keys.enc
+            keystore.KEY_FILE = orig_key_file
+        # ── 周期报告：创建 1 题 1 复习后周报/月报应含数据 ──
+        pid = self._create_problem(title="周期报告题", error_type="计算错误")
+        _, reviews = self._request("GET", "/api/reviews")
+        rid = next(r["id"] for r in reviews if r["problem_id"] == pid)
+        self._request("POST", f"/api/reviews/{rid}/complete", {"rating": 4})
+        status, w = self._request("GET", "/api/report/weekly")
+        self.assertEqual(status, 200)
+        self.assertGreaterEqual(w["new_problems"], 1)
+        self.assertGreaterEqual(w["week_reviews"], 1)
+        self.assertTrue(w["tip_key"].startswith("report.tipWeek"))
+        status, m = self._request("GET", "/api/report/monthly")
+        self.assertEqual(status, 200)
+        self.assertGreaterEqual(m["month_revs"], 1)
+        self.assertGreaterEqual(m["active_days"], 1)
+        self.assertTrue(m["tip_key"].startswith("report.tipMonth"))
+        self.assertIn("daily", m)
+        # 30 天窗口外（40 天前）的复习不应计入近 30 天活跃天数/复习数
+        from datetime import date, timedelta
+        old = (date.today() - timedelta(days=40)).isoformat()
+        with db.db() as conn:
+            conn.execute(
+                "INSERT INTO reviews(problem_id, due_date, interval_days, result, completed, created_at) "
+                "VALUES (?, ?, 1, '4', 1, ?)", (pid, old, old))
+        status, m2 = self._request("GET", "/api/report/monthly")
+        self.assertEqual(status, 200)
+        self.assertEqual(m2["active_days"], m["active_days"])
+        self.assertEqual(m2["month_revs"], m["month_revs"])
 
 
 if __name__ == "__main__":

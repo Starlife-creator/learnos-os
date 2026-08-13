@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-08-13：D1/D5 收尾「密钥解锁与清除 + 周期报告详情 + 口试语音」（完成）
+
+全量回归：**176 passed**，`node --check static/app.js`、`py_compile` 通过。
+
+- **密钥保管接线（D1 收尾）**：`POST /api/keystore/unlock`（主口令验证后解锁 keys.enc，解密载入内存，不落盘）与 `POST /api/keystore/clear`（清内存密钥并删除 keys.enc）。`ai.py` 新增 `unlock_keyfile` / `reset_session_key`（模拟重启语义，仅清内存）/ `clear_session_key`（内存+文件）；`display_settings()` 增 `key_file_locked` 字段，重启后检测到 keys.enc 未解锁时设置页提示"输入主口令解锁"。
+- **设置页**：新增「🔓 用主口令解锁」「🗑 清除全部密钥」按钮（清除带确认弹窗）；主口令输入框旁提示重启后需解锁。
+- **口试语音**：`startVoiceInput` 参数化按钮 id（默认 edit 弹窗按钮），口试回答输入框旁新增 🎤 语音按钮（`voiceBtnOral`）。
+- **周期报告详情（D5 收尾）**：修复 `GET /api/report/weekly` 死路由（原 dashboard 内嵌周报无独立端点），新增 `GET /api/report/monthly`（近 30 天：新增/复习/保持率/活跃天数/掌握数/错因分布/每日复习柱状 + 模板建议，纯 SQL 零依赖）；概览页周报卡新增「周期报告详情 ›」按钮 → 弹窗本周/近 30 天双 Tab 视图（错因分布与每日复习用现有 error-bar 样式渲染）。
+- 测试 +1：`test_keystore_unlock_clear_and_periodic_reports`（解锁→清除→周报/月报字段断言，keys.enc 重定向到 tests/.tmp）；locale +25 键（zh/en 键集一致）。
+
+---
+
 ## 2026-08-13：F2 收尾「全量剩余文案 i18n + 零依赖体验项」（完成）
 
 原则延续：**零新增依赖、零大文件**（继续用 locale 纯 JSON + 原生实现）。

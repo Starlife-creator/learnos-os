@@ -347,7 +347,10 @@
     </div>
 
     <div class="card" id="weeklyCard">
-      <div class="card-title" data-i18n="card.weekly">本周周报（周一至今）</div>
+      <div class="flex-between">
+        <div class="card-title" data-i18n="card.weekly" style="margin:0">本周周报（周一至今）</div>
+        <button class="btn-link" onclick="showPeriodicReport()" data-i18n="card.weeklyMore">周期报告详情 ›</button>
+      </div>
       <div class="text-muted text-sm">加载中...</div>
     </div>
 
@@ -516,11 +519,14 @@
         <span class="text-sm text-muted" id="oralTurn"></span>
       </div>
       <div class="chat-box" id="oralChat"></div>
-      <div class="form-group">
-        <textarea id="oralAnswer" placeholder="输入你的回答..." data-i18n-ph="oral.answerPh" rows="2" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();respondOral()}"></textarea>
+      <div class="flex gap-8" style="align-items:center">
+        <textarea id="oralAnswer" placeholder="输入你的回答..." data-i18n-ph="oral.answerPh" rows="2" style="flex:1" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();respondOral()}"></textarea>
+        <button class="btn btn-secondary btn-sm" type="button" onclick="startVoiceInput('oralAnswer','voiceBtnOral')" id="voiceBtnOral" title="语音输入（Chrome/Edge）" data-i18n="modal.voice">🎤</button>
       </div>
-      <button class="btn btn-primary" onclick="respondOral()" data-i18n="oral.answer">回答</button>
-      <button class="btn btn-secondary" onclick="resetOral()" data-i18n="oral.restart">重新开始</button>
+      <div class="flex gap-12 mt-12">
+        <button class="btn btn-primary" onclick="respondOral()" data-i18n="oral.answer">回答</button>
+        <button class="btn btn-secondary" onclick="resetOral()" data-i18n="oral.restart">重新开始</button>
+      </div>
     </div>
   </div>
 
@@ -593,6 +599,11 @@
       <div class="form-group">
         <label for="setMasterPassword" data-i18n="set.masterLabel">keys.enc 主口令（可选）</label>
         <input type="password" id="setMasterPassword" placeholder="用于加密保存 API Key" data-i18n-ph="set.masterPh">
+        <p class="hint-text">每次重启后需用主口令解锁 keys.enc（解密保存在内存，不落盘）。</p>
+      </div>
+      <div class="flex gap-12">
+        <button class="btn btn-secondary btn-sm" onclick="unlockKeystore()" data-i18n="set.unlock">🔓 用主口令解锁</button>
+        <button class="btn btn-danger btn-sm" onclick="clearKeystore()" data-i18n="set.clearKeys">🗑 清除全部密钥</button>
       </div>
       <div class="form-row">
         <div class="form-group">
