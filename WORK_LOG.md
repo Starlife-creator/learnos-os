@@ -17,6 +17,13 @@
 - **AI 英文讲解**：`problem_prompt`/`fallback_hint` 增加 `lang` 参数（en 分支：英文 system 提示 + 英文 level 规则 + 英文降级模板）；hint 请求体带 `lang: currentLang()`，handler 透传到 SSE 与非 SSE 路径（test_hint_lang_en_fallback）。
 - 测试 +2：test_hint_lang_en_fallback、test_locale_consistency。
 
+### F2 微修（小提交，175 passed + 4 subtests）
+
+- `applyI18n` 改 `textContent`（键值纯文本，测试守护无 HTML 标签）防 XSS；7 张卡片标题合并嵌套中文；`prob.selected` data-i18n 内层化保留 `#batchCount`。
+- 新增守护测试 test_locale_keys_referenced_in_html_exist（index/concept_map 的 data-i18n 键必须存在于词条）。
+- SW：`/locale/` 前缀网络优先（词条随版本更新，防 stale）；首次访问按 `navigator.language` 就近选择 zh-CN/en-US（app.js + concept_map.html）。
+- 动态文案 t() 化：复习评级/闪电复习/完成标记/浏览器通知（25 键）、游戏化/遥测/周报卡标签与空状态（22 键）。
+
 ---
 
 ## 2026-08-12：P2 批次「D4 遗忘曲线 + 图谱语义修复」（全部完成）
