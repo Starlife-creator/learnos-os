@@ -33,7 +33,7 @@ function applyI18n(root) {
   const scope = root || document;
   scope.querySelectorAll('[data-i18n]').forEach(el => {
     const text = t(el.getAttribute('data-i18n'));
-    el.innerHTML = text; // 键值含 HTML 标签（如 ⭐）时以 JSON 为准，避免 XSS 需键值为纯文本
+    el.textContent = text; // 键值为纯文本（测试守护无 HTML 标签），用 textContent 避免 XSS
   });
   scope.querySelectorAll('[data-i18n-ph]').forEach(el => {
     el.setAttribute('placeholder', t(el.getAttribute('data-i18n-ph')));

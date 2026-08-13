@@ -281,7 +281,7 @@
     </div>
 
     <div class="card">
-      <div class="card-title" data-i18n="card.forget">明日遗忘预测 <span class="hint-text">（FSRS 检索概率 R）</span></div>
+      <div class="card-title" data-i18n="card.forget">明日遗忘预测（FSRS 检索概率 R）</div>
       <div id="forgetCard" class="hint-text">—</div>
     </div>
 
@@ -296,7 +296,7 @@
     </div>
 
     <div class="card">
-      <div class="card-title" data-i18n="card.stubborn">顽固错题 <span class="hint-text">（重复出错 ≥2 次）</span></div>
+      <div class="card-title" data-i18n="card.stubborn">顽固错题（重复出错 ≥2 次）</div>
       <div id="stubbornList" class="text-sm"></div>
     </div>
 
@@ -306,18 +306,18 @@
     </div>
 
     <div class="card" id="telemetryCard">
-      <div class="card-title" data-i18n="card.telemetry">AI 调用健康度 <span class="hint-text">（近 7 天，仅元数据）</span></div>
+      <div class="card-title" data-i18n="card.telemetry">AI 调用健康度（近 7 天，仅元数据）</div>
       <div class="text-muted text-sm">加载中...</div>
     </div>
 
     <div class="card" id="forgettingCard">
-      <div class="card-title" data-i18n="card.forgetCurve">记忆保持曲线（D4） <span class="hint-text">实测 R vs FSRS 预测</span></div>
+      <div class="card-title" data-i18n="card.forgetCurve">记忆保持曲线（D4 · 实测 R vs FSRS 预测）</div>
       <svg id="forgetSvg" viewBox="0 0 340 150" width="100%" height="150"></svg>
       <div id="forgetStats" class="text-sm"></div>
     </div>
 
     <div class="card" id="weeklyCard">
-      <div class="card-title" data-i18n="card.weekly">本周周报 <span class="hint-text">（周一至今）</span></div>
+      <div class="card-title" data-i18n="card.weekly">本周周报（周一至今）</div>
       <div class="text-muted text-sm">加载中...</div>
     </div>
 
@@ -327,7 +327,7 @@
     </div>
 
     <div class="card">
-      <div class="card-title" data-i18n="card.errorTrend">错因趋势 <span class="hint-text">（近 30 天 vs 历史占比）</span></div>
+      <div class="card-title" data-i18n="card.errorTrend">错因趋势（近 30 天 vs 历史占比）</div>
       <div id="errorTrend"></div>
     </div>
 
@@ -408,7 +408,7 @@
     </div>
     <div id="problemsList"></div>
     <div class="flex gap-12 mt-12 hidden" id="batchBar" style="position:sticky;bottom:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:8px 16px;z-index:50">
-      <span class="text-sm" data-i18n="prob.selected">已选 <strong id="batchCount">0</strong> <span data-i18n="prob.items">题</span></span>
+      <span class="text-sm"><span data-i18n="prob.selected">已选</span> <strong id="batchCount">0</strong> <span data-i18n="prob.items">题</span></span>
       <button class="btn btn-secondary btn-sm" onclick="batchAction('star')" data-i18n="prob.star">☆ 收藏/取消</button>
       <button class="btn btn-danger btn-sm" onclick="batchAction('delete')" data-i18n="prob.delete">删除</button>
     </div>

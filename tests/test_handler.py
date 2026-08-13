@@ -660,6 +660,19 @@ class TestEndpoints(unittest.TestCase):
         status2, _ = self._request("GET", "/locale/en-US.json")
         self.assertEqual(status2, 200)
 
+    def test_locale_keys_referenced_in_html_exist(self):
+        """F2 守护：index/concept_map 中所有 data-i18n 引用的键必须存在于 locale 词条。"""
+        import re
+        base = Path(__file__).resolve().parent.parent / "static"
+        zh = json.load(open(base / "locale" / "zh-CN.json", encoding="utf-8"))
+        refs = set()
+        for html_name in ("index.html", "concept_map.html"):
+            html = open(base / html_name, encoding="utf-8").read()
+            for attr in ("data-i18n", "data-i18n-ph", "data-i18n-aria"):
+                refs.update(re.findall(attr + r'="([^"]+)"', html))
+        missing = sorted(k for k in refs if k not in zh)
+        self.assertEqual(missing, [])
+
     def test_write_idempotency(self):
         # 相同 X-Request-Id 重复提交应返回首次结果，不产生重复题目
         body = {"title": "幂等题", "content": "test"}
