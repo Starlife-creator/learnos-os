@@ -637,6 +637,29 @@ class TestEndpoints(unittest.TestCase):
         self.assertLessEqual(f["curve"][0]["r"], 1.0)
         self.assertGreaterEqual(f["curve"][-1]["r"], 0.0)
 
+    def test_hint_lang_en_fallback(self):
+        """F2：hint 请求带 lang=en 时走英文降级提示。"""
+        pid = self._create_problem(title="F2英文提示", content="求小球落地的速度")
+        status, data = self._request("POST", f"/api/problems/{pid}/hint", {"level": 2, "lang": "en-US"})
+        self.assertEqual(status, 200)
+        self.assertEqual(data["source"], "fallback")
+        self.assertTrue(data["content"])
+        # 英文降级模板应包含英文引导而非中文
+        self.assertNotIn("受力", data["content"])
+
+    def test_locale_consistency(self):
+        """F2：zh-CN/en-US 键集一致，且 /locale/*.json 可访问。"""
+        base = Path(__file__).resolve().parent.parent / "static" / "locale"
+        zh = json.load(open(base / "zh-CN.json", encoding="utf-8"))
+        en = json.load(open(base / "en-US.json", encoding="utf-8"))
+        self.assertEqual(set(zh.keys()), set(en.keys()))
+        status, data = self._request("GET", "/locale/zh-CN.json")
+        self.assertEqual(status, 200)
+        self.assertIsInstance(data, dict)
+        self.assertIn("nav.dashboard", data)
+        status2, _ = self._request("GET", "/locale/en-US.json")
+        self.assertEqual(status2, 200)
+
     def test_write_idempotency(self):
         # 相同 X-Request-Id 重复提交应返回首次结果，不产生重复题目
         body = {"title": "幂等题", "content": "test"}

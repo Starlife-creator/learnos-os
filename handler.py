@@ -1311,6 +1311,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _handle_hint(self, problem_id: int, data: dict[str, Any]) -> None:
         level = max(1, min(4, int(data.get("level", 1))))
+        lang = "en" if str(data.get("lang", "zh")).lower().startswith("en") else "zh"
         problem = row("SELECT * FROM problems WHERE id = ?", (problem_id,))
         if not problem:
             self.json_response({"error": "题目不存在"}, 404)
@@ -1329,13 +1330,13 @@ class Handler(SimpleHTTPRequestHandler):
             return
         rag_messages, rag_sources = self._rag_context(problem)
         if self._wants_sse():
-            self._stream_hint(problem, level, diagnose, rag_messages, rag_sources)
+            self._stream_hint(problem, level, diagnose, rag_messages, rag_sources, lang)
             return
         source = "ai"
         try:
-            hint = call_ai(problem_prompt(problem, level) + rag_messages, tier="fast", route="hint")
+            hint = call_ai(problem_prompt(problem, level, lang) + rag_messages, tier="fast", route="hint")
         except Exception as exc:
-            hint = fallback_hint(problem, level)
+            hint = fallback_hint(problem, level, lang)
             source = "fallback"
             LOG.warning("提示降级 (problem=%s, level=%d): %s", problem_id, level, exc)
         with DB_LOCK, db() as conn:
@@ -1356,7 +1357,8 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _stream_hint(self, problem: dict[str, Any], level: int, diagnose: bool = False,
                      rag_messages: list[dict[str, str]] | None = None,
-                     rag_sources: list[dict[str, Any]] | None = None) -> None:
+                     rag_sources: list[dict[str, Any]] | None = None,
+                     lang: str = "zh") -> None:
         """SSE 流式提示：start → delta* → done | error（含 partial）。"""
         rag_messages = rag_messages or []
         rag_sources = rag_sources or []
@@ -1370,7 +1372,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._sse_send("sources", {"sources": rag_sources})
         collected: list[str] = []
         try:
-            chunks = call_ai_stream(problem_prompt(problem, level) + rag_messages, tier="fast", route="hint")
+            chunks = call_ai_stream(problem_prompt(problem, level, lang) + rag_messages, tier="fast", route="hint")
             for delta in chunks:
                 collected.append(delta)
                 self._sse_send("delta", {"delta": delta})
@@ -1386,7 +1388,7 @@ class Handler(SimpleHTTPRequestHandler):
                                     "sources": rag_sources})
         except Exception as exc:
             LOG.warning("流式提示降级 (problem=%s, level=%d): %s", problem["id"], level, exc)
-            fallback = fallback_hint(problem, level)
+            fallback = fallback_hint(problem, level, lang)
             try:
                 with DB_LOCK, db() as conn:
                     conn.execute(

@@ -290,12 +290,18 @@ def call_ai_stream(
     return _chunks()
 
 
-def problem_prompt(problem: dict[str, Any], level: int) -> list[dict[str, str]]:
+def problem_prompt(problem: dict[str, Any], level: int, lang: str = "zh") -> list[dict[str, str]]:
     level_rules = {
         1: "只指出应该检查的概念或最早可能出错的位置，不给公式答案，最多100字。",
         2: "给出解题方向和关键关系，但留出至少一个关键步骤让学生完成，最多180字。",
         3: "给出较完整的解题框架、检查方法和下一步，但不要代写最终作业，最多300字。",
         4: "给出完整解析：列清步骤、关键公式与最终结果，但最后补一句『自己重做一遍』的引导，最多400字。",
+    }
+    level_rules_en = {
+        1: "Only point out the concept to check or the earliest likely error location; no formula answers, at most 100 words.",
+        2: "Give the solving direction and key relations, but leave at least one key step for the student to finish, at most 180 words.",
+        3: "Give a fairly complete solving framework, checking methods and next steps, but do not write the final answer for the student, at most 300 words.",
+        4: "Give the full solution: list the steps, key formulas and final result, but end with a prompt to redo it yourself, at most 400 words.",
     }
     # C6：按错因定向检查（提高提示针对性）
     error_line = ""
@@ -322,6 +328,25 @@ def problem_prompt(problem: dict[str, Any], level: int) -> list[dict[str, str]]:
         profile_line = snapshot()
     except Exception as exc:
         LOG.debug("档案快照生成失败（可忽略）: %s", exc)
+    if lang == "en":
+        return [
+            {
+                "role": "system",
+                "content": "You are a strict but patient university physics TA. Your job is to promote active "
+                           "learning, not to do the homework for the student. "
+                           "Prioritize checking the physical model, applicable conditions, dimensions, "
+                           "boundary conditions and limiting cases. Answer in English with clear LaTeX."
+                           f"{profile_line}",
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Course: {problem['course']}\nTopic: {problem['topic']}\nProblem: {problem['content']}\n"
+                    f"My attempt: {problem['my_attempt'] or 'Not provided yet'}\n"
+                    f"Level {level} hint. Requirement: {level_rules_en[level]}"
+                ),
+            },
+        ]
     return [
         {
             "role": "system",
@@ -341,10 +366,31 @@ def problem_prompt(problem: dict[str, Any], level: int) -> list[dict[str, str]]:
     ]
 
 
-def fallback_hint(problem: dict[str, Any], level: int) -> str:
-    topic = problem.get("topic") or "这个问题"
+def fallback_hint(problem: dict[str, Any], level: int, lang: str = "zh") -> str:
+    topic = problem.get("topic") or ("这个问题" if lang == "zh" else "this problem")
     attempt = problem.get("my_attempt", "").strip()
     course = (problem.get("course") or "").strip()
+
+    if lang == "en":
+        extra = ("You have not recorded your attempt yet — first draw a diagram or write the basic equations."
+                 if not attempt else "Start from the first basic equation you wrote and label each term's source and sign.")
+        if level == 1:
+            return (f"Do not calculate yet. Clarify the object of study, the known and unknown quantities, and the "
+                    f"applicable conditions for \"{topic}\"; then check that every equation you wrote is "
+                    f"dimensionally consistent.")
+        if level == 2:
+            return (f"Break the problem into: build a model → choose coordinates / conserved quantities → write the "
+                    f"basic equations → check boundary conditions. {extra}")
+        if level == 3:
+            return ("Write the minimal set of equations, solve symbolically first, then plug in numbers. "
+                    "Do a triple check with dimensions, special limits and orders of magnitude; add the exact step "
+                    "where you get stuck to \"My Attempt\".")
+        return (f"Full solution framework: 1) identify the object and known/unknown quantities; "
+                f"2) choose the physical model ({topic}) and state its applicable conditions; "
+                "3) write the basic equations and check signs and dimensions line by line; "
+                "4) solve symbolically first, then substitute numbers; "
+                "5) verify with limiting cases (mass→0, force→∞) and orders of magnitude. "
+                "Compare key formulas and the final result with a standard solution — redo it yourself before checking.")
 
     # 知识点感知模板：根据课程/主题关键词匹配更精准的指导
     _TOPIC_HINTS: dict[str, tuple[str, str, str]] = {

@@ -67,13 +67,13 @@
 </head>
 <body>
 <header>
-  <h1>概念知识图谱</h1>
+  <h1 data-i18n="graph.title">概念知识图谱</h1>
   <div class="legend">
-    <span class="ln"><i style="border-color:#f87171"></i>先修</span>
-    <span class="ln"><i style="border-color:#60a5fa"></i>相关</span>
-    <span class="ln"><i style="border-color:#fb923c"></i>对比</span>
+    <span class="ln"><i style="border-color:#f87171"></i><span data-i18n="graph.tagPrereq">先修</span></span>
+    <span class="ln"><i style="border-color:#60a5fa"></i><span data-i18n="graph.tagRelated">相关</span></span>
+    <span class="ln"><i style="border-color:#fb923c"></i><span data-i18n="graph.tagContrast">对比</span></span>
   </div>
-  <div class="hint">滚轮缩放 · 拖拽平移 · 点击概念查看掌握度与先修错题</div>
+  <div class="hint" data-i18n="graph.zoom">滚轮缩放 · 拖拽平移 · 点击概念查看掌握度与先修错题</div>
 </header>
 <div id="wrap">
   <div id="canvasBox">
@@ -81,37 +81,64 @@
   </div>
   <div id="side">
     <div id="welcome" class="card">
-      <h3>使用说明</h3>
-      <p class="kv">点击左侧任意节点查看详情。概念节点颜色深浅表示掌握度：</p>
-      <p class="kv"><span class="tag tag-ok">绿 = 掌握良好</span></p>
-      <p class="kv"><span class="tag tag-warn">黄 = 仍需巩固</span></p>
-      <p class="kv"><span class="tag tag-mid">红 = 先修不足</span></p>
+      <h3 data-i18n="graph.usageTitle">使用说明</h3>
+      <p class="kv" data-i18n="graph.usage">点击左侧任意节点查看详情。概念节点颜色深浅表示掌握度：</p>
+      <p class="kv"><span class="tag tag-ok" data-i18n="graph.tagOk">绿 = 掌握良好</span></p>
+      <p class="kv"><span class="tag tag-warn" data-i18n="graph.tagWarn">黄 = 仍需巩固</span></p>
+      <p class="kv"><span class="tag tag-mid" data-i18n="graph.tagMid">红 = 先修不足</span></p>
     </div>
     <div id="detail" class="card hidden">
       <h3 id="dTitle"></h3>
-      <p class="kv"><b>层级：</b><span id="dLevel"></span></p>
-      <p class="kv"><b>难度：</b><span id="dDiff"></span></p>
-      <p class="kv"><b>掌握度：</b><span id="dMastery"></span>
+      <p class="kv"><b data-i18n="graph.level">层级：</b><span id="dLevel"></span></p>
+      <p class="kv"><b data-i18n="graph.diff">难度：</b><span id="dDiff"></span></p>
+      <p class="kv"><b data-i18n="graph.mastery">掌握度：</b><span id="dMastery"></span>
         <span class="bar"><i id="dBar" style="width:0%"></i></span></p>
-      <p class="kv"><b>绑定错题：</b><span id="dLooms"></span></p>
+      <p class="kv"><b data-i18n="graph.looms">绑定错题：</b><span id="dLooms"></span></p>
       <div id="dPrereq"></div>
       <div class="flex" style="display:flex; gap:8px; margin-top:10px">
-        <button class="btn btn-primary btn-sm" onclick="prereqMode()">先修模式：看相关错题</button>
+        <button class="btn btn-primary btn-sm" onclick="prereqMode()" data-i18n="graph.prereqBtn">先修模式：看相关错题</button>
       </div>
       <div id="dProblems"></div>
     </div>
     <div class="card" style="margin-top:12px">
-      <h3>添加概念</h3>
-      <p class="muted">父节点留空则加为顶级单元；可粘贴章节名作父节点</p>
+      <h3 data-i18n="graph.addTitle">添加概念</h3>
+      <p class="muted" data-i18n="graph.addHint">父节点留空则加为顶级单元；可粘贴章节名作父节点</p>
       <div id="addForm">
-        <input id="newName" placeholder="概念名">
-        <input id="newParent" placeholder="父节点ID(可选)">
+        <input id="newName" placeholder="概念名" data-i18n-ph="graph.namePh">
+        <input id="newParent" placeholder="父节点ID(可选)" data-i18n-ph="graph.parentPh">
       </div>
-      <button class="btn btn-sm" style="margin-top:8px" onclick="addConcept()">添加</button>
+      <button class="btn btn-sm" style="margin-top:8px" onclick="addConcept()" data-i18n="graph.add">添加</button>
     </div>
   </div>
 </div>
 <script>
+// ── F2 双语：静态独立页轻度 i18n ──
+const GRAPH_LOCALES = ['zh-CN', 'en-US'];
+let _dict = {};
+function _curLang() {
+  const s = localStorage.getItem('lang');
+  return GRAPH_LOCALES.includes(s) ? s : 'zh-CN';
+}
+function t(k, fb) { return _dict[k] || fb || k; }
+function applyGraphI18n(root) {
+  const scope = root || document;
+  scope.querySelectorAll('[data-i18n]').forEach(el => {
+    const text = t(el.getAttribute('data-i18n'));
+    if (String(text)) el.innerHTML = text;
+  });
+  scope.querySelectorAll('[data-i18n-ph]').forEach(el => {
+    el.setAttribute('placeholder', t(el.getAttribute('data-i18n-ph')));
+  });
+  if (scope === document) document.title = t('graph.title') + ' - Physics';
+}
+async function bootGraph() {
+  const lang = _curLang();
+  try {
+    _dict = await (await fetch(`/locale/${lang}.json`, { cache: 'no-cache' })).json();
+  } catch { _dict = {}; }
+  applyGraphI18n(document);
+  loadGraph();
+}
 const svg = document.getElementById('svg');
 const NS = 'http://www.w3.org/2000/svg';
 let graphData = null;
@@ -135,7 +162,7 @@ function nodeColor(m) {
 async function loadGraph() {
   const resp = await fetch('/api/graph/concepts');
   graphData = await resp.json();
-  if (graphData.nodes.length === 0) { toastErr('图谱为空'); return; }
+  if (graphData.nodes.length === 0) { toastErr(t('graph.empty')); return; }
   draw();
 }
 
@@ -269,7 +296,7 @@ async function selectNode(id) {
   document.getElementById('welcome').classList.add('hidden');
   document.getElementById('detail').classList.remove('hidden');
   document.getElementById('dTitle').textContent = n.name;
-  const levelName = n.level === 0 ? '单元' : n.level === 1 ? '章节' : '概念';
+  const levelName = n.level === 0 ? t('graph.unit') : n.level === 1 ? t('graph.chapter') : t('graph.concept');
   document.getElementById('dLevel').textContent = levelName;
   document.getElementById('dDiff').textContent = n.difficulty;
   const m = (n.mastery_est || 0);
@@ -283,26 +310,26 @@ async function selectNode(id) {
   const cont = graphData.links.filter(l => (l.concept_a === id || l.concept_b === id) && l.relation === 'contrast').map(l => byId.get(l.concept_a === id ? l.concept_b : l.concept_a));
   const dPrereq = document.getElementById('dPrereq');
   dPrereq.innerHTML = '';
-  if (prereq.length) dPrereq.innerHTML += `<p class="kv"><b>先修：</b>${prereq.map(p => p.name).join('、')}</p>`;
-  if (succ.length) dPrereq.innerHTML += `<p class="kv"><b>后续：</b>${succ.map(s => s.name).join('、')}</p>`;
-  if (cont.length) dPrereq.innerHTML += `<p class="kv"><b>对比：</b>${cont.map(c => c.name).join('、')}</p>`;
+  if (prereq.length) dPrereq.innerHTML += `<p class="kv"><b data-i18n="graph.prereq">先修：</b>${prereq.map(p => p.name).join('、')}</p>`;
+  if (succ.length) dPrereq.innerHTML += `<p class="kv"><b data-i18n="graph.succ">后续：</b>${succ.map(s => s.name).join('、')}</p>`;
+  if (cont.length) dPrereq.innerHTML += `<p class="kv"><b data-i18n="graph.contrast">对比：</b>${cont.map(c => c.name).join('、')}</p>`;
   document.getElementById('dProblems').innerHTML = '';
   if (n.level === 2) loadRelatedProblems(id);
 }
 
 async function loadRelatedProblems(id) {
   const el = document.getElementById('dProblems');
-  el.innerHTML = '<p class="muted">加载中…</p>';
+  el.innerHTML = '<p class="muted">' + t('msg.loading') + '</p>';
   try {
     // B4 语义修正：展示「绑定该概念 + 先修链」上的历史错题，
     // 而非同课程题目（/api/graph/problems?concept= 与先修模式同源）
     const resp = await fetch(`/api/graph/problems?concept=${id}`);
     const items = await resp.json();
     el.innerHTML = items.length
-      ? '<p class="muted">相关错题（含先修链）：</p><ul id="problemList">' + items.map(p =>
-          `<li>${p.title}（掌握 ${p.mastery}/5）</li>`).join('') + '</ul>'
-      : '<p class="muted">暂无绑定的历史错题</p>';
-  } catch { el.innerHTML = '<p class="muted">加载失败</p>'; }
+      ? '<p class="muted">' + t('graph.relatedLabel') + '</p><ul id="problemList">' + items.map(p =>
+          `<li>${p.title}（${t('graph.masteryOf')} ${p.mastery}/5）</li>`).join('') + '</ul>'
+      : '<p class="muted">' + t('graph.noRelated') + '</p>';
+  } catch { el.innerHTML = '<p class="muted">' + t('graph.loadFail') + '</p>'; }
 }
 
 function prereqMode() {
@@ -320,7 +347,7 @@ async function addConcept() {
     body: JSON.stringify({ name, parent_id: parent ? parseInt(parent, 10) : 0 }),
   });
   const data = await resp.json();
-  if (!resp.ok) { toastErr(data.error || '添加失败'); return; }
+  if (!resp.ok) { toastErr(data.error || t('graph.addFail')); return; }
   document.getElementById('newName').value = '';
   document.getElementById('newParent').value = '';
   await loadGraph();
@@ -330,7 +357,7 @@ function toastErr(msg) {
   alert(msg);
 }
 
-loadGraph();
+bootGraph();
 </script>
 </body>
 </html>

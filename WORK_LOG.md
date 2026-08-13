@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-08-13：F2 批次「双语 i18n + AI 英文讲解」（完成）
+
+原则延续：**零新增依赖、零大文件**（locale 纯 JSON，无 i18n 库）。
+
+全量回归：**174 passed + 4 subtests**，`node --check static/app.js` 与图谱内嵌 JS 均通过。
+
+- **词条**：`static/locale/zh-CN.json` / `en-US.json`（223 键，键集强制一致，测试守护 test_locale_consistency）。
+- **index.html**：154 处 `data-i18n` / `data-i18n-ph` / `data-i18n-aria`（导航、统计、概览卡片、错题页、复习页、口试页、教材库、exam 页、设置页、modal）；设置页语言下拉 `#langSelect`。
+- **app.js**：头部 i18n 核心（`loadLocale`/`t`/`applyI18n`/`setLang`/`refreshForLang`，localStorage `lang` 默认 zh-CN，切换按当前页重渲染）；高频动态文案（加载中/暂无数据/已保存/已删除等）改走 `t()`。
+- **concept_map.html**：独立轻量 i18n（内嵌 `_dict`/`t`/`applyGraphI18n`/`bootGraph`），图例/说明/详情标签/添加表单/动态文案全双语，`document.title` 随语言。
+- **AI 英文讲解**：`problem_prompt`/`fallback_hint` 增加 `lang` 参数（en 分支：英文 system 提示 + 英文 level 规则 + 英文降级模板）；hint 请求体带 `lang: currentLang()`，handler 透传到 SSE 与非 SSE 路径（test_hint_lang_en_fallback）。
+- 测试 +2：test_hint_lang_en_fallback、test_locale_consistency。
+
+---
+
 ## 2026-08-12：P2 批次「D4 遗忘曲线 + 图谱语义修复」（全部完成）
 
 原则延续：**零新增依赖、零大文件**（SVG 纯手绘，无 d3/图表库）。

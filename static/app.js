@@ -328,7 +328,7 @@ document.getElementById('themeToggle').addEventListener('click', () => {
 // ── 概览 ──
 async function loadDashboard() {
   const el = document.getElementById('topicsList');
-  el.innerHTML = '<div class="loading">加载中…</div>';
+  el.innerHTML = '<div class="loading">' + t('msg.loading') + '</div>';
   try {
     const d = await api('/api/dashboard');
     document.getElementById('statTotal').textContent = d.stats.total || 0;
@@ -348,7 +348,7 @@ async function loadDashboard() {
           </span>
         </div>`).join('');
     } else {
-      el.innerHTML = '<div class="empty"><p>暂无知识点数据</p></div>';
+      el.innerHTML = '<div class="empty"><p>' + t('msg.noData') + '</p></div>';
     }
 
     const recentEl = document.getElementById('recentList');
@@ -487,7 +487,7 @@ function drawAnalytics(data) {
   const h = (data && data.deck_health) || {};
   if (dh) dh.innerHTML = h.total ?
     `新生 ${h.newborn} · 学习中 ${h.learning} · 成长中 ${h.mature}（共 ${h.total} 题，平均复习 ${h.avg_repetition} 次，平均掌握度 ${h.avg_mastery}）` :
-    '暂无数据';
+    t('msg.noData');
   drawPressure((data && data.pressure) || {});
   drawForgetPredict((data && data.forget_predict) || {});
   drawTodayTasks((data && data.tasks) || []);
@@ -551,7 +551,7 @@ function drawForgetCurve(f) {
 function drawGamification(g) {
   const el = document.getElementById('gameCard');
   if (!el) return;
-  if (!g || g.total_reviews === undefined) { el.innerHTML = '<div class="text-muted text-sm">暂无数据</div>'; return; }
+  if (!g || g.total_reviews === undefined) { el.innerHTML = '<div class="text-muted text-sm">' + t('msg.noData') + '</div>'; return; }
   const unlocked = (g.badges || []).filter(b => b.unlocked);
   el.innerHTML = `<div class="flex-between mb-8">
     <div><span class="text-sm">累计 XP</span><div class="text-xl">${g.total_xp}</div></div>
@@ -568,7 +568,7 @@ function drawGamification(g) {
 function drawTelemetry(t) {
   const el = document.getElementById('telemetryCard');
   if (!el) return;
-  if (!t || t.calls === undefined) { el.innerHTML = '<div class="text-muted text-sm">暂无数据</div>'; return; }
+  if (!t || t.calls === undefined) { el.innerHTML = '<div class="text-muted text-sm">' + t('msg.noData') + '</div>'; return; }
   const rate = t.fail_rate > 0.3 ? 'tag-red' : t.fail_rate > 0.1 ? 'tag-warn' : 'tag-green';
   el.innerHTML = `<div class="flex-between mb-8">
     <span class="text-sm">近 7 天调用</span><b>${t.calls}</b>
@@ -583,7 +583,7 @@ function drawTelemetry(t) {
 function drawWeekly(w) {
   const el = document.getElementById('weeklyCard');
   if (!el) return;
-  if (!w || w.week_start === undefined) { el.innerHTML = '<div class="text-muted text-sm">暂无数据</div>'; return; }
+  if (!w || w.week_start === undefined) { el.innerHTML = '<div class="text-muted text-sm">' + t('msg.noData') + '</div>'; return; }
   const delta = (w.review_delta || 0);
   const deltaStr = delta > 0 ? `+${delta}` : String(delta);
   el.innerHTML = `<div class="flex-between mb-8">
@@ -651,7 +651,7 @@ function drawTodayTasks(tasks) {
 function drawErrorDist(list) {
   const el = document.getElementById('errorDist');
   if (!el) return;
-  if (!list || !list.length) { el.innerHTML = '<div class="empty"><p>暂无错因数据</p></div>'; return; }
+  if (!list || !list.length) { el.innerHTML = '<div class="empty"><p>' + t('msg.noData') + '</p></div>'; return; }
   const total = list.reduce((n, e) => n + e.count, 0);
   const colors = {1:'#ef4444',2:'#f97316',3:'#f59e0b',4:'#3b82f6',5:'#22c55e'};
   el.innerHTML = list.map(e => {
@@ -821,7 +821,7 @@ async function viewProblem(id) {
 
 async function getHint(id, level) {
   const btn = document.getElementById(`hint${level}btn`);
-  btn.disabled = true; btn.textContent = '加载中...';
+  btn.disabled = true; btn.textContent = t('msg.loading');
   const area = document.getElementById('hintsArea');
   const levelName = '第' + '一二三四'[level - 1] + '级提示';
   const diagnoseHtml = (on) => on ? '<p class="hint-text" style="color:var(--warning)">⚠ 上次复习未通过：若还是卡住，建议先看「薄弱知识点」页重练概念，再回本题（诊断门）。</p>' : '';
@@ -835,7 +835,7 @@ async function getHint(id, level) {
     const r = await fetch(`/api/problems/${id}/hint`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'PhysicsStudyOS', 'Accept': 'text/event-stream' },
-      body: JSON.stringify({ level }),
+      body: JSON.stringify({ level, lang: currentLang() }),
     });
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
@@ -1046,7 +1046,7 @@ async function saveProblem() {
     } else {
       await api('/api/problems', { method: 'POST', body });
     }
-    toast(id ? '已更新' : '已创建');
+    toast(id ? t('msg.updated') : t('msg.created'));
     closeModal('editModal');
     loadProblems(problemPage);
   } catch(e) { toast(e.message, 'error'); }
@@ -1071,7 +1071,7 @@ async function deleteProblem(id) {
     toastEl.remove();
     toast('已取消删除', 'success');
   });
-  toastEl.appendChild(document.createTextNode('已删除 · '));
+  toastEl.appendChild(document.createTextNode(t('msg.deleted') + ' · '));
   toastEl.appendChild(undoLink);
   document.body.appendChild(toastEl);
   // 10 秒倒计时后真正删除
@@ -1080,7 +1080,7 @@ async function deleteProblem(id) {
   try {
     await api(`/api/problems/${id}`, { method: 'DELETE' });
     toastEl.remove();
-    toast('已删除');
+    toast(t('msg.deleted'));
     closeModal('problemModal');
     loadProblems(problemPage);
   } catch(e) { toastEl.remove(); toast(e.message, 'error'); }
@@ -1169,7 +1169,7 @@ function toggleInterleave(checked) {
 
 async function loadReviews() {
   const el = document.getElementById('reviewList');
-  el.innerHTML = '<div class="loading">加载中…</div>';
+  el.innerHTML = '<div class="loading">' + t('msg.loading') + '</div>';
   loadTodaySummary();
   try {
     const interleave = localStorage.getItem('interleave') !== '0';
@@ -1492,7 +1492,7 @@ async function resetOral() {
 function drawErrorTrend(list) {
   const el = document.getElementById('errorTrend');
   if (!el) return;
-  if (!list || !list.length) { el.innerHTML = '<div class="empty"><p>暂无错因数据</p></div>'; return; }
+  if (!list || !list.length) { el.innerHTML = '<div class="empty"><p>' + t('msg.noData') + '</p></div>'; return; }
   el.innerHTML = list.map(t => {
     const up = t.delta > 0, down = t.delta < 0;
     const arrow = up ? '↗' : down ? '↘' : '→';
@@ -1646,7 +1646,7 @@ async function startFlashReview() {
     <div class="flash-count text-sm text-muted mb-8" id="flashCount"></div>
     <div class="flash-front">
       <div class="text-muted text-sm mb-8" id="flashMeta"></div>
-      <pre class="flash-content" id="flashContent">加载中...</pre>
+      <pre class="flash-content" id="flashContent">${t('msg.loading')}</pre>
     </div>
     <div class="flash-back hidden" id="flashBack">
       <div class="print-hdr">我的尝试</div>
@@ -2116,7 +2116,7 @@ async function deleteExamPaper(id) {
   if (!ok) return;
   try {
     await api(`/api/exam/papers/${id}`, { method: 'DELETE' });
-    toast('已删除');
+    toast(t('msg.deleted'));
     loadExam();
   } catch(e) { toast(e.message, 'error'); }
 }
@@ -2372,7 +2372,11 @@ function toggleFormulaPanel() {
 
 // ── 初始化 ──
 const initial = (location.hash || '').replace('#', '').split('?')[0];
-switchPage(PAGES.includes(initial) ? initial : 'dashboard');
+(async () => {
+  await loadLocale(currentLang());
+  applyI18n(document);
+  switchPage(PAGES.includes(initial) ? initial : 'dashboard');
+})();
 document.getElementById('searchInput').addEventListener('input', onSearchInput);
 loadOcrProbe();
 // C7 PWA：注册 Service Worker（仅 http/https，离线缓存静态资源）
