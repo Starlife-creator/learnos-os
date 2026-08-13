@@ -119,8 +119,8 @@ function masteryBar(level) {
 
 function masteryTag(level) {
   const cls = level >= 4 ? 'tag-green' : level >= 3 ? 'tag-blue' : level >= 2 ? 'tag-amber' : 'tag-red';
-  const labels = {1:'完全不会',2:'有思路',3:'基本会做',4:'熟练',5:'精通'};
-  return `<span class="tag ${cls}">${labels[level]||'未知'}</span>`;
+  const labels = {1:'label.rate1',2:'label.rate2',3:'label.rate3',4:'label.rate4',5:'label.rate5'};
+  return `<span class="tag ${cls}">${t(labels[level]||'label.unknown')}</span>`;
 }
 
 function escapeHtml(s) {
@@ -394,11 +394,11 @@ async function loadDashboard() {
     // 最近复习活动
     const actEl = document.getElementById('recentActivity');
     if (d.recent_activity && d.recent_activity.length) {
-      const labels = {1:'忘记',2:'模糊',3:'正确',4:'掌握'};
+      const labels = {1:'label.rev1',2:'label.rev2',3:'label.rev3',4:'label.rev4'};
       actEl.innerHTML = d.recent_activity.map(a => `
         <div class="list-item" onclick="viewProblem(${a.problem_id})" style="padding:8px 12px">
           <span class="text-sm">📝 ${escapeHtml(a.title)}</span>
-          <span class="tag ${a.result==='4'?'tag-green':a.result==='3'?'tag-blue':'tag-amber'}">${labels[a.result]||'?'}</span>
+          <span class="tag ${a.result==='4'?'tag-green':a.result==='3'?'tag-blue':'tag-amber'}">${t('label.rev'+a.result)||'?'}</span>
           <span class="text-muted text-sm" style="float:right">${(a.created_at||'').slice(0,16)}</span>
         </div>`).join('');
     } else { actEl.innerHTML = '<div class="empty"><p>暂无复习活动</p></div>'; }
@@ -422,16 +422,16 @@ function maybeNotify(due) {
   const last = parseInt(localStorage.getItem('notifyLastAt') || '0', 10);
   if (now - last < 10 * 60 * 1000) return;  // 10 分钟节流
   try {
-    new Notification('物理学习 OS', { body: `现在有 ${due} 道题目待复习`, tag: 'due-review' });
+    new Notification(t('notify.title'), { body: t('notify.dueBody').replace('{n}', due), tag: 'due-review' });
     localStorage.setItem('notifyLastAt', String(now));
   } catch(e) { /* 通知失败不影响 */ }
 }
 
 async function requestNotifyPermission() {
-  if (!('Notification' in window)) { toast('当前浏览器不支持通知', 'error'); return; }
-  if (Notification.permission === 'granted') { toast('通知已授权'); return; }
+  if (!('Notification' in window)) { toast(t('notify.unsupported'), 'error'); return; }
+  if (Notification.permission === 'granted') { toast(t('notify.granted')); return; }
   const res = await Notification.requestPermission();
-  toast(res === 'granted' ? '已开启复习提醒' : '未授权（可在浏览器设置中开启）', res === 'granted' ? 'success' : 'error');
+  toast(res === 'granted' ? t('notify.on') : t('notify.off'), res === 'granted' ? 'success' : 'error');
 }
 
 // C6 轮询：每 5 分钟轻量刷新待复习角标 + 通知
@@ -482,7 +482,7 @@ function drawAnalytics(data) {
     return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px">
       <span class="text-sm" style="font-size:11px">${s.due || ''}</span>
       <div style="width:100%;max-width:34px;height:${h}px;background:${isToday ? 'var(--warning)' : 'var(--accent)'};border-radius:3px;opacity:${s.due ? 1 : 0.25}"></div>
-      <span class="text-sm" style="font-size:10px;color:var(--text-2)">${isToday ? '今天' : s.date.slice(5)}</span>
+      <span class="text-sm" style="font-size:10px;color:var(--text-2)">${isToday ? t('label.today') : s.date.slice(5)}</span>
     </div>`;
   }).join('');
   const total7 = series.reduce((n, s) => n + s.due, 0);
@@ -1105,9 +1105,9 @@ async function loadHistory(id) {
     if (!history.length) { el.innerHTML = ''; return; }
     el.innerHTML = `<div class="card-title">复习轨迹</div>` +
       history.map(h => {
-        const labels = {1:'❌忘记',2:'⚠模糊',3:'✓正确',4:'✅掌握'};
+        const labels = {1:'label.flash1',2:'label.flash2',3:'label.flash3',4:'label.flash4'};
         const cls = h.result === '4' ? 'tag-green' : h.result === '3' ? 'tag-blue' : h.result === '2' ? 'tag-amber' : 'tag-red';
-        return `<span class="tag ${cls}" style="margin:1px 4px" title="${h.due_date} · 间隔${h.interval_days}天">${labels[h.result]||h.result}</span>`;
+        return `<span class="tag ${cls}" style="margin:1px 4px" title="${h.due_date} · 间隔${h.interval_days}天">${t(labels[h.result]||'')||h.result}</span>`;
       }).join(' ');
   } catch(e) {}
 }
@@ -1225,8 +1225,8 @@ async function loadReviews() {
 async function completeReview(id, rating) {
   try {
     const r = await api(`/api/reviews/${id}/complete`, { method: 'POST', body: { rating } });
-    const labels = {1:'已标记为忘记',2:'已标记为模糊',3:'已标记为基本正确',4:'已标记为完全掌握'};
-    toast(`${labels[rating]} · 下次复习: ${r.next_due} (${r.interval_days}天后)`);
+    const labels = {1:'label.mark1',2:'label.mark2',3:'label.mark3',4:'label.mark4'};
+    toast(`${t(labels[rating])} · 下次复习: ${r.next_due} (${r.interval_days}天后)`);
     if (window._reviewUpdateProgress) window._reviewUpdateProgress();
     loadReviews();
     if (document.getElementById('page-dashboard').classList.contains('active')) loadDashboard();
