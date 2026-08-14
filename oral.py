@@ -391,7 +391,7 @@ def draft_oral_card(session: dict[str, Any]) -> dict[str, str]:
         "title": f"{topic}（口试复盘）",
         "content": content,
         "topic": topic,
-        "error_type": "概念理解",
+        "error_type": "concept_misunderstood",
         "my_attempt": my_attempt,
         "tags": [topic],
     }

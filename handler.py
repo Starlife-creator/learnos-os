@@ -1659,7 +1659,7 @@ class Handler(SimpleHTTPRequestHandler):
         seen: list[str] = []
         for p in parts:
             p = p.strip().replace("\\", "/")
-            if p.startswith("media/") and p not in seen:
+            if p.startswith("media/") and ".." not in p and p not in seen:
                 seen.append(p)
         return ",".join(seen)
 
@@ -1942,9 +1942,6 @@ class Handler(SimpleHTTPRequestHandler):
                 pid = int(pid)
                 if action == "delete":
                     conn.execute("DELETE FROM problems WHERE id = ?", (pid,))
-                elif action == "mastery" and isinstance(value, int):
-                    conn.execute("UPDATE problems SET mastery = ?, updated_at = ? WHERE id = ?",
-                                 (clamp_mastery(value), now(), pid))
                 elif action == "star":
                     conn.execute("UPDATE problems SET starred = CASE WHEN starred THEN 0 ELSE 1 END, updated_at = ? WHERE id = ?",
                                  (now(), pid))

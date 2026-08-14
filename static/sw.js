@@ -1,4 +1,6 @@
-const CACHE_NAME = 'physics-os-v2';
+// 注意：每次发布（index.html/app.js/locale 变更）必须递增 CACHE_NAME，
+// 否则 cache-first 策略会让浏览器继续用旧缓存，更新提示也不会出现。
+const CACHE_NAME = 'physics-os-v3';
 const STATIC_ASSETS = [
   './',
   './index.html',

@@ -123,6 +123,22 @@ function masteryTag(level) {
   return `<span class="tag ${cls}">${t(labels[level]||'label.unknown')}</span>`;
 }
 
+// 错因枚举 → 本地化显示；旧中文/未知值原样返回（兼容存量数据）
+function errLabel(et) {
+  const map = {
+    '待诊断': 'errType.diagnose',
+    concept_misunderstood: 'errType.concept',
+    calculation: 'errType.calculation',
+    careless: 'errType.careless',
+    time_pressure: 'errType.timePressure',
+    misread: 'errType.misread',
+    blank_in_facts: 'errType.blankFacts',
+    heuristic_trap: 'errType.heuristicTrap',
+  };
+  const key = map[et];
+  return key ? t(key) : et;
+}
+
 function escapeHtml(s) {
   const d = document.createElement('div');
   d.textContent = s || '';
@@ -373,7 +389,7 @@ async function loadDashboard() {
             <span class="list-item-title">${escapeHtml(p.title)}</span>
             ${masteryTag(p.mastery)}
           </div>
-          <div class="list-item-meta">${escapeHtml(p.course)} · ${escapeHtml(p.topic)} · ${escapeHtml(p.error_type)}</div>
+          <div class="list-item-meta">${escapeHtml(p.course)} · ${escapeHtml(p.topic)} · ${escapeHtml(errLabel(p.error_type))}</div>
         </div>`).join('');
     } else {
       recentEl.innerHTML = '<div class="empty"><p>' + t('msg.noRecent') + '</p></div>';
@@ -715,7 +731,7 @@ async function loadProblems(page = 1) {
               <span class="list-item-title">${p.starred ? '⭐ ' : ''}${escapeHtml(p.title)}${miniTrendDots(p.recent_results)}</span>
               ${masteryTag(p.mastery)}
           </div>
-          <div class="list-item-meta">${escapeHtml(p.course)} · ${escapeHtml(p.topic)} · ${escapeHtml(p.error_type)} · ${escapeHtml(p.created_at)}</div>
+          <div class="list-item-meta">${escapeHtml(p.course)} · ${escapeHtml(p.topic)} · ${escapeHtml(errLabel(p.error_type))} · ${escapeHtml(p.created_at)}</div>
           </div>
         </div>`).join('');
     }
@@ -1396,7 +1412,7 @@ async function draftOralCard() {
       <div class="card-title" style="font-size:14px">${t('draft.cardTitle')}</div>
       <div class="text-sm"><b>${t('draft.title')}</b>${escapeHtml(d.title || '')}</div>
       <div class="text-sm" style="white-space:pre-wrap"><b>${t('draft.content')}</b>${escapeHtml(d.content || '')}</div>
-      <div class="text-sm">${t('draft.topicErr').replace('{t}', escapeHtml(d.topic || '')).replace('{e}', escapeHtml(d.error_type || ''))}</div>
+      <div class="text-sm">${t('draft.topicErr').replace('{t}', escapeHtml(d.topic || '')).replace('{e}', escapeHtml(errLabel(d.error_type || '待诊断')))}</div>
       <div class="flex gap-8 mt-8">
         <button class="btn btn-primary btn-sm" onclick="saveOralCard()">${t('draft.saveAs')}</button>
         <button class="btn btn-secondary btn-sm" onclick="this.closest('.bubble').remove()">${t('common.discard')}</button>
@@ -1412,7 +1428,7 @@ async function saveOralCard() {
     const d = _oralDraft;
     await api('/api/problems', { method: 'POST', body: {
       title: d.title || t('oral.cardTitle'), content: d.content || '', topic: d.topic || '',
-      error_type: d.error_type || t('oral.defaultErr'), my_attempt: d.my_attempt || '',
+      error_type: d.error_type || 'concept_misunderstood', my_attempt: d.my_attempt || '',
       tags: d.tags || [],
     }});
     _oralDraft = null;
@@ -1557,7 +1573,7 @@ async function loadProfile(dash) {
     const topicLine = (p.topics || []).slice(0, 3).map(t =>
       `${escapeHtml(t.topic)} ${t.avg_mastery}/5`).join('、');
     const errLine = (p.errors || []).slice(0, 4).map(e =>
-      `${escapeHtml(e.error_type)}×${e.count}`).join('、');
+      `${escapeHtml(errLabel(e.error_type))}×${e.count}`).join('、');
     const pace = p.pace || {};
     const goal = p.goal || {};
     let goalText = t('profile.noGoal');
@@ -1604,7 +1620,7 @@ async function printProblems() {
     area.innerHTML = `<h2>${t('print.bookTitle').replace('{n}', items.length).replace('{d}', new Date().toLocaleDateString())}</h2>` +
       sorted.map(p => `<div class="print-item">
         <div class="print-title">${t('print.pTitle').replace('{t}', escapeHtml(p.title || t('print.unnamed'))).replace('{m}', p.mastery)}</div>
-        <div class="print-meta">${t('print.meta').replace('{c}', escapeHtml(p.course || '')).replace('{t}', escapeHtml(p.topic || '')).replace('{e}', escapeHtml(p.error_type || t('common.pendingDiag')))}</div>
+        <div class="print-meta">${t('print.meta').replace('{c}', escapeHtml(p.course || '')).replace('{t}', escapeHtml(p.topic || '')).replace('{e}', escapeHtml(errLabel(p.error_type || '待诊断')))}</div>
         <pre>${escapeHtml(p.content || '')}</pre>
         ${p.my_attempt ? `<div class="print-hdr">${t('print.myAttempt')}</div><pre>${escapeHtml(p.my_attempt)}</pre>` : ''}
         ${p.fix_action ? `<div class="print-hdr">${t('print.fixAction')}</div><pre>${escapeHtml(p.fix_action)}</pre>` : ''}
@@ -1687,7 +1703,7 @@ function _flashRender() {
   document.getElementById('flashCount').textContent =
     t('flash.count').replace('{n}', _flashIdx + 1).replace('{m}', _flashQueue.length).replace('{d}', _flashDone);
   document.getElementById('flashMeta').textContent =
-    t('flash.meta').replace('{c}', escapeHtml(r.course || '')).replace('{t}', escapeHtml(r.topic || '')).replace('{e}', escapeHtml(r.error_type || t('common.pendingDiag')));
+    t('flash.meta').replace('{c}', escapeHtml(r.course || '')).replace('{t}', escapeHtml(r.topic || '')).replace('{e}', escapeHtml(errLabel(r.error_type || '待诊断')));
   document.getElementById('flashContent').textContent = r.content || t('flash.noContent');
   document.getElementById('flashAttempt').textContent = r.my_attempt || t('flash.noAttempt');
   document.getElementById('flashFix').textContent = r.fix_action || t('flash.noFix');

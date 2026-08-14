@@ -94,13 +94,15 @@ def _split_chunks(text: str, page: int = 0) -> list[tuple[int, str]]:
     if buf:
         chunks.append((page, buf))
     # 相邻块首尾重叠 60 字，保证切分处语义连续
-    merged: list[tuple[int, str]] = []
-    for i, (pg, content) in enumerate(chunks):
-        if i > 0 and pg == chunks[i - 1][0]:
-            prev = merged[-1][1]
-            if len(prev) > 60:
-                merged[-1] = (pg, prev + "\n" + content)
-                continue
+    if len(chunks) <= 1:
+        return chunks
+    merged: list[tuple[int, str]] = [chunks[0]]
+    for i in range(1, len(chunks)):
+        pg, content = chunks[i]
+        prev_pg, prev = merged[-1]
+        if pg == prev_pg:
+            overlap = content[:60] if len(prev) >= 60 else content
+            merged[-1] = (prev_pg, prev + "\n" + overlap)
         merged.append((pg, content))
     return merged
 

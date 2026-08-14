@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="color-scheme" content="light dark">
-<title>个人物理学习 OS</title>
+<title data-i18n="app.title">个人物理学习 OS</title>
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#0f172a">
   <link rel="icon" type="image/png" href="icon-192.png">
@@ -264,8 +264,8 @@
 </div>
 
 <nav class="nav">
-  <div class="nav-brand">物理学习 OS
-    <button class="theme-toggle" id="themeToggle" aria-label="切换深色/浅色模式" title="切换主题">🌓</button>
+  <div class="nav-brand"><span data-i18n="app.brand">物理学习 OS</span>
+    <button class="theme-toggle" id="themeToggle" data-i18n-aria="theme.toggleAria" title="🌓">🌓</button>
   </div>
   <button class="nav-item active" data-page="dashboard"><span data-i18n="nav.dashboard">概览</span></button>
   <button class="nav-item" data-page="problems"><span data-i18n="nav.problems">错题</span></button>
@@ -372,16 +372,16 @@
     <div class="card">
       <div class="card-title" data-i18n="card.backup">数据备份</div>
       <div class="flex gap-12">
-        <button class="btn btn-primary btn-sm" onclick="exportBackup()">一键备份 (全库 JSON)</button>
-        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('restoreFile').click()">一键还原</button>
+        <button class="btn btn-primary btn-sm" onclick="exportBackup()" data-i18n="btn.backupAll">一键备份 (全库 JSON)</button>
+        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('restoreFile').click()" data-i18n="btn.restoreAll">一键还原</button>
         <input type="file" id="restoreFile" accept="application/json" class="hidden" onchange="importBackup(this)">
-        <button class="btn btn-secondary btn-sm" onclick="exportData()">导出数据 (JSON)</button>
-        <button class="btn btn-secondary btn-sm" onclick="exportAnki()">导出 Anki-CSV</button>
-        <button class="btn btn-secondary btn-sm" onclick="exportIcs()">导出复习日程 .ics</button>
-        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('importFile').click()">导入数据</button>
+        <button class="btn btn-secondary btn-sm" onclick="exportData()" data-i18n="btn.exportData">导出数据 (JSON)</button>
+        <button class="btn btn-secondary btn-sm" onclick="exportAnki()" data-i18n="btn.exportAnki">导出 Anki-CSV</button>
+        <button class="btn btn-secondary btn-sm" onclick="exportIcs()" data-i18n="btn.exportIcs">导出复习日程 .ics</button>
+        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('importFile').click()" data-i18n="btn.importData">导入数据</button>
         <input type="file" id="importFile" accept="application/json" class="hidden" onchange="importData(this)">
       </div>
-      <p class="hint-text mt-12">一键备份包含全部表（错题/复习/口语/知识图谱/考试）。还原前现库会自动保存为 .bak 文件；导入采用参数化写入，不会造成注入或数据损坏。</p>
+      <p class="hint-text mt-12" data-i18n="card.backupHint">一键备份包含全部表（错题/复习/口语/知识图谱/考试）。还原前现库会自动保存为 .bak 文件；导入采用参数化写入，不会造成注入或数据损坏。</p>
     </div>
 
     <div class="card">
@@ -404,14 +404,14 @@
       <div id="profileBox" class="hint-text">—</div>
       <div class="flex gap-12 mt-12" style="align-items:flex-end">
         <div class="form-group" style="margin:0">
-          <label for="profExamDate" style="font-size:12px">考试日期</label>
+          <label for="profExamDate" style="font-size:12px" data-i18n="card.profileExamDate">考试日期</label>
           <input type="date" id="profExamDate">
         </div>
         <div class="form-group" style="margin:0">
-          <label for="profExamScore" style="font-size:12px">目标分</label>
-          <input type="text" id="profExamScore" placeholder="如 85">
+          <label for="profExamScore" style="font-size:12px" data-i18n="card.profileScore">目标分</label>
+          <input type="text" id="profExamScore" placeholder="如 85" data-i18n-ph="card.profileScorePh">
         </div>
-        <button class="btn btn-secondary btn-sm" onclick="saveProfile()">更新目标</button>
+        <button class="btn btn-secondary btn-sm" onclick="saveProfile()" data-i18n="card.updateGoal">更新目标</button>
       </div>
     </div>
   </div>
@@ -478,7 +478,7 @@
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="flashTitle" style="max-width:640px">
       <div class="modal-header">
         <h3 id="flashTitle" data-i18n="review.flashTitle">⚡ 闪电复习</h3>
-        <button class="modal-close" onclick="closeModal('flashModal')" aria-label="关闭">&times;</button>
+        <button class="modal-close" onclick="closeModal('flashModal')" data-i18n-aria="common.closeAria">&times;</button>
       </div>
       <div class="flash-body" id="flashBody" onclick="flashFlip()">
         <div class="flash-count text-sm text-muted mb-8" id="flashCount"></div>
@@ -599,7 +599,7 @@
       <div class="form-group">
         <label for="setMasterPassword" data-i18n="set.masterLabel">keys.enc 主口令（可选）</label>
         <input type="password" id="setMasterPassword" placeholder="用于加密保存 API Key" data-i18n-ph="set.masterPh">
-        <p class="hint-text">每次重启后需用主口令解锁 keys.enc（解密保存在内存，不落盘）。</p>
+        <p class="hint-text" data-i18n="set.unlockHint">每次重启后需用主口令解锁 keys.enc（解密保存在内存，不落盘）。</p>
       </div>
       <div class="flex gap-12">
         <button class="btn btn-secondary btn-sm" onclick="unlockKeystore()" data-i18n="set.unlock">🔓 用主口令解锁</button>
@@ -716,7 +716,7 @@
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
     <div class="modal-header">
       <h3 id="modalTitle" data-i18n="modal.detail">题目详情</h3>
-      <button class="modal-close" onclick="closeModal('problemModal')" aria-label="关闭">&times;</button>
+      <button class="modal-close" onclick="closeModal('problemModal')" data-i18n-aria="common.closeAria">&times;</button>
     </div>
     <div id="modalBody"></div>
   </div>
@@ -727,7 +727,7 @@
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="editModalTitle">
     <div class="modal-header">
       <h3 id="editModalTitle" data-i18n="modal.addTitle">新增题目</h3>
-      <button class="modal-close" onclick="closeModal('editModal')" aria-label="关闭">&times;</button>
+      <button class="modal-close" onclick="closeModal('editModal')" data-i18n-aria="common.closeAria">&times;</button>
     </div>
     <input type="hidden" id="editId">
     <div class="form-group">
@@ -783,15 +783,16 @@
     <div class="form-row">
       <div class="form-group">
         <label for="editErrorType" data-i18n="modal.errorType">错误类型</label>
-        <select id="editErrorType">
-          <option value="待诊断">待诊断</option>
-          <option value="概念错误">概念错误</option>
-          <option value="计算错误">计算错误</option>
-          <option value="适用条件">适用条件</option>
-          <option value="符号/方向">符号/方向</option>
-          <option value="建模错误">建模错误</option>
-          <option value="其他">其他</option>
-        </select>
+      <select id="editErrorType">
+        <option value="待诊断" data-i18n="errType.diagnose">待诊断</option>
+        <option value="concept_misunderstood" data-i18n="errType.concept">概念理解错误</option>
+        <option value="calculation" data-i18n="errType.calculation">计算错误</option>
+        <option value="careless" data-i18n="errType.careless">粗心笔误</option>
+        <option value="time_pressure" data-i18n="errType.timePressure">时间压力</option>
+        <option value="misread" data-i18n="errType.misread">审题错误</option>
+        <option value="blank_in_facts" data-i18n="errType.blankFacts">公式/事实空白</option>
+        <option value="heuristic_trap" data-i18n="errType.heuristicTrap">直觉陷阱</option>
+      </select>
       </div>
       <div class="form-group">
         <label for="editMastery" data-i18n="modal.masterySelf">掌握度 (1-5，题目自身)</label>

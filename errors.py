@@ -26,22 +26,31 @@ ERROR_TYPE_LABELS: dict[str, str] = {
 # 旧版自由文本 → 枚举的归并映射（迁移时使用，保留原文本可追溯）
 _ERROR_TYPE_MIGRATION: dict[str, str] = {
     "概念不清": "concept_misunderstood",
+    "概念错误": "concept_misunderstood",
+    "概念理解": "concept_misunderstood",
     "概念理解错误": "concept_misunderstood",
     "不会": "concept_misunderstood",
+    "建模错误": "concept_misunderstood",
     "计算错误": "calculation",
     "算错": "calculation",
     "粗心": "careless",
     "马虎": "careless",
     "笔误": "careless",
+    "粗心笔误": "careless",
+    "符号/方向": "careless",
+    "符号方向": "careless",
     "审题不清": "misread",
     "看错题": "misread",
+    "审题错误": "misread",
     "公式忘了": "blank_in_facts",
     "公式不熟": "blank_in_facts",
     "记不住公式": "blank_in_facts",
+    "公式/事实空白": "blank_in_facts",
     "陷阱": "heuristic_trap",
     "直觉陷阱": "heuristic_trap",
     "时间不够": "time_pressure",
     "超时": "time_pressure",
+    "时间压力": "time_pressure",
 }
 
 

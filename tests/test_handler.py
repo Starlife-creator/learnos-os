@@ -537,6 +537,21 @@ class TestEndpoints(unittest.TestCase):
         _, got = self._request("GET", f"/api/problems/{pid}")
         self.assertEqual(got["error_type"], "careless")
 
+    def test_batch_star_and_delete(self):
+        """批量操作：star/delete 正常，非法 action 不报错。"""
+        p1 = self._create_problem(title="批量1")
+        p2 = self._create_problem(title="批量2")
+        status, _ = self._request("POST", "/api/problems/batch", {"ids": [p1, p2], "action": "star"})
+        self.assertEqual(status, 200)
+        _, got = self._request("GET", f"/api/problems/{p1}")
+        self.assertEqual(got["starred"], 1)
+        _, got2 = self._request("GET", f"/api/problems/{p2}")
+        self.assertEqual(got2["starred"], 1)
+        status, _ = self._request("POST", "/api/problems/batch", {"ids": [p1], "action": "delete"})
+        self.assertEqual(status, 200)
+        status, _ = self._request("GET", f"/api/problems/{p1}")
+        self.assertEqual(status, 404)
+
     def test_reviews_interleave_mode(self):
         # 清空共享测试库，避免历史测试遗留的 due 卡破坏分桶假设
         with db.db() as conn:
@@ -674,6 +689,60 @@ class TestEndpoints(unittest.TestCase):
                 refs.update(re.findall(attr + r'="([^"]+)"', html))
         missing = sorted(k for k in refs if k not in zh)
         self.assertEqual(missing, [])
+
+    def test_html_visible_chinese_must_be_wired(self):
+        """F2 反向守护：HTML 中所有可见中文文本必须带 data-i18n（防硬编码回退）。
+
+        动态填充的占位元素（JS 首次加载即覆盖）与语言名选项除外。
+        """
+        import re
+        from html.parser import HTMLParser
+        base = Path(__file__).resolve().parent.parent / "static"
+
+        # JS 首次加载即覆盖的占位元素（静态文本只是加载瞬间的占位）
+        dynamic_ids = {
+            "sprintCard", "todaySummaryText", "flashContent", "ocrProbe",
+            "ollamaStatus", "fsrsStatus", "photoHint", "trendHint",
+            "profileBox", "topicsList", "recentList", "courseStats",
+            "recentActivity", "weeklyCard", "stubbornList", "errorDist",
+            "errorTrend", "flashMeta", "flashAttempt", "flashFix",
+            "methodsArea", "examList", "ragDocs", "ragResults", "ocrResult",
+            "oralChat", "dueBadge", "batchBar",
+        }
+
+        class Scan(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.stack = []
+                self.issues = []
+
+            def handle_starttag(self, tag, attrs):
+                self.stack.append({"tag": tag, "attrs": dict(attrs), "text": []})
+
+            def handle_endtag(self, tag):
+                if not self.stack:
+                    return
+                node = self.stack.pop()
+                if node["tag"] != tag:
+                    return
+                text = "".join(node["text"]).strip()
+                if not text or not re.search(r"[\u4e00-\u9fff]", text):
+                    return
+                attrs = node["attrs"]
+                if any(k in attrs for k in ("data-i18n", "data-i18n-ph", "data-i18n-aria")):
+                    return
+                if node["tag"] in ("script", "style", "title"):
+                    return
+                if attrs.get("id") in dynamic_ids:
+                    return
+                if node["tag"] == "option" and attrs.get("value") == "zh-CN":
+                    return  # 语言名自引用，不翻译
+                self.issues.append((node["tag"], attrs.get("id", ""), text[:60]))
+
+        for html_name in ("index.html", "concept_map.html"):
+            scan = Scan()
+            scan.feed(open(base / html_name, encoding="utf-8").read())
+            self.assertEqual(scan.issues, [], f"{html_name} 存在未接线的中文文本: {scan.issues}")
 
     def test_write_idempotency(self):
         # 相同 X-Request-Id 重复提交应返回首次结果，不产生重复题目
