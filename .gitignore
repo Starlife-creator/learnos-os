@@ -63,3 +63,8 @@ htmlcov/
 .cache
 .pytest_cache/
 .ruff_cache/
+
+# Retired planning/worklog docs (deleted, do not re-track)
+OPTIMIZATION_PLAN.md
+OPTIMIZATION_PLAN_V2.md
+WORK_LOG.md
