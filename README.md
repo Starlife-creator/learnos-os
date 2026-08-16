@@ -50,13 +50,21 @@ set LEARNOS_PORT=9000 && python app.py
 | API 地址 | `LEARNOS_API_BASE` | `https://api.openai.com/v1` |
 | API Key | `LEARNOS_API_KEY` | 空（环境变量 / 加密密钥库 / 内存，绝不写入数据库） |
 | 模型名称 | `LEARNOS_MODEL` | 空 |
-| Temperature | - | `0.3` |
+| 轻量模型 fast | - | 空（可选的提示档专用模型，优先于默认模型） |
+| 推理模型 heavy | - | 空（可选的深度推理档专用模型，优先于默认模型） |
+| 视觉模型 vision | - | 空（可选，拍照识题 / OCR 用） |
+| Temperature | - | `0.3`（范围 0–2） |
+| 上下文窗口 | - | `32000`（范围 4000–1000000，决定资料导入的分段大小） |
+| 允许本地 AI 端点 | - | 开启（Ollama 等本地/内网端点需要，SSRF 防护开关） |
 | 默认学科 | - | physics |
 | 提示缓存 | - | 开启（关闭后 AI 提示不再落库） |
 | 每日复习上限 | - | 0 = 不限（超出按优先级顺延） |
+| FSRS 目标保持率 | - | `0.9`（范围 0.75–0.97，设置页 FSRS 卡可调） |
+| 密钥库主密码 | - | 空（设置后加密保存 API Key 至 `data/keys.enc`） |
 | 数据库路径 | `LEARNOS_DB` | 项目目录下 `learnos.db` |
 | 监听地址 | `LEARNOS_HOST` | `127.0.0.1` |
 | 监听端口 | `LEARNOS_PORT` | `8765` |
+| 自动打开浏览器 | `LEARNOS_NO_BROWSER` | 开启（设为 1 则启动时不自动打开浏览器） |
 
 > **密钥安全**：API Key 仅来自环境变量、AES-GCM 加密密钥库（`data/keys.enc`，可选）或本次运行内存（UI 录入后重启失效），**永远不会以明文写入数据库文件**。设置页会显示当前密钥来源（environment / keyfile / runtime / none）。
 
@@ -86,12 +94,11 @@ learnos-os/
   bank.py          # 题库（单元/作答）
   rag.py           # RAG 文档与分块
   material.py      # 资料导入向导（教材/试卷 → 图谱/题库/试卷草稿提取）
-  handler.py       # HTTP 路由与核心业务（2152 行已拆分）
-  handler_material.py / handler_oral.py  # Handler 领域拆分（资料域 / 口试域）
+  handler.py       # HTTP 路由与核心业务（已按领域拆分）
+  handler_base.py / handler_material.py / handler_oral.py / handler_problems.py / handler_reports.py / handler_reviews.py  # Handler 领域拆分（基础/资料/口试/错题/报表/复习）
   oral.py          # AI 口试 / 费曼自评
   exam.py          # 试卷模式
   gamification.py / profile.py / ocr.py / keystore.py / backup.py / telemetry.py
-  handler.py       # HTTP 路由处理器
   vendor/fsrs/     # 内置 FSRS-6 纯 Python 实现
   data/            # 三学科种子数据（概念 + 题目）
   static/
@@ -100,7 +107,7 @@ learnos-os/
     concept_map.html  # 知识图谱独立页
     locale/        # 中英文语言包
     vendor/        # 本地 KaTeX（离线可用）
-  tests/           # 19 个测试文件（算法/AI/DB/HTTP/端到端）
+  tests/           # 21 个测试文件（算法/AI/DB/HTTP/端到端）
   build.spec       # PyInstaller 打包脚本
   start.bat/stop.bat  # Windows 启停
 ```
