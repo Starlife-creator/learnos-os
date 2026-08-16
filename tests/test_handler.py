@@ -304,14 +304,14 @@ class TestEndpoints(unittest.TestCase):
                 conn.close()
                 self.assertEqual(resp.status, 200)
                 self.assertTrue(body)
-        # sw.js 内容含缓存清单
+        # sw.js 为网络优先策略，含 CACHE_NAME 与 fetch 处理
         conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
         conn.request("GET", "/sw.js")
         resp = conn.getresponse()
         sw = resp.read().decode("utf-8")
         conn.close()
         self.assertIn("CACHE_NAME", sw)
-        self.assertIn("index.html", sw)
+        self.assertIn("fetch(event.request)", sw)
 
     def test_oral_end(self):
         # Start an oral session

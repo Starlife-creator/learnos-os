@@ -276,6 +276,27 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (15, ?)", (now(),))
         LOG.info("数据库已迁移到 v15 (ai_telemetry/gamification/problems.methods)")
 
+    # v16: 题库 — 答题记录 bank_attempts / 题库-错题映射 bank_problems
+    if current < 16:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS bank_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                qid TEXT NOT NULL,
+                correct INTEGER NOT NULL,
+                attempted_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS bank_problems (
+                qid TEXT PRIMARY KEY,
+                problem_id INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_bank_attempts_qid ON bank_attempts(qid, id)")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (16, ?)", (now(),))
+        LOG.info("数据库已迁移到 v16 (题库 bank_attempts/bank_problems)")
+
 
 def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)

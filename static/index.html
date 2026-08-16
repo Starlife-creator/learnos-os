@@ -136,6 +136,28 @@
   .rag-sources { margin-top: 8px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
   .tag-gray { background: var(--border); color: var(--text-2); }
 
+  /* ── 题库练习 ── */
+  .bank-choices { display: flex; flex-direction: column; gap: 8px; }
+  .bank-choice {
+    display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+    border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .bank-choice:hover { border-color: var(--accent); background: var(--accent-light); }
+  .bank-choice input { accent-color: var(--accent); }
+  .bank-choice-key {
+    flex: 0 0 auto; width: 22px; height: 22px; line-height: 22px; text-align: center;
+    border-radius: 50%; background: var(--bg); border: 1px solid var(--border);
+    font-size: 12px; font-weight: 600; color: var(--text-2);
+  }
+  .bank-choice-text { font-size: 13px; }
+  .bank-correct { border-color: var(--success); background: var(--success-light); }
+  .bank-correct .bank-choice-key { background: var(--success); color: #fff; border-color: var(--success); }
+  .bank-incorrect { border-color: var(--danger); background: var(--danger-light); }
+  .bank-incorrect .bank-choice-key { background: var(--danger); color: #fff; border-color: var(--danger); }
+  .bank-ok-card { border-color: var(--success); background: var(--success-light); }
+  .bank-bad-card { border-color: var(--danger); background: var(--danger-light); }
+
   /* ── 提示卡片 ── */
   .hint-card { padding: 16px; border-left: 3px solid var(--accent); background: var(--accent-light); border-radius: 0 8px 8px 0; margin-bottom: 10px; }
   .hint-card h4 { font-size: 13px; color: var(--accent); margin-bottom: 6px; }
@@ -268,6 +290,7 @@
     <button class="theme-toggle" id="themeToggle" data-i18n-aria="theme.toggleAria" title="🌓">🌓</button>
   </div>
   <button class="nav-item active" data-page="dashboard"><span data-i18n="nav.dashboard">概览</span></button>
+  <button class="nav-item" data-page="bank"><span data-i18n="nav.bank">题库</span></button>
   <button class="nav-item" data-page="problems"><span data-i18n="nav.problems">错题</span></button>
   <button class="nav-item" data-page="review"><span data-i18n="nav.review">复习</span> <span class="nav-badge hidden" id="dueBadge">0</span></button>
   <button class="nav-item" data-page="oral"><span data-i18n="nav.oral">口试</span></button>
@@ -286,6 +309,16 @@
       <div class="stat-card"><div class="stat-value" id="statDue">-</div><div class="stat-label" data-i18n="stat.due">待复习</div></div>
       <div class="stat-card"><div class="stat-value" id="statMastered">-</div><div class="stat-label" data-i18n="stat.mastered">已掌握</div></div>
       <div class="stat-card"><div class="stat-value" id="statAvg">-</div><div class="stat-label" data-i18n="stat.avg">平均掌握度</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title" data-i18n="card.quickStart">快捷入口</div>
+      <div class="flex gap-12" style="flex-wrap:wrap">
+        <button class="btn btn-primary" onclick="switchPage('bank')" data-i18n="nav.bank">题库</button>
+        <button class="btn btn-secondary" onclick="switchPage('problems')" data-i18n="nav.problems">错题</button>
+        <button class="btn btn-secondary" onclick="switchPage('review')" data-i18n="nav.review">复习</button>
+        <a class="btn btn-secondary" href="concept_map.html" style="text-decoration:none;display:inline-flex;align-items:center" data-i18n="nav.graph">图谱</a>
+      </div>
     </div>
 
     <div class="card">
@@ -414,6 +447,39 @@
         <button class="btn btn-secondary btn-sm" onclick="saveProfile()" data-i18n="card.updateGoal">更新目标</button>
       </div>
     </div>
+  </div>
+
+  <!-- ── 题库页 ── -->
+  <div id="page-bank" class="page">
+    <div class="flex-between mb-8">
+      <h2 style="font-size:18px" data-i18n="bank.title">练习题库</h2>
+      <div class="flex gap-8" id="bankStats" style="font-size:13px;color:var(--text-muted)"></div>
+    </div>
+    <div class="flex gap-12 mb-8" style="align-items:center;flex-wrap:wrap">
+      <button class="btn btn-secondary btn-sm" onclick="openBankImport()" data-i18n="bank.importBtn">导入题目</button>
+    </div>
+    <div class="card mb-8" id="bankWelcome">
+      <p class="text-sm text-muted" data-i18n="bank.hint">这里是与图谱配套的物理练习题库。挑一套开始做：答对计入掌握，答错的会自动进入「错题」工作台并安排复习。</p>
+    </div>
+    <div class="flex gap-12 mb-8">
+      <div class="form-group" style="flex:1;margin:0">
+        <input type="text" id="bankSearch" placeholder="搜索题干、知识点..." data-i18n-ph="bank.searchPh" onkeydown="if(event.key==='Enter')loadBank()">
+      </div>
+      <div class="form-group" style="margin:0">
+        <select id="bankUnit" onchange="loadBank()" aria-label="单元筛选" data-i18n-aria="bank.unitAria">
+          <option value="" data-i18n="bank.allUnits">全部单元</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin:0">
+        <select id="bankStatus" onchange="loadBank()" aria-label="状态筛选" data-i18n-aria="bank.statusAria">
+          <option value="all" data-i18n="bank.statusAll">全部</option>
+          <option value="todo" data-i18n="bank.statusTodo">未做</option>
+          <option value="wrong" data-i18n="bank.statusWrong">答错</option>
+          <option value="done" data-i18n="bank.statusDone">已掌握</option>
+        </select>
+      </div>
+    </div>
+    <div id="bankList"></div>
   </div>
 
   <!-- ── 错题页 ── -->
@@ -719,6 +785,36 @@
       <button class="modal-close" onclick="closeModal('problemModal')" data-i18n-aria="common.closeAria">&times;</button>
     </div>
     <div id="modalBody"></div>
+  </div>
+</div>
+
+<!-- ── 题库练习弹窗 ── -->
+<div class="modal-overlay" id="bankModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="bankModalTitle" style="max-width:680px">
+    <div class="modal-header">
+      <h3 id="bankModalTitle" data-i18n="bank.practice">练习</h3>
+      <button class="modal-close" onclick="closeModal('bankModal')" data-i18n-aria="common.closeAria">&times;</button>
+    </div>
+    <div id="bankModalBody"></div>
+  </div>
+</div>
+
+<!-- ── 题库导入弹窗 ── -->
+<div class="modal-overlay" id="bankImportModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="bankImportTitle" style="max-width:760px">
+    <div class="modal-header">
+      <h3 id="bankImportTitle" data-i18n="bank.importTitle">批量导入题目</h3>
+      <button class="modal-close" onclick="closeModal('bankImportModal')" data-i18n-aria="common.closeAria">&times;</button>
+    </div>
+    <div class="modal-body" style="padding:16px">
+      <p class="text-sm text-muted" data-i18n="bank.importHint">支持粘贴 JSON 数组（可一次多题）。字段：id(可选)、unit、chapter、concept、difficulty、stem、choices、answer、title(可选)、explain(可选)。answer 为正确选项下标（从 0 起）。</p>
+      <textarea id="bankImportText" rows="12" spellcheck="false" style="width:100%;font-family:Consolas,monospace;font-size:13px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);padding:10px"></textarea>
+      <div class="flex gap-12 mt-12" style="align-items:center">
+        <button class="btn btn-primary" onclick="submitBankImport()" data-i18n="bank.importDo">开始导入</button>
+        <button class="btn btn-secondary" onclick="downloadBankTemplate()" data-i18n="bank.importTemplate">下载模板</button>
+        <span id="bankImportResult" class="text-sm"></span>
+      </div>
+    </div>
   </div>
 </div>
 

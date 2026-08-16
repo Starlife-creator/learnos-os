@@ -98,12 +98,16 @@ class Handler(SimpleHTTPRequestHandler):
 
     def json_response(self, data: Any, status: int = 200) -> None:
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+        except OSError:
+            # 客户端已断开连接（浏览器取消请求 / 关标签页）：无处可写，直接放弃
+            pass
 
     def read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))
@@ -114,6 +118,11 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _safe_error(self, exc: Exception, status: int = 500) -> None:
         """返回通用错误消息，不暴露内部细节。"""
+        if isinstance(exc, OSError):
+            # 连接层错误（WinError 10053/10054 等）多为客户端主动断开，属良性，不刷屏
+            LOG.debug("连接中断（忽略）: %s", exc)
+            self.json_response({"error": "服务器内部错误，请查看日志"}, status)
+            return
         if isinstance(exc, (ValueError, json.JSONDecodeError)):
             self.json_response({"error": str(exc)}, 400)
         else:
@@ -228,6 +237,26 @@ class Handler(SimpleHTTPRequestHandler):
             if path == "/api/exam/papers":
                 import exam
                 self.json_response(exam.overall_readiness())
+                return
+            if path == "/api/bank":
+                import bank
+                qs = parse_qs(urlparse(self.path).query)
+                self.json_response({
+                    "items": bank.list_questions(
+                        unit=qs.get("unit", [""])[0],
+                        status=qs.get("status", ["all"])[0],
+                        q=qs.get("q", [""])[0],
+                    ),
+                    "stats": bank.stats(),
+                })
+                return
+            if path == "/api/bank/units":
+                import bank
+                self.json_response({"units": bank.units()})
+                return
+            if path == "/api/bank/stats":
+                import bank
+                self.json_response(bank.stats())
                 return
             match = re.fullmatch(r"/api/exam/papers/(\d+)", path)
             if match:
@@ -1193,6 +1222,24 @@ class Handler(SimpleHTTPRequestHandler):
             data = self.read_json()
             if path == "/api/problems":
                 self._handle_create_problem(data)
+                return
+            if path == "/api/bank/attempt":
+                try:
+                    import bank
+                    result = bank.judge(str(data.get("qid", "")), data.get("answer"))
+                except ValueError as exc:
+                    self.json_response({"error": str(exc)}, 400)
+                    return
+                self.json_response(result)
+                return
+            if path == "/api/bank/import":
+                try:
+                    import bank
+                    result = bank.import_questions(data.get("questions"))
+                except ValueError as exc:
+                    self.json_response({"error": str(exc)}, 400)
+                    return
+                self.json_response(result)
                 return
             match = re.fullmatch(r"/api/problems/(\d+)/hint", path)
             if match:

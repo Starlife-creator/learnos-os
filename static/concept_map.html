@@ -3,89 +3,145 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>知识图谱 - 物理学习</title>
 <style>
+  :root {
+    --bg: #f4f7fb; --surface: #ffffff; --border: #e3e9f2;
+    --text: #1f2d3d; --text-2: #5b6b82; --text-3: #8a99ad;
+    --accent: #4f7cff; --green: #22c55e; --amber: #f59e0b; --red: #ef4444; --gray: #cbd5e1;
+    --unit-colors: #6366f1, #0ea5e9, #10b981, #f59e0b, #ec4899;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a; --surface: #1e293b; --border: #2d3a50;
+      --text: #e2e8f0; --text-2: #aab6c8; --text-3: #64748b;
+      --accent: #6d8dff; --gray: #475569;
+    }
+  }
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
   body {
-    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
-    background: #f6f8fb; color: #1f2d3d; height: 100vh; overflow: hidden;
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    background: var(--bg); color: var(--text); overflow: hidden;
   }
   header {
-    display: flex; align-items: center; gap: 16px; padding: 10px 20px;
-    background: #fff; border-bottom: 1px solid #e3e9f0;
+    display: flex; align-items: center; gap: 14px; padding: 10px 18px;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
   }
   header h1 { font-size: 16px; }
-  header .hint { font-size: 12px; color: #7a8aa0; }
-  #wrap { display: flex; height: calc(100vh - 49px); }
-  #canvasBox {
-    flex: 1; position: relative; overflow: hidden; background:
-      radial-gradient(circle at 20% 20%, #eef3fa 0%, #f6f8fb 60%);
-  }
-  #svg { width: 100%; height: 100%; display: block; cursor: grab; }
-  #svg.dragging { cursor: grabbing; }
-  #side {
-    width: 320px; background: #fff; border-left: 1px solid #e3e9f0;
-    overflow-y: auto; padding: 16px;
-  }
-  .card { background: #fff; border: 1px solid #e3e9f0; border-radius: 10px; padding: 14px; }
-  .card h3 { font-size: 15px; margin-bottom: 8px; }
-  .kv { font-size: 13px; margin: 4px 0; color: #44546a; }
-  .kv b { color: #1f2d3d; }
-  .bar { height: 8px; background: #e9eef5; border-radius: 4px; margin-top: 4px; overflow: hidden; }
-  .bar > i { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, #3b82f6, #22c55e); }
-  .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 8px; margin: 2px 2px 0 0; }
-  .tag-warn { background: #fef3c7; color: #92400e; }
-  .tag-ok { background: #dcfce7; color: #166534; }
-  .tag-mid { background: #fde8e8; color: #991b1b; }
-  .btn {
-    border: 1px solid #cbd5e1; background: #fff; color: #1f2d3d;
-    padding: 5px 12px; border-radius: 8px; font-size: 13px; cursor: pointer;
-  }
-  .btn:hover { background: #f1f5f9; }
-  .btn-primary { background: #3b82f6; border-color: #3b82f6; color: #fff; }
-  .btn-primary:hover { background: #2563eb; }
-  .btn-sm { padding: 3px 9px; font-size: 12px; }
-  .hidden { display: none; }
-  #problemList { list-style: none; }
-  #problemList li { font-size: 13px; padding: 7px 0; border-bottom: 1px dashed #e8edf4; }
-  #problemList li:last-child { border-bottom: none; }
-  .muted { color: #7a8aa0; font-size: 12px; }
-  .legend { display: flex; gap: 14px; font-size: 12px; color: #44546a; align-items: center; }
+  .hint { font-size: 12px; color: var(--text-3); }
+  .spacer { flex: 1; }
+  .legend { display: flex; gap: 12px; font-size: 12px; color: var(--text-2); align-items: center; flex-wrap: wrap; }
   .legend .ln { display: inline-flex; align-items: center; gap: 4px; }
   .legend .ln i { width: 18px; height: 0; display: inline-block; border-top: 2px solid; }
+  .btn {
+    border: 1px solid var(--border); background: var(--surface); color: var(--text);
+    padding: 4px 12px; border-radius: 8px; font-size: 12px; cursor: pointer;
+  }
+  .btn:hover { background: var(--border); }
+  .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn-primary:hover { filter: brightness(1.08); }
+  #wrap { display: flex; height: calc(100vh - 52px); }
+  #canvasBox {
+    flex: 1; position: relative; overflow: hidden;
+    background:
+      radial-gradient(1200px 600px at 15% 10%, rgba(79,124,255,.07), transparent 60%),
+      radial-gradient(1000px 500px at 85% 90%, rgba(16,185,129,.06), transparent 60%),
+      var(--bg);
+  }
+  #canvasBox::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .5;
+    background-image: radial-gradient(circle, var(--border) 1px, transparent 1px);
+    background-size: 26px 26px;
+  }
+  #svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+  #svg.dragging { cursor: grabbing; }
+  .node-hit { fill: transparent; pointer-events: all; cursor: move; }
+  #searchWrap {
+    position: absolute; top: 14px; left: 14px; z-index: 5;
+    display: flex; align-items: center; gap: 8px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.06); min-width: 220px;
+  }
+  #searchInput { border: none; outline: none; background: transparent; color: var(--text); font-size: 13px; flex: 1; }
+  #side {
+    width: 320px; background: var(--surface); border-left: 1px solid var(--border);
+    overflow-y: auto; padding: 16px;
+  }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
+  .card h3 { font-size: 14px; margin-bottom: 8px; }
+  .kv { font-size: 13px; margin: 4px 0; color: var(--text-2); }
+  .kv b { color: var(--text); }
+  .bar { height: 8px; background: var(--border); border-radius: 4px; margin-top: 4px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, var(--red), var(--amber), var(--green)); }
+  .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 8px; margin: 2px 2px 0 0; }
+  .tag-warn { background: rgba(245,158,11,.16); color: var(--amber); }
+  .tag-ok { background: rgba(34,197,94,.16); color: var(--green); }
+  .tag-mid { background: rgba(239,68,68,.16); color: var(--red); }
+  .hidden { display: none; }
+  #problemList { list-style: none; }
+  #problemList li { font-size: 13px; padding: 7px 0; border-bottom: 1px dashed var(--border); }
+  #problemList li:last-child { border-bottom: none; }
+  .muted { color: var(--text-3); font-size: 12px; }
   #addForm { display: flex; gap: 8px; margin-top: 10px; }
-  #addForm input { flex: 1; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; }
-  .node-unit { fill: #eef2ff; stroke: #6366f1; }
-  .node-chapter { fill: #eff6ff; stroke: #3b82f6; }
-  .node-concept { fill: #f0fdf4; stroke: #22c55e; }
-  .node-unit:hover, .node-chapter:hover, .node-concept:hover { stroke-width: 2.5; }
-  .label { font-size: 11px; fill: #334155; pointer-events: none; }
-  .edge-prereq { stroke: #f87171; stroke-dasharray: 5 3; }
-  .edge-related { stroke: #60a5fa; }
-  .edge-contrast { stroke: #fb923c; stroke-dasharray: 2 2; }
+  #addForm input { flex: 1; padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; background: var(--bg); color: var(--text); }
+  .node-unit { stroke: var(--accent); }
+  .node-chapter { stroke: var(--text-2); }
+  .node-concept { stroke: #fff; }
+  .node-dim { opacity: .25; }
+  .label { font-size: 11px; fill: var(--text-2); paint-order: stroke; stroke: var(--bg); stroke-width: 3px; pointer-events: none; user-select: none; }
+  .label-search { font-weight: 700; fill: var(--accent); }
+  .label-chapter { font-size: 12px; font-weight: 600; fill: var(--text); }
+  .label-unit { font-size: 14px; font-weight: 700; fill: var(--accent); }
+  .edge { fill: none; opacity: .55; }
+  .edge-prerequisite { stroke: var(--red); stroke-dasharray: 5 3; }
+  .edge-related { stroke: var(--accent); }
+  .edge-contrast { stroke: var(--amber); stroke-dasharray: 2 2; }
+  #zoomHints {
+    position: absolute; right: 14px; top: 14px; z-index: 5; display: flex; flex-direction: column; gap: 6px;
+  }
+  #zoomHints .btn { width: 30px; padding: 3px 0; font-size: 14px; }
 </style>
 </head>
 <body>
 <header>
   <h1 data-i18n="graph.title">概念知识图谱</h1>
   <div class="legend">
-    <span class="ln"><i style="border-color:#f87171"></i><span data-i18n="graph.tagPrereq">先修</span></span>
-    <span class="ln"><i style="border-color:#60a5fa"></i><span data-i18n="graph.tagRelated">相关</span></span>
-    <span class="ln"><i style="border-color:#fb923c"></i><span data-i18n="graph.tagContrast">对比</span></span>
+    <span class="ln"><i style="border-color:var(--red)"></i><span data-i18n="graph.tagPrereq">先修</span></span>
+    <span class="ln"><i style="border-color:var(--accent)"></i><span data-i18n="graph.tagRelated">相关</span></span>
+    <span class="ln"><i style="border-color:var(--amber)"></i><span data-i18n="graph.tagContrast">对比</span></span>
+    <span class="ln"><i style="background:var(--gray);width:10px;height:10px;border-radius:50%;border-top:none"></i><span data-i18n="graph.tagMid">未学/薄弱</span></span>
   </div>
-  <div class="hint" data-i18n="graph.zoom">滚轮缩放 · 拖拽平移 · 点击概念查看掌握度与先修错题</div>
+  <div class="hint" data-i18n="graph.zoom">点击章节展开/收起概念 · 拖动节点调整位置（自动保存）· 滚轮缩放 · 空白拖拽平移</div>
+  <div class="spacer"></div>
+  <button class="btn" onclick="collapseAll()" data-i18n="graph.collapseAll">全部收起</button>
+  <button class="btn" onclick="expandAll()" data-i18n="graph.expandAll">全部展开</button>
+  <button class="btn" onclick="autoLayout()" data-i18n="graph.autoLayout">整理布局</button>
+  <button class="btn" onclick="resetLayout()" data-i18n="graph.resetLayout">重置布局</button>
 </header>
 <div id="wrap">
   <div id="canvasBox">
+    <div id="searchWrap">
+      <span>🔍</span>
+      <input id="searchInput" data-i18n-ph="graph.searchPh" placeholder="搜索概念名..." oninput="applySearch(this.value)">
+    </div>
+    <div id="zoomHints">
+      <button class="btn" title="+" onclick="zoomBy(1.2)">+</button>
+      <button class="btn" title="−" onclick="zoomBy(1/1.2)">−</button>
+      <button class="btn" title="适应" onclick="fitToView()">⛶</button>
+    </div>
     <svg id="svg"></svg>
   </div>
   <div id="side">
     <div id="welcome" class="card">
       <h3 data-i18n="graph.usageTitle">使用说明</h3>
-      <p class="kv" data-i18n="graph.usage">点击左侧任意节点查看详情。概念节点颜色深浅表示掌握度：</p>
+      <p class="kv" data-i18n="graph.usage">默认显示单元与章节：点击章节展开其下概念，再次点击收起。节点颜色表示掌握度：</p>
       <p class="kv"><span class="tag tag-ok" data-i18n="graph.tagOk">绿 = 掌握良好</span></p>
       <p class="kv"><span class="tag tag-warn" data-i18n="graph.tagWarn">黄 = 仍需巩固</span></p>
-      <p class="kv"><span class="tag tag-mid" data-i18n="graph.tagMid">红 = 先修不足</span></p>
+      <p class="kv"><span class="tag tag-mid" data-i18n="graph.tagMid">红/灰 = 未学或先修不足</span></p>
+      <p class="muted" style="margin-top:8px" data-i18n="graph.dragHint">拖动节点可调整位置，布局自动保存在本机浏览器</p>
     </div>
     <div id="detail" class="card hidden">
       <h3 id="dTitle"></h3>
@@ -95,8 +151,8 @@
         <span class="bar"><i id="dBar" style="width:0%"></i></span></p>
       <p class="kv"><b data-i18n="graph.looms">绑定错题：</b><span id="dLooms"></span></p>
       <div id="dPrereq"></div>
-      <div class="flex" style="display:flex; gap:8px; margin-top:10px">
-        <button class="btn btn-primary btn-sm" onclick="prereqMode()" data-i18n="graph.prereqBtn">先修模式：看相关错题</button>
+      <div style="display:flex; gap:8px; margin-top:10px">
+        <button class="btn btn-primary" onclick="prereqMode()" data-i18n="graph.prereqBtn">先修模式：看相关错题</button>
       </div>
       <div id="dProblems"></div>
     </div>
@@ -107,7 +163,7 @@
         <input id="newName" placeholder="概念名" data-i18n-ph="graph.namePh">
         <input id="newParent" placeholder="父节点ID(可选)" data-i18n-ph="graph.parentPh">
       </div>
-      <button class="btn btn-sm" style="margin-top:8px" onclick="addConcept()" data-i18n="graph.add">添加</button>
+      <button class="btn" style="margin-top:8px" onclick="addConcept()" data-i18n="graph.add">添加</button>
     </div>
   </div>
 </div>
@@ -146,7 +202,14 @@ const svg = document.getElementById('svg');
 const NS = 'http://www.w3.org/2000/svg';
 let graphData = null;
 let selectedId = null;
+let positions = new Map();        // id -> {x, y}
+let nodeEls = new Map();          // id -> {hit, circle, label}
+let edges = [];                   // {a, b, path}
+let edgeByNode = new Map();       // id -> [edge indices]
+let descendants = new Map();      // id -> [ids]
+let expanded = new Set();         // 已展开的章节 id
 let view = { x: 40, y: 30, scale: 1 };
+const SAVE_KEY = 'conceptMapPositions.v1';
 
 function make(tag, attrs, text) {
   const el = document.createElementNS(NS, tag);
@@ -156,111 +219,172 @@ function make(tag, attrs, text) {
 }
 
 function nodeColor(m) {
-  if (!m || m <= 0.01) return '#cbd5e1';
+  if (!m || m <= 0.02) return '#cbd5e1';
   if (m >= 0.6) return '#22c55e';
-  if (m >= 0.35) return '#eab308';
+  if (m >= 0.35) return '#f59e0b';
   return '#ef4444';
 }
 
-async function loadGraph() {
-  const resp = await fetch('/api/graph/concepts');
-  graphData = await resp.json();
-  if (graphData.nodes.length === 0) { toastErr(t('graph.empty')); return; }
-  draw();
+function unitColor(idx) {
+  const colors = getComputedStyle(document.documentElement).getPropertyValue('--unit-colors').split(',').map(s => s.trim());
+  return colors[idx % colors.length] || '#6366f1';
 }
 
+function visibleNodeIds() {
+  const vis = new Set(graphData.nodes.filter(n => n.level === 0).map(u => u.id));
+  for (const c of graphData.nodes.filter(n => n.level === 1)) {
+    vis.add(c.id);
+    if (expanded.has(c.id)) {
+      graphData.nodes.filter(x => x.parent_id === c.id).forEach(x => vis.add(x.id));
+    }
+  }
+  return vis;
+}
+
+// ── 布局：单元分列，章节堆叠，展开的章节在下方平铺概念 ──
 function layoutNodes(nodes) {
   const units = nodes.filter(n => n.level === 0);
   const chapters = nodes.filter(n => n.level === 1);
   const concepts = nodes.filter(n => n.level === 2);
   const pos = new Map();
-  const W = 1500, H = 700;
-  const gapU = 80, gapC = 24, gapK = 26;
-  // 单元列排布（垂直居中）
-  const totalU = units.length;
-  let yU = (H - (totalU - 1) * gapU) / 2;
-  for (const u of units) { pos.set(u.id, { x: 60, y: yU }); yU += gapU; }
-  // 每单元内章节垂直堆叠，概念水平延伸
-  for (const u of units) {
+  const TOP = 46, ROW_H = 46, COL_W = 118, CH_GAP = 26, UNIT_GAP = 90;
+  let x = 60;
+  units.forEach(u => {
     const chs = chapters.filter(c => c.parent_id === u.id);
-    if (chs.length === 0) continue;
-    let y = pos.get(u.id).y - ((chs.length - 1) * 60) / 2;
+    let y = TOP + 40;
+    let colW = 0;
     for (const ch of chs) {
-      pos.set(ch.id, { x: 240, y: y });
-      const kids = concepts.filter(c => c.parent_id === ch.id);
-      const n = Math.max(1, kids.length);
-      const startX = 380;
-      const stepX = 110;
-      const startY = y - ((n - 1) * gapK) / 2;
-      let xi = 0;
-      for (const k of kids) {
-        pos.set(k.id, { x: startX + xi * stepX, y: startY + xi * gapK });
-        xi++;
-      }
-      y += 60;
+      const kids = expanded.has(ch.id) ? concepts.filter(c => c.parent_id === ch.id) : [];
+      const rows = Math.max(1, Math.ceil(kids.length / 5));
+      const cols = Math.min(5, Math.max(1, kids.length));
+      const startKX = x + 190;
+      const startKY = y + 52;
+      const conceptW = kids.length ? 190 + (cols - 1) * COL_W : 0;
+      pos.set(ch.id, { x: x + 90, y: y + 16 });
+      kids.forEach((k, i) => {
+        const r = Math.floor(i / cols), c = i % cols;
+        pos.set(k.id, { x: startKX + c * COL_W, y: startKY + r * ROW_H });
+      });
+      colW = Math.max(colW, conceptW);
+      y += (kids.length ? 52 + rows * ROW_H : 40) + CH_GAP;
     }
-  }
+    pos.set(u.id, { x: x + colW / 2, y: TOP });
+    x += colW + UNIT_GAP;
+  });
   return pos;
 }
 
-let renderCache = null;
-function draw() {
-  if (renderCache) { renderCache.forEach(el => el.remove()); renderCache = null; }
-  renderCache = [];
-  const pos = layoutNodes(graphData.nodes);
+function loadSavedPositions() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+function savePositions() {
+  const obj = {};
+  positions.forEach((p, id) => { obj[id] = { x: Math.round(p.x), y: Math.round(p.y) }; });
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(obj)); } catch {}
+}
+
+// ── 绘制 ──
+function draw(useSaved = true) {
+  const saved = useSaved ? loadSavedPositions() : {};
+  const auto = layoutNodes(graphData.nodes);
+  const vis = visibleNodeIds();
+  positions = new Map();
+  for (const n of graphData.nodes) {
+    if (!vis.has(n.id)) continue;
+    const p = (saved[n.id] && isFinite(saved[n.id].x)) ? saved[n.id] : auto.get(n.id);
+    if (p) positions.set(n.id, { x: p.x, y: p.y });
+  }
+
+  svg.innerHTML = '';
+  nodeEls = new Map();
+  descendants = new Map();
   const gMain = make('g');
+  svg.appendChild(gMain);
   const gEdges = make('g');
   const gNodes = make('g');
   gMain.appendChild(gEdges);
   gMain.appendChild(gNodes);
-  svg.appendChild(gMain);
-  renderCache.push(gMain);
-  const dim = { W: 1500, H: 700 };
 
-  // 边
+  // 后代关系（拖单元/章节时子节点跟随）
+  const byParent = new Map();
+  for (const n of graphData.nodes) {
+    if (n.parent_id && vis.has(n.parent_id) && vis.has(n.id)) {
+      if (!byParent.has(n.parent_id)) byParent.set(n.parent_id, []);
+      byParent.get(n.parent_id).push(n.id);
+    }
+  }
+  const computeDesc = (id) => {
+    const kids = byParent.get(id) || [];
+    const out = [];
+    for (const k of kids) { out.push(k, ...computeDesc(k)); }
+    return out;
+  };
+  for (const id of vis) descendants.set(id, computeDesc(id));
+
+  // 边（曲线，只画两端可见的）
+  edges = [];
+  edgeByNode = new Map();
   for (const l of graphData.links) {
-    const a = pos.get(l.concept_a), b = pos.get(l.concept_b);
-    if (!a || !b) continue;
-    const line = make('line', {
-      x1: a.x, y1: a.y, x2: b.x, y2: b.y,
-      class: 'edge-' + l.relation, 'stroke-width': 1.4, opacity: 0.7,
+    if (!positions.has(l.concept_a) || !positions.has(l.concept_b)) continue;
+    const a = positions.get(l.concept_a), b = positions.get(l.concept_b);
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    const path = make('path', {
+      d: `M ${a.x} ${a.y} Q ${mx} ${my} ${b.x} ${b.y}`,
+      class: 'edge edge-' + l.relation, 'stroke-width': 1.2,
     });
-    gEdges.appendChild(line);
-    renderCache.push(line);
+    gEdges.appendChild(path);
+    const idx = edges.length;
+    edges.push({ a: l.concept_a, b: l.concept_b, path });
+    if (!edgeByNode.has(l.concept_a)) edgeByNode.set(l.concept_a, []);
+    if (!edgeByNode.has(l.concept_b)) edgeByNode.set(l.concept_b, []);
+    edgeByNode.get(l.concept_a).push(idx);
+    edgeByNode.get(l.concept_b).push(idx);
   }
 
   // 节点
-  const byId = new Map(graphData.nodes.map(n => [n.id, n]));
+  const units = graphData.nodes.filter(n => n.level === 0);
+  const unitIdx = new Map(units.map((u, i) => [u.id, i]));
   for (const n of graphData.nodes) {
-    const p = pos.get(n.id);
-    if (!p) continue;
-    const cls = n.level === 0 ? 'node-unit' : n.level === 1 ? 'node-chapter' : 'node-concept';
-    const r = n.level === 0 ? 22 : n.level === 1 ? 15 : 10;
-    const circle = make('circle', {
-      cx: p.x, cy: p.y, r: r, class: cls,
-      'data-id': n.id,
+    if (!positions.has(n.id)) continue;
+    const p = positions.get(n.id);
+    const col = n.level === 0 ? unitColor(unitIdx.get(n.id) || 0)
+      : n.level === 1 ? '#94a3b8'
+      : nodeColor(n.mastery_est || 0);
+    const r = n.level === 0 ? 26 : n.level === 1 ? 15 : 12;
+    const group = make('g', { 'data-id': n.id });
+    group.style.cursor = 'move';
+    const hit = make('circle', {
+      cx: p.x, cy: p.y, r: Math.max(14 / view.scale, r + 10), class: 'node-hit',
     });
-    const col = nodeColor(n.mastery_est || 0);
-    if (n.level === 2) {
-      circle.setAttribute('fill', col);
-      circle.setAttribute('fill-opacity', '0.85');
-    }
-    circle.addEventListener('click', () => selectNode(n.id));
-    gNodes.appendChild(circle);
-    renderCache.push(circle);
+    group.appendChild(hit);
+    const circle = make('circle', {
+      cx: p.x, cy: p.y, r: r,
+      class: 'node-' + (n.level === 0 ? 'unit' : n.level === 1 ? 'chapter' : 'concept'),
+      fill: col, 'fill-opacity': n.level === 0 ? 0.18 : 0.9,
+      'stroke-width': n.level === 0 ? 2.4 : n.level === 1 ? 2 : 1.6,
+      'data-id': n.id, 'pointer-events': 'all',
+    });
+    group.appendChild(circle);
+    group.addEventListener('click', ev => {
+      ev.stopPropagation();
+      if (justDragged) { justDragged = false; return; }
+      if (n.level === 1) toggleChapter(n.id);
+      selectNode(n.id);
+    });
+    gNodes.appendChild(group);
+    const labelCls = n.level === 0 ? 'label label-unit' : n.level === 1 ? 'label label-chapter' : 'label';
+    const labelDy = n.level === 0 ? -38 : n.level === 1 ? 32 : 24;
+    const suffix = n.level === 1 ? (expanded.has(n.id) ? ' ▼' : ' ▶') : '';
     const label = make('text', {
-      x: p.x, y: p.y + (n.level === 2 ? 24 : 34), 'text-anchor': 'middle', class: 'label',
-    }, n.name);
+      x: p.x, y: p.y + labelDy, 'text-anchor': 'middle', class: labelCls,
+    }, n.name + suffix);
     gNodes.appendChild(label);
-    renderCache.push(label);
-    if (n.level === 0) {
-      const unitLabel = make('text', { x: p.x, y: p.y, 'text-anchor': 'middle', 'font-size': '10px', fill: '#4338ca', 'font-weight': 'bold' }, n.name);
-      gNodes.appendChild(unitLabel);
-      renderCache.push(unitLabel);
-    }
+    nodeEls.set(n.id, { hit, circle, label });
   }
   applyView();
-  void dim;
 }
 
 function applyView() {
@@ -269,29 +393,182 @@ function applyView() {
   g.setAttribute('transform', `translate(${view.x},${view.y}) scale(${view.scale})`);
 }
 
-// 缩放 / 平移
+function updateNode(id) {
+  const p = positions.get(id);
+  const el = nodeEls.get(id);
+  if (!p || !el) return;
+  el.circle.setAttribute('cx', p.x);
+  el.circle.setAttribute('cy', p.y);
+  el.hit.setAttribute('cx', p.x);
+  el.hit.setAttribute('cy', p.y);
+  el.label.setAttribute('x', p.x);
+  const n = graphData.nodes.find(n => n.id === id);
+  el.label.setAttribute('y', p.y + (n && n.level === 0 ? -38 : n && n.level === 1 ? 32 : 24));
+  const ids = edgeByNode.get(id);
+  if (ids) for (const i of ids) rebindEdge(i);
+}
+
+function refreshHitRadii() {
+  for (const el of nodeEls.values()) {
+    const r = parseFloat(el.circle.getAttribute('r'));
+    el.hit.setAttribute('r', Math.max(14 / view.scale, r + 10));
+  }
+}
+
+function collapseAll() { expanded.clear(); redrawAndFit(); }
+function expandAll() {
+  graphData.nodes.filter(n => n.level === 1).forEach(c => expanded.add(c.id));
+  redrawAndFit();
+}
+function toggleChapter(id) {
+  if (expanded.has(id)) expanded.delete(id); else expanded.add(id);
+  redrawAndFit();
+}
+function redrawAndFit() {
+  draw();
+  requestAnimationFrame(fitToView);
+  savePositions();
+}
+
+function rebindEdge(i) {
+  const e = edges[i];
+  if (!e) return;
+  const a = positions.get(e.a), b = positions.get(e.b);
+  if (!a || !b) return;
+  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+  e.path.setAttribute('d', `M ${a.x} ${a.y} Q ${mx} ${my} ${b.x} ${b.y}`);
+}
+
+function fitToView() {
+  if (!positions.size) return;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  positions.forEach(p => {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  });
+  const w = svg.clientWidth || 800, h = svg.clientHeight || 600;
+  const pad = 80;
+  const bw = maxX - minX + pad * 2, bh = maxY - minY + pad * 2;
+  view.scale = Math.max(0.35, Math.min(w / bw, h / bh, 1.1));
+  view.x = w / 2 - ((minX + maxX) / 2) * view.scale;
+  view.y = h / 2 - ((minY + maxY) / 2) * view.scale;
+  applyView();
+}
+
+function autoLayout() {
+  draw(false);
+  fitToView();
+  savePositions();
+  toast(t('graph.autoLayout') + ' ✓');
+}
+function resetLayout() {
+  try { localStorage.removeItem(SAVE_KEY); } catch {}
+  autoLayout();
+}
+function zoomBy(factor) {
+  const rect = svg.getBoundingClientRect();
+  const px = rect.width / 2, py = rect.height / 2;
+  const newScale = Math.min(3, Math.max(0.35, view.scale * factor));
+  const wx = (px - view.x) / view.scale, wy = (py - view.y) / view.scale;
+  view.scale = newScale;
+  view.x = px - wx * view.scale;
+  view.y = py - wy * view.scale;
+  applyView();
+  refreshHitRadii();
+}
+
+// ── 交互：缩放 / 平移 / 拖动节点（Pointer Events，兼容鼠标与触屏）──
 svg.addEventListener('wheel', e => {
   e.preventDefault();
+  const rect = svg.getBoundingClientRect();
+  const px = e.clientX - rect.left, py = e.clientY - rect.top;
   const factor = e.deltaY > 0 ? 0.9 : 1.1;
-  view.scale = Math.min(2.5, Math.max(0.4, view.scale * factor));
+  const newScale = Math.min(3, Math.max(0.35, view.scale * factor));
+  const wx = (px - view.x) / view.scale, wy = (py - view.y) / view.scale;
+  view.scale = newScale;
+  view.x = px - wx * view.scale;
+  view.y = py - wy * view.scale;
   applyView();
+  refreshHitRadii();
 }, { passive: false });
 
+let dragNode = null;
 let dragStart = null;
-svg.addEventListener('mousedown', e => {
-  if (e.target.tagName === 'circle') return;
+let justDragged = false;
+svg.addEventListener('pointerdown', e => {
+  const g = e.target.closest ? e.target.closest('g[data-id]') : null;
+  if (g) {
+    const raw = g.getAttribute('data-id');
+    const node = graphData.nodes.find(n => String(n.id) === raw);
+    if (!node) return;
+    dragNode = { id: node.id, sx: e.clientX, sy: e.clientY, moved: false };
+    try { svg.setPointerCapture(e.pointerId); } catch {}
+    e.preventDefault();
+    return;
+  }
   dragStart = { x: e.clientX, y: e.clientY };
   svg.classList.add('dragging');
 });
-window.addEventListener('mousemove', e => {
+window.addEventListener('pointermove', e => {
+  if (dragNode) {
+    const p = positions.get(dragNode.id);
+    if (!p) return;
+    const dx = e.clientX - dragNode.sx, dy = e.clientY - dragNode.sy;
+    if (!dragNode.moved && Math.abs(dx) + Math.abs(dy) > 4) dragNode.moved = true;
+    const stepX = dx / view.scale, stepY = dy / view.scale;
+    p.x += stepX;
+    p.y += stepY;
+    const desc = descendants.get(dragNode.id);
+    if (desc) for (const d of desc) {
+      const q = positions.get(d);
+      if (!q) continue;
+      q.x += stepX; q.y += stepY;
+    }
+    dragNode.sx = e.clientX; dragNode.sy = e.clientY;
+    updateNode(dragNode.id);
+    if (desc) for (const d of desc) updateNode(d);
+    return;
+  }
   if (!dragStart) return;
   view.x += e.clientX - dragStart.x;
   view.y += e.clientY - dragStart.y;
   dragStart = { x: e.clientX, y: e.clientY };
   applyView();
 });
-window.addEventListener('mouseup', () => { dragStart = null; svg.classList.remove('dragging'); });
+window.addEventListener('pointerup', () => {
+  if (dragNode) {
+    justDragged = dragNode.moved;
+    savePositions();
+    dragNode = null;
+  }
+  dragStart = null;
+  svg.classList.remove('dragging');
+});
 
+// ── 搜索高亮（命中概念自动展开其章节）──
+function applySearch(q) {
+  const kw = (q || '').trim().toLowerCase();
+  if (kw) {
+    let needRedraw = false;
+    for (const n of graphData.nodes) {
+      if (n.level === 2 && n.name.toLowerCase().includes(kw)) {
+        const ch = graphData.nodes.find(x => x.id === n.parent_id);
+        if (ch && !expanded.has(ch.id)) { expanded.add(ch.id); needRedraw = true; }
+      }
+    }
+    if (needRedraw) { draw(); requestAnimationFrame(fitToView); }
+  }
+  for (const n of graphData.nodes) {
+    const el = nodeEls.get(n.id);
+    if (!el) continue;
+    const hit = kw && n.name.toLowerCase().includes(kw);
+    el.circle.classList.toggle('node-dim', !!kw && !hit);
+    el.label.classList.toggle('node-dim', !!kw && !hit);
+    el.label.classList.toggle('label-search', !!hit);
+  }
+}
+
+// ── 详情 ──
 async function selectNode(id) {
   selectedId = id;
   const n = graphData.nodes.find(x => x.id === id);
@@ -306,16 +583,15 @@ async function selectNode(id) {
   document.getElementById('dMastery').textContent = Math.round(m * 100) + '%';
   document.getElementById('dBar').style.width = Math.round(m * 100) + '%';
   document.getElementById('dLooms').textContent = n.looms_in || 0;
-  // 先修 / 后续 / 对比
   const byId = new Map(graphData.nodes.map(x => [x.id, x]));
   const prereq = graphData.links.filter(l => l.concept_b === id && l.relation === 'prerequisite').map(l => byId.get(l.concept_a));
   const succ = graphData.links.filter(l => l.concept_a === id && l.relation === 'prerequisite').map(l => byId.get(l.concept_b));
   const cont = graphData.links.filter(l => (l.concept_a === id || l.concept_b === id) && l.relation === 'contrast').map(l => byId.get(l.concept_a === id ? l.concept_b : l.concept_a));
   const dPrereq = document.getElementById('dPrereq');
   dPrereq.innerHTML = '';
-  if (prereq.length) dPrereq.innerHTML += `<p class="kv"><b data-i18n="graph.prereq">先修：</b>${prereq.map(p => p.name).join('、')}</p>`;
-  if (succ.length) dPrereq.innerHTML += `<p class="kv"><b data-i18n="graph.succ">后续：</b>${succ.map(s => s.name).join('、')}</p>`;
-  if (cont.length) dPrereq.innerHTML += `<p class="kv"><b data-i18n="graph.contrast">对比：</b>${cont.map(c => c.name).join('、')}</p>`;
+  if (prereq.length) dPrereq.innerHTML += `<p class="kv"><b>${t('graph.prereq')}</b>${prereq.map(p => p.name).join('、')}</p>`;
+  if (succ.length) dPrereq.innerHTML += `<p class="kv"><b>${t('graph.succ')}</b>${succ.map(s => s.name).join('、')}</p>`;
+  if (cont.length) dPrereq.innerHTML += `<p class="kv"><b>${t('graph.contrast')}</b>${cont.map(c => c.name).join('、')}</p>`;
   document.getElementById('dProblems').innerHTML = '';
   if (n.level === 2) loadRelatedProblems(id);
 }
@@ -324,8 +600,6 @@ async function loadRelatedProblems(id) {
   const el = document.getElementById('dProblems');
   el.innerHTML = '<p class="muted">' + t('msg.loading') + '</p>';
   try {
-    // B4 语义修正：展示「绑定该概念 + 先修链」上的历史错题，
-    // 而非同课程题目（/api/graph/problems?concept= 与先修模式同源）
     const resp = await fetch(`/api/graph/problems?concept=${id}`);
     const items = await resp.json();
     el.innerHTML = items.length
@@ -350,14 +624,26 @@ async function addConcept() {
     body: JSON.stringify({ name, parent_id: parent ? parseInt(parent, 10) : 0 }),
   });
   const data = await resp.json();
-  if (!resp.ok) { toastErr(data.error || t('graph.addFail')); return; }
+  if (!resp.ok) { alert(data.error || t('graph.addFail')); return; }
   document.getElementById('newName').value = '';
   document.getElementById('newParent').value = '';
   await loadGraph();
 }
 
-function toastErr(msg) {
-  alert(msg);
+function toast(msg) {
+  const el = document.createElement('div');
+  el.style.cssText = 'position:fixed;top:14px;right:14px;z-index:99;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px 14px;font-size:13px;box-shadow:0 4px 14px rgba(0,0,0,.12)';
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 1800);
+}
+
+async function loadGraph() {
+  const resp = await fetch('/api/graph/concepts');
+  graphData = await resp.json();
+  if (!graphData.nodes || graphData.nodes.length === 0) { alert(t('graph.empty')); return; }
+  draw();
+  requestAnimationFrame(fitToView);
 }
 
 bootGraph();
