@@ -37,7 +37,7 @@ python app.py
 set LEARNOS_PORT=9000 && python app.py
 ```
 
-**Windows 一键启动**：直接双击 `start.bat`（自动校验 Python 3.10+、运行启动自检、启动服务并自动打开浏览器）。
+**Windows 一键启动**：直接双击 `start.bat`（自动校验 Python 3.11+、运行启动自检、启动服务并自动打开浏览器）。
 
 打开 `http://127.0.0.1:8765` 即可使用。
 

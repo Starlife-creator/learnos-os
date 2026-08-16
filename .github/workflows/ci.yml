@@ -8,10 +8,15 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.13']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python-version }}
+      - name: Verify zero-dependency (vendored FSRS must load without third-party packages)
+        run: python -c "import sys; sys.modules['typing_extensions']=None; import fsrs_bridge; assert fsrs_bridge._FSRS_AVAILABLE, 'FSRS must be available in a clean environment'"
       - name: Run unit tests
         run: python -m unittest discover -s tests -v

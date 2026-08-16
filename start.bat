@@ -12,17 +12,17 @@ echo.
 rem ---- 1. Check Python ----
 where python >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [ERROR] Python not found. Install Python 3.10+ and check "Add to PATH".
+    echo [ERROR] Python not found. Install Python 3.11+ and check "Add to PATH".
     echo Download: https://www.python.org/downloads/
     echo.
     pause
     exit /b 1
 )
 
-rem ---- 2. Check Python is runnable and version >= 3.10 ----
-python -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>&1
+rem ---- 2. Check Python is runnable and version >= 3.11 ----
+python -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [ERROR] Python version too old. 3.10 or newer is required.
+    echo [ERROR] Python version too old. 3.11 or newer is required.
     echo Download: https://www.python.org/downloads/
     echo.
     pause
