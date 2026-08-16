@@ -6,6 +6,16 @@ const initial = (location.hash || '').replace('#', '').split('?')[0];
   applyI18n(document);
   const savedTheme = localStorage.getItem('theme');
   applyTheme(THEME_ORDER.includes(savedTheme) ? savedTheme : 'auto');
+  const sel = document.getElementById('subjectSelect');
+  if (sel) {
+    const resolved = await loadSubjectOptions(sel, currentSubject());
+    if (resolved !== currentSubject()) {
+      localStorage.setItem('subject', resolved);
+      const url = new URL(location.href);
+      url.searchParams.set('subject', resolved);
+      history.replaceState(null, '', url.toString());
+    }
+  }
   switchPage(PAGES.includes(initial) ? initial : 'dashboard');
 })();
 document.getElementById('searchInput').addEventListener('input', onSearchInput);

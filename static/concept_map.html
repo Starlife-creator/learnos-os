@@ -116,6 +116,8 @@
   </div>
   <div class="hint" data-i18n="graph.zoom">点击章节展开/收起概念 · 拖动节点调整位置（自动保存）· 滚轮缩放 · 空白拖拽平移</div>
   <div class="spacer"></div>
+  <label for="graphSubject" data-i18n="nav.subject" style="margin-right:6px;font-size:14px">学科</label>
+  <select id="graphSubject" onchange="switchGraphSubject(this.value)" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:14px;margin-right:10px"></select>
   <button class="btn" onclick="collapseAll()" data-i18n="graph.collapseAll">全部收起</button>
   <button class="btn" onclick="expandAll()" data-i18n="graph.expandAll">全部展开</button>
   <button class="btn" onclick="autoLayout()" data-i18n="graph.autoLayout">整理布局</button>
@@ -196,6 +198,7 @@ async function bootGraph() {
     _dict = await (await fetch(`/locale/${lang}.json`, { cache: 'no-cache' })).json();
   } catch { _dict = {}; }
   applyGraphI18n(document);
+  await initGraphSubject();
   loadGraph();
 }
 const svg = document.getElementById('svg');
@@ -618,11 +621,11 @@ async function addConcept() {
   const name = document.getElementById('newName').value.trim();
   const parent = document.getElementById('newParent').value.trim();
   if (!name) return;
-  const resp = await fetch('/api/graph/concepts', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'PhysicsStudyOS' },
-    body: JSON.stringify({ name, parent_id: parent ? parseInt(parent, 10) : 0 }),
-  });
+const resp = await fetch('/api/graph/concepts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'PhysicsStudyOS' },
+      body: JSON.stringify({ name, parent_id: parent ? parseInt(parent, 10) : 0, subject: graphSubject() }),
+    });
   const data = await resp.json();
   if (!resp.ok) { alert(data.error || t('graph.addFail')); return; }
   document.getElementById('newName').value = '';
@@ -638,12 +641,39 @@ function toast(msg) {
   setTimeout(() => el.remove(), 1800);
 }
 
+function graphSubject() {
+  return new URLSearchParams(location.search).get('subject') || localStorage.getItem('subject') || 'physics';
+}
+
 async function loadGraph() {
-  const resp = await fetch('/api/graph/concepts');
+  const resp = await fetch('/api/graph/concepts?subject=' + encodeURIComponent(graphSubject()));
   graphData = await resp.json();
   if (!graphData.nodes || graphData.nodes.length === 0) { alert(t('graph.empty')); return; }
   draw();
   requestAnimationFrame(fitToView);
+}
+
+function switchGraphSubject(id) {
+  if (!id) return;
+  localStorage.setItem('subject', id);
+  const url = new URL(location.href);
+  url.searchParams.set('subject', id);
+  location.href = url.toString();
+}
+
+async function initGraphSubject() {
+  const sel = document.getElementById('graphSubject');
+  const subjects = ['physics', 'chemistry', 'math'];
+  try {
+    const data = await (await fetch('/api/subjects?subject=' + encodeURIComponent(graphSubject()))).json();
+    for (const s of data.subjects || []) {
+      if (!subjects.includes(s.id)) subjects.push(s.id);
+    }
+  } catch (e) { /* 内置三科兜底 */ }
+  const cur = graphSubject();
+  sel.innerHTML = subjects.map(s => `<option value="${s}">${s}</option>`).join('');
+  if (subjects.includes(cur)) sel.value = cur;
+  else sel.value = subjects[0];
 }
 
 bootGraph();

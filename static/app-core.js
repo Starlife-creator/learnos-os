@@ -4,6 +4,41 @@ const API = '';
 const X_HEADER = 'X-Requested-With';
 const X_VALUE = 'PhysicsStudyOS';
 
+// ── 多学科：当前学科上下文（URL ?subject= 优先，其次 localStorage，最后默认 physics）──
+const BUILTIN_SUBJECTS = ['physics', 'chemistry', 'math'];
+function currentSubject() {
+  const fromUrl = new URLSearchParams(location.search).get('subject');
+  if (fromUrl) return fromUrl;
+  return localStorage.getItem('subject') || 'physics';
+}
+function setSubject(id) {
+  if (!id) return;
+  localStorage.setItem('subject', id);
+  const url = new URL(location.href);
+  url.searchParams.set('subject', id);
+  location.href = url.toString();
+}
+async function loadSubjectOptions(select, current) {
+  const subjects = BUILTIN_SUBJECTS.slice();
+  try {
+    const data = await api('/api/subjects');
+    for (const s of data.subjects || []) {
+      if (!subjects.includes(s.id)) subjects.push(s.id);
+    }
+  } catch (e) { /* 离线时仅内置三科 */ }
+  if (!select) return;
+  const cur = current || subjects[0];
+  select.innerHTML = subjects.map(s =>
+    `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`
+  ).join('');
+  select.value = subjects.includes(cur) ? cur : subjects[0];
+  return subjects.includes(cur) ? cur : subjects[0];
+}
+function withSubject(path) {
+  const sep = path.includes('?') ? '&' : '?';
+  return path + sep + 'subject=' + encodeURIComponent(currentSubject());
+}
+
 // ── F2 双语：语言加载 / 翻译 / DOM 应用 ──
 const LOCALES = ['zh-CN', 'en-US'];
 let _dict = {};
@@ -82,9 +117,10 @@ async function api(path, opts = {}) {
   // 写操作携带幂等键，避免网络重试产生重复数据
   if (method !== 'GET') headers['X-Request-Id'] = uid();
   const body = opts.body ? JSON.stringify(opts.body) : undefined;
+  const url = withSubject(path);
 
   let fetchFailed = false;
-  const doFetch = () => fetch(API + path, { method, headers, body }).catch(e => { fetchFailed = true; throw e; });
+  const doFetch = () => fetch(API + url, { method, headers, body }).catch(e => { fetchFailed = true; throw e; });
   try {
     const res = await doFetch();
     const data = await res.json().catch(() => ({}));

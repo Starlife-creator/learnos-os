@@ -297,6 +297,51 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (16, ?)", (now(),))
         LOG.info("数据库已迁移到 v16 (题库 bank_attempts/bank_problems)")
 
+    # v17: 多学科 — concepts/problems/bank 相关表加 subject 列，现有数据归 physics
+    if current < 17:
+        ccols = {r[1] for r in conn.execute("PRAGMA table_info(concepts)").fetchall()}
+        if "subject" not in ccols:
+            conn.execute("ALTER TABLE concepts ADD COLUMN subject TEXT NOT NULL DEFAULT 'physics'")
+        pcols = {r[1] for r in conn.execute("PRAGMA table_info(problems)").fetchall()}
+        if "subject" not in pcols:
+            conn.execute("ALTER TABLE problems ADD COLUMN subject TEXT NOT NULL DEFAULT 'physics'")
+        bcols = {r[1] for r in conn.execute("PRAGMA table_info(bank_problems)").fetchall()}
+        if "subject" not in bcols:
+            conn.execute("ALTER TABLE bank_problems ADD COLUMN subject TEXT NOT NULL DEFAULT 'physics'")
+        mcols = {r[1] for r in conn.execute("PRAGMA table_info(mastery_log)").fetchall()}
+        if "subject" not in mcols:
+            conn.execute("ALTER TABLE mastery_log ADD COLUMN subject TEXT NOT NULL DEFAULT 'physics'")
+        # concepts.name 的 UNIQUE 约束改为 (subject, name) 复合唯一，允许跨学科同名概念
+        uniq = [r[1] for r in conn.execute("PRAGMA index_list(concepts)").fetchall()]
+        if "sqlite_autoindex_concepts_1" in uniq:
+            conn.execute("ALTER TABLE concepts RENAME TO concepts_old")
+            conn.execute("""
+                CREATE TABLE concepts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    parent_id INTEGER NOT NULL DEFAULT 0,
+                    chapter_id INTEGER NOT NULL DEFAULT 0,
+                    difficulty REAL NOT NULL DEFAULT 0.5,
+                    mastery_est REAL NOT NULL DEFAULT 0.0,
+                    looms_in INTEGER NOT NULL DEFAULT 0,
+                    user_edited INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    subject TEXT NOT NULL DEFAULT 'physics',
+                    UNIQUE (subject, name)
+                )
+            """)
+            conn.execute("""
+                INSERT INTO concepts(id, name, parent_id, chapter_id, difficulty,
+                                     mastery_est, looms_in, user_edited, created_at, subject)
+                SELECT id, name, parent_id, chapter_id, difficulty,
+                       mastery_est, looms_in, user_edited, created_at, subject FROM concepts_old
+            """)
+            conn.execute("DROP TABLE concepts_old")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_concepts_subject ON concepts(subject, id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_problems_subject ON problems(subject, id)")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (17, ?)", (now(),))
+        LOG.info("数据库已迁移到 v17 (多学科 subject 列 + 复合唯一)")
+
 
 def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)

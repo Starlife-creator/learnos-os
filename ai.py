@@ -117,6 +117,7 @@ def display_settings() -> dict[str, str]:
         "heavy_model": eff.get("heavy_model", ""),
         "vision_model": eff.get("vision_model", ""),
         "temperature": eff.get("temperature", "0.3"),
+        "default_subject": eff.get("default_subject", "physics"),
         "has_api_key": has_key,
         "key_source": eff.get("key_source", "none"),
         # 存在 keys.enc 但当前未解锁（key_source 为 none/runtime）时提示可解锁

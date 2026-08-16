@@ -14,6 +14,10 @@ async function loadSettings() {
     document.getElementById('setMasterPassword').value = '';
     document.getElementById('setMasterPassword').placeholder = s.key_source === 'keyfile' ? t('set.masterPhKeyfile') : t('set.masterPh');
     document.getElementById('setTemp').value = s.temperature || '0.3';
+    const defSel = document.getElementById('setDefaultSubject');
+    if (defSel) {
+      loadSubjectOptions(defSel, s.default_subject || 'physics');
+    }
     const srcLabel = {
       environment: t('set.srcEnv'),
       keyfile: t('set.srcKeyfile'),
@@ -218,6 +222,8 @@ async function saveSettings() {
     heavy_model: document.getElementById('setHeavyModel').value,
     vision_model: document.getElementById('setVisionModel').value,
   };
+  const defSel = document.getElementById('setDefaultSubject');
+  if (defSel && defSel.value) body.default_subject = defSel.value;
   const key = document.getElementById('setApiKey').value;
   if (key) body.api_key = key;
   const master = document.getElementById('setMasterPassword').value;

@@ -32,6 +32,10 @@
   <div class="nav-brand"><span data-i18n="app.brand">物理学习 OS</span>
     <button class="theme-toggle" id="themeToggle" data-i18n-aria="theme.toggleAria" title="🌓">🌓</button>
   </div>
+  <div class="nav-subject">
+    <label class="nav-subject-label" for="subjectSelect" data-i18n="nav.subject">学科</label>
+    <select id="subjectSelect" class="nav-subject-select" onchange="setSubject(this.value)" aria-label="学科切换"></select>
+  </div>
   <button class="nav-item active" data-page="dashboard"><span data-i18n="nav.dashboard">概览</span></button>
   <button class="nav-item" data-page="bank"><span data-i18n="nav.bank">题库</span></button>
   <button class="nav-item" data-page="problems"><span data-i18n="nav.problems">错题</span></button>
@@ -529,6 +533,14 @@
           <option value="en-US">English</option>
         </select>
         <p class="hint-text" data-i18n="set.langPh">切换后立即生效（存于浏览器）</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title" data-i18n="set.subject">默认学科</div>
+      <div class="form-group">
+        <select id="setDefaultSubject" class="form-input"></select>
+        <p class="hint-text" data-i18n="set.subjectPh">新会话打开时默认进入的学科（存于本机设置）</p>
       </div>
     </div>
   </div>

@@ -125,6 +125,7 @@ class Handler(SimpleHTTPRequestHandler):
         (r"/api/bank", "_handle_bank"),
         (r"/api/bank/units", "_handle_bank_units"),
         (r"/api/bank/stats", "_handle_bank_stats"),
+        (r"/api/subjects", "_handle_subjects"),
     ]
 
     POST_ROUTES: list[tuple[str, str, bool]] = [
@@ -206,6 +207,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = urlparse(self.path).path
+        self.subject = self._subject_from_qs()
         try:
             for pattern, method in Handler.GET_ROUTES:
                 match = re.fullmatch(pattern, path)
@@ -220,6 +222,26 @@ class Handler(SimpleHTTPRequestHandler):
             super().do_GET()
         except Exception as exc:
             self._safe_error(exc)
+
+    # ── 学科上下文（多学科）──
+
+    SUBJECTS = ("physics", "chemistry", "math")
+
+    def _subject_from_qs(self) -> str:
+        qs = parse_qs(urlparse(self.path).query)
+        return self._valid_subject(qs.get("subject", [""])[0])
+
+    def _valid_subject(self, raw: str) -> str:
+        raw = str(raw or "").strip()
+        if raw in Handler.SUBJECTS:
+            return raw
+        # 自建学科：非内置 id 只要合法（字母数字下划线）即接受
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,19}", raw):
+            return raw
+        return "physics"
+
+    def _subject_of(self, data: dict[str, Any]) -> str:
+        return self._valid_subject(str(data.get("subject", "")))
 
     # ── GET 轻量端点（原内联分支，统一为方法以便路由表分发）──
 
@@ -270,30 +292,47 @@ class Handler(SimpleHTTPRequestHandler):
     def _handle_bank(self) -> None:
         import bank
         qs = parse_qs(urlparse(self.path).query)
+        subject = self.subject
         self.json_response({
             "items": bank.list_questions(
                 unit=qs.get("unit", [""])[0],
                 status=qs.get("status", ["all"])[0],
                 q=qs.get("q", [""])[0],
+                subject=subject,
             ),
-            "stats": bank.stats(),
+            "stats": bank.stats(subject),
         })
 
     def _handle_bank_units(self) -> None:
         import bank
-        self.json_response({"units": bank.units()})
+        self.json_response({"units": bank.units(self.subject)})
 
     def _handle_bank_stats(self) -> None:
         import bank
-        self.json_response(bank.stats())
+        self.json_response(bank.stats(self.subject))
+
+    def _handle_subjects(self) -> None:
+        """学科列表：内置三科 + 已有种子数据的自建学科（预留位）。"""
+        from config import BUNDLE_ROOT
+        builtin = [{"id": sid, "builtin": True, "title": sid} for sid in Handler.SUBJECTS]
+        custom: list[dict[str, Any]] = []
+        seed_dir = BUNDLE_ROOT / "data"
+        if seed_dir.is_dir():
+            for p in sorted(seed_dir.glob("seed_concepts_*.json")):
+                sid = p.stem[len("seed_concepts_"):]
+                if sid in Handler.SUBJECTS or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,19}", sid):
+                    continue
+                if p.stat().st_size > 0:
+                    custom.append({"id": sid, "builtin": False, "title": sid})
+        self.json_response({"subjects": builtin + custom, "current": self.subject})
 
     def _handle_list_reviews(self) -> None:
         """复习队列。默认同知识点隔开（P0 交错），?mode=plain 关闭（A7 遗留参数保留）。"""
         items = rows("""
             SELECT r.*, p.title, p.course, p.topic, p.content, p.my_attempt
             FROM reviews r JOIN problems p ON p.id = r.problem_id
-            WHERE r.completed = 0 ORDER BY r.due_date ASC
-        """)
+            WHERE r.completed = 0 AND p.subject = ? ORDER BY r.due_date ASC
+        """, (self.subject,))
         qs = parse_qs(urlparse(self.path).query)
         # P0：交错复习默认开启（同知识点隔开）；?mode=plain 关闭
         if qs.get("mode", [""])[0] != "plain" and len(items) > 2:
@@ -321,11 +360,12 @@ class Handler(SimpleHTTPRequestHandler):
         today = date.today().isoformat()
         done = rows("""
             SELECT r.result, p.error_type FROM reviews r JOIN problems p ON p.id = r.problem_id
-            WHERE r.completed = 1 AND r.created_at >= ?
-        """, (today + "T00:00:00",))
+            WHERE r.completed = 1 AND r.created_at >= ? AND p.subject = ?
+        """, (today + "T00:00:00", self.subject))
         due_tomorrow = row("""
             SELECT COUNT(*) AS count FROM reviews WHERE completed = 0 AND due_date <= ?
-        """, ((date.today() + timedelta(days=1)).isoformat(),)) or {}
+            AND problem_id IN (SELECT id FROM problems WHERE subject = ?)
+        """, ((date.today() + timedelta(days=1)).isoformat(), self.subject)) or {}
         done_count = len(done)
         hard = sum(1 for d in done if int(d["result"] or 0) <= 2)
         error_counts: dict[str, int] = {}
@@ -361,10 +401,10 @@ class Handler(SimpleHTTPRequestHandler):
 
         if q:
             like = f"%{q}%"
-            where = " WHERE title LIKE ? OR topic LIKE ? OR course LIKE ?"
-            params: tuple[Any, ...] = (like, like, like)
+            where = " WHERE subject = ? AND (title LIKE ? OR topic LIKE ? OR course LIKE ?)"
+            params: tuple[Any, ...] = (self.subject, like, like, like)
         else:
-            where, params = "", ()
+            where, params = " WHERE subject = ?", (self.subject,)
 
         # A2 先修模式：?prereq=<concept_id> 过滤出该概念先修链上的历史错题
         prereq_param = qs.get("prereq", [""])[0]
@@ -408,47 +448,48 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _handle_dashboard(self) -> None:
         today = date.today().isoformat()
+        subj = self.subject
         stats = row("""
             SELECT COUNT(*) AS total,
                    COALESCE(AVG(mastery), 0) AS avg_mastery,
                    SUM(CASE WHEN mastery >= 4 THEN 1 ELSE 0 END) AS mastered
-            FROM problems
-        """) or {}
-        due = row("SELECT COUNT(*) AS count FROM reviews WHERE completed = 0 AND due_date <= ?", (today,))
+            FROM problems WHERE subject = ?
+        """, (subj,)) or {}
+        due = row("SELECT COUNT(*) AS count FROM reviews WHERE completed = 0 AND due_date <= ? AND problem_id IN (SELECT id FROM problems WHERE subject = ?)", (today, subj)) or {}
         topics = rows("""
             SELECT topic, COUNT(*) AS count, ROUND(AVG(mastery), 1) AS mastery
-            FROM problems WHERE topic <> '' GROUP BY topic ORDER BY mastery ASC, count DESC LIMIT 8
-        """)
-        recent = rows("SELECT id, title, course, topic, error_type, mastery, created_at, starred FROM problems ORDER BY id DESC LIMIT 5")
+            FROM problems WHERE subject = ? AND topic <> '' GROUP BY topic ORDER BY mastery ASC, count DESC LIMIT 8
+        """, (subj,))
+        recent = rows("SELECT id, title, course, topic, error_type, mastery, created_at, starred FROM problems WHERE subject = ? ORDER BY id DESC LIMIT 5", (subj,))
         recent_activity = rows("""
             SELECT r.id, r.result, r.created_at, p.id AS problem_id, p.title, p.course, p.topic
             FROM reviews r JOIN problems p ON p.id = r.problem_id
-            WHERE r.completed = 1 ORDER BY r.id DESC LIMIT 5
-        """)
+            WHERE r.completed = 1 AND p.subject = ? ORDER BY r.id DESC LIMIT 5
+        """, (subj,))
         course_stats = rows("""
             SELECT course, COUNT(*) AS count, ROUND(AVG(mastery), 1) AS avg_mastery,
                    SUM(CASE WHEN mastery >= 4 THEN 1 ELSE 0 END) AS mastered,
                    (SELECT COUNT(*) FROM reviews WHERE completed=0 AND due_date<=? AND problem_id IN (SELECT id FROM problems p2 WHERE p2.course = p.course)) AS due
-            FROM problems p WHERE course <> '' GROUP BY course ORDER BY avg_mastery ASC LIMIT 6
-        """, (today,))
+            FROM problems p WHERE p.subject = ? AND course <> '' GROUP BY course ORDER BY avg_mastery ASC LIMIT 6
+        """, (subj, today))
         # C6 合并仪表盘数据：趋势 / 分析 / 错因分布（单请求）
-        trend = self._trend_data()
-        analytics = self._analytics_data()
+        trend = self._trend_data(subj)
+        analytics = self._analytics_data(subj)
         self.json_response({
             "stats": stats, "due": due["count"] if due else 0, "topics": topics,
             "recent": recent, "recent_activity": recent_activity, "course_stats": course_stats,
             "points": trend["points"], "summary": trend["summary"],
             "due_7d": analytics["due_7d"], "deck_health": analytics["deck_health"],
             "daily_reviews": analytics["daily_reviews"],
-            "error_distribution": self._error_distribution(),
-            "error_trend": self._error_trend(),
-            "pressure": self._pressure_index(),
-            "forget_predict": self._forget_predict(),
-            "tasks": self._today_tasks(),
-            "stubborn": self._stubborn_problems(),
+            "error_distribution": self._error_distribution(subj),
+            "error_trend": self._error_trend(subj),
+            "pressure": self._pressure_index(subj),
+            "forget_predict": self._forget_predict(subj),
+            "tasks": self._today_tasks(subj),
+            "stubborn": self._stubborn_problems(subj),
             "gamification": self._game_state(),
             "telemetry": self._telemetry_summary(),
-            "weekly": self._weekly_report(),
+            "weekly": self._weekly_report(subj),
         })
 
     @staticmethod
@@ -470,7 +511,7 @@ class Handler(SimpleHTTPRequestHandler):
             return {}
 
     @staticmethod
-    def _weekly_report() -> dict[str, Any]:
+    def _weekly_report(subject: str = "physics") -> dict[str, Any]:
         """D5 学习日志周报：本周 vs 上周变化 + 模板建议（零依赖，AI 可选）。"""
         from datetime import date, timedelta
         today = date.today()
@@ -483,17 +524,17 @@ class Handler(SimpleHTTPRequestHandler):
                       SUM(CASE WHEN date(created_at) >= ? AND date(created_at) <= ? THEN 1 ELSE 0 END) AS new_problems,
                       SUM(CASE WHEN date(created_at) >= ? AND date(created_at) < ? THEN 1 ELSE 0 END) AS prev_problems,
                       COUNT(*) AS total
-                    FROM problems
+                    FROM problems WHERE subject = ?
                 """, (week_start.isoformat(), today.isoformat(),
-                      prev_start.isoformat(), week_start.isoformat())).fetchone()
+                      prev_start.isoformat(), week_start.isoformat(), subject)).fetchone()
                 reviews = conn.execute("""
                     SELECT
                       SUM(CASE WHEN date(created_at) >= ? THEN 1 ELSE 0 END) AS week_reviews,
                       SUM(CASE WHEN date(created_at) >= ? AND date(created_at) < ? THEN 1 ELSE 0 END) AS prev_reviews,
                       SUM(CASE WHEN date(created_at) >= ? AND CAST(result AS INTEGER) >= 3 THEN 1 ELSE 0 END) AS week_good
-                    FROM reviews WHERE completed = 1
+                    FROM reviews WHERE completed = 1 AND problem_id IN (SELECT id FROM problems WHERE subject = ?)
                 """, (week_start.isoformat(), prev_start.isoformat(),
-                      week_start.isoformat(), week_start.isoformat())).fetchone()
+                      week_start.isoformat(), week_start.isoformat(), subject)).fetchone()
         except Exception as exc:
             LOG.debug("周报统计失败（可忽略）: %s", exc)
             return {}
@@ -519,10 +560,10 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _handle_weekly_report(self) -> None:
         """GET /api/report/weekly：周报详情（供前端详情弹窗）。"""
-        self.json_response(self._weekly_report())
+        self.json_response(self._weekly_report(self.subject))
 
     @staticmethod
-    def _monthly_report() -> dict[str, Any]:
+    def _monthly_report(subject: str = "physics") -> dict[str, Any]:
         """近 30 天周期报告：复习/新增/保持率/错因分布/活跃天数 + 模板建议（零依赖）。"""
         from datetime import date, timedelta
         today = date.today()
@@ -535,32 +576,34 @@ class Handler(SimpleHTTPRequestHandler):
                     SELECT
                       SUM(CASE WHEN date(created_at) >= ? THEN 1 ELSE 0 END) AS month_new,
                       SUM(CASE WHEN date(created_at) >= ? AND date(created_at) <= ? THEN 1 ELSE 0 END) AS prev_new
-                    FROM problems
-                """, (month_start.isoformat(), prev_start.isoformat(), prev_end.isoformat())).fetchone()
+                    FROM problems WHERE subject = ?
+                """, (month_start.isoformat(), prev_start.isoformat(), prev_end.isoformat(), subject)).fetchone()
                 revs = conn.execute("""
                     SELECT
                       SUM(CASE WHEN date(created_at) >= ? THEN 1 ELSE 0 END) AS month_revs,
                       SUM(CASE WHEN date(created_at) >= ? AND date(created_at) <= ? THEN 1 ELSE 0 END) AS prev_revs,
                       SUM(CASE WHEN date(created_at) >= ? AND CAST(result AS INTEGER) >= 3 THEN 1 ELSE 0 END) AS month_good,
                       COUNT(DISTINCT CASE WHEN date(created_at) >= ? THEN date(created_at) END) AS active_days
-                    FROM reviews WHERE completed = 1
+                    FROM reviews WHERE completed = 1 AND problem_id IN (SELECT id FROM problems WHERE subject = ?)
                 """, (month_start.isoformat(), prev_start.isoformat(), prev_end.isoformat(),
-                      month_start.isoformat(), month_start.isoformat())).fetchone()
+                      month_start.isoformat(), month_start.isoformat(), subject)).fetchone()
                 total = conn.execute(
                     "SELECT COUNT(*) AS c, "
-                    "SUM(CASE WHEN mastery >= 4 THEN 1 ELSE 0 END) AS mastered FROM problems"
+                    "SUM(CASE WHEN mastery >= 4 THEN 1 ELSE 0 END) AS mastered FROM problems WHERE subject = ?",
+                    (subject,),
                 ).fetchone()
                 errs = conn.execute("""
                     SELECT p.error_type AS et, COUNT(*) AS c
                     FROM reviews r JOIN problems p ON p.id = r.problem_id
-                    WHERE r.completed = 1 AND date(r.created_at) >= ?
+                    WHERE r.completed = 1 AND p.subject = ? AND date(r.created_at) >= ?
                     GROUP BY p.error_type ORDER BY c DESC LIMIT 5
-                """, (month_start.isoformat(),)).fetchall()
+                """, (subject, month_start.isoformat())).fetchall()
                 dailies = conn.execute("""
                     SELECT date(created_at) AS d, COUNT(*) AS c
                     FROM reviews WHERE completed = 1 AND date(created_at) >= ?
+                    AND problem_id IN (SELECT id FROM problems WHERE subject = ?)
                     GROUP BY date(created_at) ORDER BY d
-                """, (month_start.isoformat(),)).fetchall()
+                """, (month_start.isoformat(), subject)).fetchall()
         except Exception as exc:
             LOG.debug("月报统计失败（可忽略）: %s", exc)
             return {}
@@ -593,11 +636,11 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _handle_monthly_report(self) -> None:
         """GET /api/report/monthly：近 30 天周期报告详情。"""
-        self.json_response(self._monthly_report())
+        self.json_response(self._monthly_report(self.subject))
 
     @staticmethod
-    def _stubborn_problems() -> list[dict[str, Any]]:
-        """P0 顽固错题：同一题答错(评分≤2)≥2 次的题，按错误次数与掌握度排序。"""
+    def _stubborn_problems(subject: str = "physics") -> list[dict[str, Any]]:
+        """P0 顽固错题：同题评分(<=2)达 2 次的题，按失手次数排序（可指定学科）。"""
         items = rows("""
             SELECT p.id, p.title, p.topic, p.mastery, p.repetition,
                    (SELECT COUNT(*) FROM reviews r
@@ -606,12 +649,12 @@ class Handler(SimpleHTTPRequestHandler):
                    (SELECT COUNT(*) FROM reviews r
                     WHERE r.problem_id = p.id AND r.completed = 1) AS total_reviews
             FROM problems p
-            WHERE (SELECT COUNT(*) FROM reviews r
+            WHERE p.subject = ? AND (SELECT COUNT(*) FROM reviews r
                    WHERE r.problem_id = p.id AND r.completed = 1
                      AND CAST(r.result AS INTEGER) <= 2) >= 2
             ORDER BY miss_count DESC, p.mastery ASC
             LIMIT 6
-        """)
+        """, (subject,))
         out = []
         for p in items:
             out.append({
@@ -623,8 +666,8 @@ class Handler(SimpleHTTPRequestHandler):
         return out
 
     @staticmethod
-    def _forget_predict() -> dict[str, Any]:
-        """P0 遗忘预测：对近期待复习卡算 FSRS 检索概率 R，统计风险分布。"""
+    def _forget_predict(subject: str = "physics") -> dict[str, Any]:
+        """P0 遗忘预测：对近期到期复习用 FSRS 预测 R（可指定学科）。"""
         import fsrs_bridge
         soon = rows("""
             SELECT r.id, r.problem_id, r.due_date, r.interval_days,
@@ -632,9 +675,9 @@ class Handler(SimpleHTTPRequestHandler):
                    (SELECT MAX(created_at) FROM reviews
                     WHERE problem_id = p.id AND completed = 1) AS last_review
             FROM reviews r JOIN problems p ON p.id = r.problem_id
-            WHERE r.completed = 0 AND r.due_date <= ?
+            WHERE r.completed = 0 AND r.due_date <= ? AND p.subject = ?
             ORDER BY r.due_date ASC
-        """, ((date.today() + timedelta(days=1)).isoformat(),))
+        """, ((date.today() + timedelta(days=1)).isoformat(), subject))
         if not soon:
             return {"count": 0, "high_risk": 0, "medium_risk": 0, "avg_r": None, "top": []}
         values = []
@@ -656,10 +699,10 @@ class Handler(SimpleHTTPRequestHandler):
                 "avg_r": avg, "top": top}
 
     @staticmethod
-    def _today_tasks() -> list[dict[str, Any]]:
+    def _today_tasks(subject: str = "physics") -> list[dict[str, Any]]:
         """P0 今日任务清单：复习压力 + 错因专项 + 冲刺提醒。"""
         tasks: list[dict[str, Any]] = []
-        pressure = Handler._pressure_index()
+        pressure = Handler._pressure_index(subject)
         if pressure["total"] > 0:
             tasks.append({
                 "kind": "review",
@@ -671,15 +714,15 @@ class Handler(SimpleHTTPRequestHandler):
         # 错因专项：近期最高频错因 → 抽 3 道同错因题
         top_err = rows("""
             SELECT error_type, COUNT(*) AS c FROM problems
-            WHERE error_type <> '' AND error_type <> '待诊断'
+            WHERE subject = ? AND error_type <> '' AND error_type <> '待诊断'
             GROUP BY error_type ORDER BY c DESC LIMIT 1
-        """)
+        """, (subject,))
         if top_err:
             et = top_err[0]["error_type"]
             picks = rows("""
-                SELECT title FROM problems WHERE error_type = ?
+                SELECT title FROM problems WHERE subject = ? AND error_type = ?
                 ORDER BY mastery ASC, id DESC LIMIT 3
-            """, (et,))
+            """, (subject, et))
             if picks:
                 label = ERROR_TYPE_LABELS.get(et, et)
                 tasks.append({
@@ -705,13 +748,14 @@ class Handler(SimpleHTTPRequestHandler):
         return tasks
 
     @staticmethod
-    def _pressure_index() -> dict[str, Any]:
-        """P0 复习压力指数（PI）：逾期/今日/明日负载 + 预估耗时 + 压力分。"""
+    def _pressure_index(subject: str = "physics") -> dict[str, Any]:
+        """P0 复习压力指数（PI）：逾期/今日/明日复习 + 预估耗时 + 压力分。"""
         today = date.today().isoformat()
         tomorrow = (date.today() + timedelta(days=1)).isoformat()
-        overdue = row("SELECT COUNT(*) AS c FROM reviews WHERE completed = 0 AND due_date < ?", (today,)) or {}
-        today_n = row("SELECT COUNT(*) AS c FROM reviews WHERE completed = 0 AND due_date = ?", (today,)) or {}
-        tomorrow_n = row("SELECT COUNT(*) AS c FROM reviews WHERE completed = 0 AND due_date = ?", (tomorrow,)) or {}
+        subj_sub = "(SELECT id FROM problems WHERE subject = ?)"
+        overdue = row("SELECT COUNT(*) AS c FROM reviews WHERE completed = 0 AND due_date < ? AND problem_id IN " + subj_sub, (today, subject)) or {}
+        today_n = row("SELECT COUNT(*) AS c FROM reviews WHERE completed = 0 AND due_date = ? AND problem_id IN " + subj_sub, (today, subject)) or {}
+        tomorrow_n = row("SELECT COUNT(*) AS c FROM reviews WHERE completed = 0 AND due_date = ? AND problem_id IN " + subj_sub, (tomorrow, subject)) or {}
         overdue_c = int(overdue.get("c", 0))
         today_c = int(today_n.get("c", 0))
         tomorrow_c = int(tomorrow_n.get("c", 0))
@@ -737,8 +781,8 @@ class Handler(SimpleHTTPRequestHandler):
         }
 
     @staticmethod
-    def _error_trend() -> list[dict[str, Any]]:
-        """C7 错因趋势：近 30 天新增 vs 历史累计的占比对比（↑恶化 ↓改善）。"""
+    def _error_trend(subject: str = "physics") -> list[dict[str, Any]]:
+        """C7 错因趋势：近 30 天 vs 历史累计的占比对比（可指定学科）。"""
         try:
             from errors import ERROR_TYPE_LABELS
         except Exception:
@@ -746,14 +790,14 @@ class Handler(SimpleHTTPRequestHandler):
         month_ago = (date.today() - timedelta(days=29)).isoformat()
         recent_rows = rows("""
             SELECT error_type, COUNT(*) AS count FROM problems
-            WHERE error_type <> '' AND error_type <> '待诊断' AND created_at >= ?
+            WHERE subject = ? AND error_type <> '' AND error_type <> '待诊断' AND created_at >= ?
             GROUP BY error_type
-        """, (month_ago,))
+        """, (subject, month_ago))
         total_rows = rows("""
             SELECT error_type, COUNT(*) AS count FROM problems
-            WHERE error_type <> '' AND error_type <> '待诊断'
+            WHERE subject = ? AND error_type <> '' AND error_type <> '待诊断'
             GROUP BY error_type
-        """)
+        """, (subject,))
         recent = {r["error_type"]: r["count"] for r in recent_rows}
         total = {r["error_type"]: r["count"] for r in total_rows}
         recent_sum = max(1, sum(recent.values()))
@@ -830,17 +874,17 @@ class Handler(SimpleHTTPRequestHandler):
         self.json_response({"started": started, "sample_count": len(sample)})
 
     @staticmethod
-    def _error_distribution() -> list[dict[str, Any]]:
-        """C6 错因分布：各错因计数与平均掌握度（带中文标签）。"""
+    def _error_distribution(subject: str = "physics") -> list[dict[str, Any]]:
+        """C6 错因分布：各错因题目数 + 平均掌握度（可指定学科）。"""
         try:
             from errors import ERROR_TYPE_LABELS
         except Exception:
             ERROR_TYPE_LABELS = {}
         dist = rows("""
             SELECT error_type AS type, COUNT(*) AS count, ROUND(AVG(mastery), 1) AS avg_mastery
-            FROM problems WHERE error_type <> '' AND error_type <> '待诊断'
+            FROM problems WHERE subject = ? AND error_type <> '' AND error_type <> '待诊断'
             GROUP BY error_type ORDER BY count DESC
-        """)
+        """, (subject,))
         out = []
         for d in dist:
             out.append({
@@ -849,20 +893,20 @@ class Handler(SimpleHTTPRequestHandler):
                 "count": d["count"],
                 "avg_mastery": d["avg_mastery"] or 0,
             })
-        pending = row("SELECT COUNT(*) AS c FROM problems WHERE error_type = '待诊断' OR error_type = ''")
+        pending = row("SELECT COUNT(*) AS c FROM problems WHERE subject = ? AND (error_type = '待诊断' OR error_type = '')", (subject,))
         if pending and pending["c"]:
             out.append({"type": "", "label": "待诊断", "count": pending["c"], "avg_mastery": 0})
         return out
 
-    def _trend_data(self) -> dict[str, Any]:
-        log = rows("SELECT day, avg_mastery, count FROM mastery_log ORDER BY id DESC LIMIT 60")
+    def _trend_data(self, subject: str = "physics") -> dict[str, Any]:
+        log = rows("SELECT day, avg_mastery, count FROM mastery_log WHERE subject = ? ORDER BY id DESC LIMIT 60", (subject,))
         week_ago = (date.today() - timedelta(days=7)).isoformat()
         summary = row("""
             SELECT COUNT(*) AS week_reviews,
                    COALESCE(ROUND(AVG(CASE WHEN CAST(result AS INTEGER) >= 3 THEN 1.0 ELSE 0 END) * 100, 0), 0) AS week_accuracy
-            FROM reviews WHERE completed = 1 AND created_at >= ?
-        """, (week_ago,)) or {}
-        week_new = row("SELECT COUNT(*) AS count FROM problems WHERE created_at >= ?", (week_ago,))
+            FROM reviews WHERE completed = 1 AND created_at >= ? AND problem_id IN (SELECT id FROM problems WHERE subject = ?)
+        """, (week_ago, subject)) or {}
+        week_new = row("SELECT COUNT(*) AS count FROM problems WHERE subject = ? AND created_at >= ?", (subject, week_ago))
         return {
             "points": list(reversed(log)),
             "summary": {
@@ -875,19 +919,19 @@ class Handler(SimpleHTTPRequestHandler):
     def _handle_trend(self) -> None:
         self.json_response(self._trend_data())
 
-    def _analytics_data(self) -> dict[str, Any]:
-        """D4 复习分析扩展：未来 7 天压力 / 卡组健康度 / 最近 30 天复习量。"""
+    def _analytics_data(self, subject: str = "physics") -> dict[str, Any]:
+        """D4 复习面展开：未来 7 天压力 / 卡组健康度 / 近 30 天复习记录。"""
         today = date.today()
-        # 未来 7 天复习压力（含今日）
+        # 未来 7 天复习压力（按天）
         due_series: list[dict[str, Any]] = []
         for i in range(7):
             day = today + timedelta(days=i)
             count = row("""
                 SELECT COUNT(*) AS c FROM reviews
-                WHERE completed = 0 AND due_date = ?
-            """, (day.isoformat(),))
+                WHERE completed = 0 AND due_date = ? AND problem_id IN (SELECT id FROM problems WHERE subject = ?)
+            """, (day.isoformat(), subject))
             due_series.append({"date": day.isoformat(), "due": count["c"] if count else 0})
-        # 卡组健康度：新生(0次复习)/学习(1-2次)/成长(3+次) 与平均间隔
+        # 卡组健康度：新生(0次复习)/学习(1-2次)/成熟(3+次) 平均掌握
         health = row("""
             SELECT
                 SUM(CASE WHEN repetition = 0 THEN 1 ELSE 0 END) AS newborn,
@@ -896,15 +940,16 @@ class Handler(SimpleHTTPRequestHandler):
                 COUNT(*) AS total,
                 COALESCE(ROUND(AVG(repetition), 1), 0) AS avg_repetition,
                 COALESCE(ROUND(AVG(mastery), 1), 0) AS avg_mastery
-            FROM problems
-        """) or {}
+            FROM problems WHERE subject = ?
+        """, (subject,)) or {}
         # 最近 30 天每日复习量
         month_ago = (today - timedelta(days=29)).isoformat()
         daily = rows("""
             SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS count
             FROM reviews WHERE completed = 1 AND created_at >= ?
+            AND problem_id IN (SELECT id FROM problems WHERE subject = ?)
             GROUP BY substr(created_at, 1, 10) ORDER BY day
-        """, (month_ago,))
+        """, (month_ago, subject))
         return {
             "due_7d": due_series,
             "deck_health": {
@@ -916,19 +961,19 @@ class Handler(SimpleHTTPRequestHandler):
                 "avg_mastery": health.get("avg_mastery") or 0,
             },
             "daily_reviews": daily,
-            "forgetting": self._forgetting_curve(today),
+            "forgetting": self._forgetting_curve(today, subject),
         }
 
     @staticmethod
-    def _forgetting_curve(today: date) -> dict[str, Any]:
+    def _forgetting_curve(today: date, subject: str = "physics") -> dict[str, Any]:
         """D4 遗忘曲线：FSRS 卡按「距上次复习天数」分桶统计实际 R，并给平均稳定度下的预测曲线。"""
         cards = rows("""
             SELECT p.stability, p.difficulty, p.state, p.repetition,
                    (SELECT MAX(created_at) FROM reviews r
                     WHERE r.problem_id = p.id AND r.completed = 1) AS last_review
             FROM problems p
-            WHERE p.state > 0 AND p.stability > 0
-        """)
+            WHERE p.subject = ? AND p.state > 0 AND p.stability > 0
+        """, (subject,))
         buckets = [0, 4, 8, 15, 30, 61, 100000]
         labels = ["0-3天", "4-7天", "8-14天", "15-30天", "31-60天", "60天+"]
         bucket_data: list[dict[str, Any]] = []
@@ -1020,7 +1065,7 @@ class Handler(SimpleHTTPRequestHandler):
         if fmt == "ics":
             self._export_ics()
             return
-        problems = rows("SELECT id, title, course, topic, content, my_attempt, error_type, error_path, trap_note, shortcut, fix_action, tags, tags_status, mastery, created_at, updated_at FROM problems ORDER BY id")
+        problems = rows("SELECT id, title, course, topic, content, my_attempt, error_type, error_path, trap_note, shortcut, fix_action, tags, tags_status, mastery, created_at, updated_at, subject FROM problems WHERE subject = ? ORDER BY id", (self.subject,))
         for p in problems:
             try:
                 p["tags"] = json.loads(p["tags"]) if p["tags"] else []
@@ -1075,8 +1120,8 @@ class Handler(SimpleHTTPRequestHandler):
             SELECT p.id, p.title, p.course, p.topic, p.content, p.my_attempt, p.tags,
                    p.error_path, p.trap_note, p.shortcut, p.fix_action,
                    (SELECT GROUP_CONCAT(content, '\n') FROM hints h WHERE h.problem_id = p.id AND h.level = 3) AS answer_hint
-            FROM problems p ORDER BY p.id
-        """)
+            FROM problems p WHERE p.subject = ? ORDER BY p.id
+        """, (self.subject,))
         buf = io.StringIO()
         writer = csv.writer(buf, quoting=csv.QUOTE_ALL, lineterminator="\n")
         for p in problems:
@@ -1103,7 +1148,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _export_ics(self) -> None:
         """复习日程 .ics：未完成的 due 复习任务导出为 VEVENT。"""
-        due = rows("SELECT r.id, r.due_date, r.interval_days, p.title FROM reviews r JOIN problems p ON p.id = r.problem_id WHERE r.completed = 0 ORDER BY r.due_date")
+        due = rows("SELECT r.id, r.due_date, r.interval_days, p.title FROM reviews r JOIN problems p ON p.id = r.problem_id WHERE r.completed = 0 AND p.subject = ? ORDER BY r.due_date", (self.subject,))
         lines = [
             "BEGIN:VCALENDAR",
             "VERSION:2.0",
@@ -1184,15 +1229,16 @@ class Handler(SimpleHTTPRequestHandler):
         topic = p["topic"] or ""
         course = p["course"] or ""
         related = rows(
-            "SELECT id, title, course, topic, mastery FROM problems WHERE id != ? AND (topic = ? OR course = ?) ORDER BY id DESC LIMIT 3",
-            (problem_id, topic, course),
+            "SELECT id, title, course, topic, mastery FROM problems WHERE id != ? AND subject = ? AND (topic = ? OR course = ?) ORDER BY id DESC LIMIT 3",
+            (problem_id, self.subject, topic, course),
         )
         self.json_response(related)
 
     def _handle_graph(self) -> None:
-        """A2：全图谱（节点含掌握度，边含关系）。"""
-        graph.update_progress()
-        data = graph.load_graph()
+        """A2：指定学科全图谱，节点含掌握度，边含关系。"""
+        subject = self.subject
+        graph.update_progress(subject)
+        data = graph.load_graph(subject)
         # 附加绑定题数（looms_in）
         bound = rows("""
             SELECT c.concept_id AS cid, COUNT(*) AS c FROM concept_progress c GROUP BY c.concept_id
@@ -1216,12 +1262,14 @@ class Handler(SimpleHTTPRequestHandler):
         self.json_response({"items": items, "chain_count": len(chain)})
 
     def _handle_graph_add(self, data: dict[str, Any]) -> None:
-        """A2：用户新增概念（user_edited=1，改动仅存库不回写 seed）。"""
-        cid = graph.add_concept(str(data.get("name", "")), int(data.get("parent_id", 0) or 0))
+        """A2：用户新增概念（user_edited=1，改动不写回 seed）。"""
+        subject = self.subject
+        cid = graph.add_concept(str(data.get("name", "")), int(data.get("parent_id", 0) or 0),
+                                subject=subject)
         if not cid:
             self.json_response({"error": "概念名不能为空或已存在"}, 400)
             return
-        graph.update_progress()
+        graph.update_progress(subject)
         self.json_response({"id": cid})
 
     # ── POST ─────────────────────────────────────────────
@@ -1233,6 +1281,9 @@ class Handler(SimpleHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             data = self.read_json()
+            self.subject = self._subject_from_qs()
+            if isinstance(data, dict) and data.get("subject"):
+                self.subject = self._valid_subject(str(data["subject"]))
             for pattern, method, needs_data in Handler.POST_ROUTES:
                 match = re.fullmatch(pattern, path)
                 if not match:
@@ -1252,7 +1303,8 @@ class Handler(SimpleHTTPRequestHandler):
     def _handle_bank_attempt(self, data: dict[str, Any]) -> None:
         try:
             import bank
-            result = bank.judge(str(data.get("qid", "")), data.get("answer"))
+            result = bank.judge(str(data.get("qid", "")), data.get("answer"),
+                                subject=self._subject_of(data))
         except ValueError as exc:
             self.json_response({"error": str(exc)}, 400)
             return
@@ -1261,7 +1313,8 @@ class Handler(SimpleHTTPRequestHandler):
     def _handle_bank_import(self, data: dict[str, Any]) -> None:
         try:
             import bank
-            result = bank.import_questions(data.get("questions"))
+            result = bank.import_questions(data.get("questions"),
+                                           subject=self._subject_of(data))
         except ValueError as exc:
             self.json_response({"error": str(exc)}, 400)
             return
@@ -1335,9 +1388,9 @@ class Handler(SimpleHTTPRequestHandler):
             cursor = conn.execute("""
                 INSERT INTO problems(title, course, topic, content, my_attempt, error_type,
                                      error_path, trap_note, shortcut, fix_action, tags, tags_status,
-                                     concept_ids, media_path, methods, mastery, ease_factor, repetition,
+                                     concept_ids, media_path, methods, subject, mastery, ease_factor, repetition,
                                      created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2.5, 0, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2.5, 0, ?, ?)
             """, (
                 title, str(data.get("course", "")).strip(), str(data.get("topic", "")).strip(),
                 content, str(data.get("my_attempt", "")).strip(), error_type,
@@ -1346,7 +1399,7 @@ class Handler(SimpleHTTPRequestHandler):
                 tags, tags_status, concept_csv,
                 self._normalize_media_paths(data.get("media_path", "")),
                 methods,
-                clamp_mastery(int(data.get("mastery", 1))), stamp, stamp,
+                self.subject, clamp_mastery(int(data.get("mastery", 1))), stamp, stamp,
             ))
             problem_id = int(cursor.lastrowid)
             conn.execute(
@@ -1535,7 +1588,7 @@ class Handler(SimpleHTTPRequestHandler):
                     (result.mastery, result.ease_factor, result.repetition, now(), review["problem_id"]),
                 )
             self._log_variant_result(conn, review, rating)
-            self._log_mastery(conn)
+            self._log_mastery(conn, self.subject)
         try:
             from gamification import record as gamify_record
             gamify_record(rating)  # D6 游戏化（零依赖，失败不影响主流程）
@@ -1566,15 +1619,15 @@ class Handler(SimpleHTTPRequestHandler):
                      (json.dumps(variants, ensure_ascii=False), review["problem_id"]))
 
     @staticmethod
-    def _log_mastery(conn: Any) -> None:
-        """记录今日掌握度均值（每天保留最新一条），用于趋势图。"""
-        r = conn.execute("SELECT AVG(mastery) AS a, COUNT(*) AS c FROM problems").fetchone()
+    def _log_mastery(conn: Any, subject: str = "physics") -> None:
+        """记录当日学科掌握度均值，每天每学科保留一条（供趋势图）。"""
+        r = conn.execute("SELECT AVG(mastery) AS a, COUNT(*) AS c FROM problems WHERE subject = ?", (subject,)).fetchone()
         avg = round(r["a"] or 0, 2)
         today = date.today().isoformat()
-        conn.execute("DELETE FROM mastery_log WHERE day = ?", (today,))
+        conn.execute("DELETE FROM mastery_log WHERE day = ? AND subject = ?", (today, subject))
         conn.execute(
-            "INSERT INTO mastery_log(day, avg_mastery, count) VALUES (?, ?, ?)",
-            (today, avg, r["c"] or 0),
+            "INSERT INTO mastery_log(day, avg_mastery, count, subject) VALUES (?, ?, ?, ?)",
+            (today, avg, r["c"] or 0, subject),
         )
 
     def _handle_oral_start(self, data: dict[str, Any]) -> None:
@@ -1985,11 +2038,15 @@ class Handler(SimpleHTTPRequestHandler):
             self._safe_error(exc)
 
     def _handle_update_settings(self, data: dict[str, Any]) -> None:
-        allowed = {"api_base", "model", "temperature", "fast_model", "heavy_model", "vision_model"}
+        allowed = {"api_base", "model", "temperature", "fast_model", "heavy_model", "vision_model",
+                   "default_subject"}
         values = []
         for key in allowed:
             if key in data:
-                values.append((key, str(data[key]).strip()))
+                value = str(data[key]).strip()
+                if key == "default_subject":
+                    value = self._valid_subject(value)
+                values.append((key, value))
         with DB_LOCK, db() as conn:
             conn.executemany("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)", values)
         # 密钥不落库（R4）：仅存于内存（会话级）或 keys.enc（可选加密文件）

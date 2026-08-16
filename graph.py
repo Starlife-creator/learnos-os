@@ -21,36 +21,50 @@ _LEVEL_UNIT = 0
 _LEVEL_CHAPTER = 1
 _LEVEL_CONCEPT = 2
 
+# 学科：id -> 种子文件（physics 沿用旧文件名保持兼容；custom 学科无内置种子）
+SUBJECT_SEEDS: dict[str, str] = {
+    "physics": "seed_concepts.json",
+    "chemistry": "seed_concepts_chemistry.json",
+    "math": "seed_concepts_math.json",
+}
 
-def _load_seed() -> dict[str, Any] | None:
+
+def subject_seed_path(subject: str) -> Path:
+    fname = SUBJECT_SEEDS.get(subject, f"seed_concepts_{subject}.json")
+    return BUNDLE_ROOT / "data" / fname
+
+
+def _load_seed(subject: str = "physics") -> dict[str, Any] | None:
     try:
-        return json.loads(SEED_PATH.read_text(encoding="utf-8"))
+        return json.loads(subject_seed_path(subject).read_text(encoding="utf-8"))
     except OSError as exc:
-        LOG.warning("种子图谱文件不可读: %s", exc)
+        LOG.warning("种子图谱文件不可读 (%s): %s", subject, exc)
         return None
     except json.JSONDecodeError as exc:
-        LOG.warning("种子图谱文件解析失败: %s", exc)
+        LOG.warning("种子图谱文件解析失败 (%s): %s", subject, exc)
         return None
 
 
-def ensure_seed() -> None:
-    """库空时从 seed_concepts.json 一次性加载（幂等）。"""
+def ensure_seed(subject: str = "physics") -> None:
+    """按学科从种子文件一次性加载（幂等；该学科已有概念则跳过）。"""
     with DB_LOCK, db() as conn:
-        count = conn.execute("SELECT COUNT(*) AS c FROM concepts").fetchone()["c"]
+        count = conn.execute(
+            "SELECT COUNT(*) AS c FROM concepts WHERE subject = ?", (subject,)
+        ).fetchone()["c"]
         if count:
             return
-        seed = _load_seed()
+        seed = _load_seed(subject)
         if not seed:
             return
         with conn:
             name_to_id: dict[str, int] = {}
             # 第一遍：插入全部节点（含单元/章节），建立名字索引
             for unit in seed.get("units", []):
-                unit_id = _insert_concept(conn, unit["name"], 0, 0, 0.1, name_to_id)
+                unit_id = _insert_concept(conn, unit["name"], 0, 0, 0.1, name_to_id, subject)
                 for chapter in unit.get("chapters", []):
-                    ch_id = _insert_concept(conn, chapter["name"], unit_id, unit_id, 0.2, name_to_id)
+                    ch_id = _insert_concept(conn, chapter["name"], unit_id, unit_id, 0.2, name_to_id, subject)
                     for c in chapter.get("concepts", []):
-                        cid = _insert_concept(conn, c["n"], ch_id, ch_id, float(c.get("d", 0.5)), name_to_id)
+                        cid = _insert_concept(conn, c["n"], ch_id, ch_id, float(c.get("d", 0.5)), name_to_id, subject)
                         name_to_id.setdefault(c["n"], cid)
             # 第二遍：建先修边（不依赖出现顺序）
             for unit in seed.get("units", []):
@@ -70,17 +84,19 @@ def ensure_seed() -> None:
                         _insert_link(conn, name_to_id[a], name_to_id[b], relation)
                     else:
                         LOG.warning("%s 关系引用不存在，已跳过: %s-%s", relation, a, b)
-        LOG.info("种子图谱已加载: %d 概念", len(name_to_id))
+        LOG.info("种子图谱已加载 (%s): %d 概念", subject, len(name_to_id))
 
 
 def _insert_concept(conn: Any, name: str, parent_id: int, chapter_id: int,
-                    difficulty: float, name_to_id: dict[str, int]) -> int:
-    cur = conn.execute("SELECT id FROM concepts WHERE name = ?", (name,)).fetchone()
+                    difficulty: float, name_to_id: dict[str, int], subject: str = "physics") -> int:
+    cur = conn.execute(
+        "SELECT id FROM concepts WHERE subject = ? AND name = ?", (subject, name)
+    ).fetchone()
     if cur:
         return int(cur["id"])
     cursor = conn.execute(
-        "INSERT INTO concepts(name, parent_id, chapter_id, difficulty, created_at) VALUES (?, ?, ?, ?, ?)",
-        (name, parent_id, chapter_id, difficulty, now()),
+        "INSERT INTO concepts(name, parent_id, chapter_id, difficulty, subject, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (name, parent_id, chapter_id, difficulty, subject, now()),
     )
     cid = int(cursor.lastrowid)
     name_to_id[name] = cid
@@ -94,17 +110,19 @@ def _insert_link(conn: Any, a: int, b: int, relation: str) -> None:
     )
 
 
-def load_graph() -> dict[str, Any]:
-    """返回全图谱（节点含层级/难度/掌握度，边含关系）。"""
-    ensure_seed()
-    nodes = rows("SELECT * FROM concepts ORDER BY id")
+def load_graph(subject: str = "physics") -> dict[str, Any]:
+    """返回指定学科图谱（节点含层级/难度/掌握度，边含关系）。"""
+    ensure_seed(subject)
+    nodes = rows("SELECT * FROM concepts WHERE subject = ? ORDER BY id", (subject,))
     for n in nodes:
         n["level"] = _level_of(n)
     links = rows(
         "SELECT concept_a, concept_b, relation FROM concept_links "
+        "WHERE concept_a IN (SELECT id FROM concepts WHERE subject = ?) "
         "ORDER BY CASE relation WHEN 'prerequisite' THEN 0 WHEN 'contrast' THEN 1 ELSE 2 END",
+        (subject,),
     )
-    return {"nodes": nodes, "links": links}
+    return {"nodes": nodes, "links": links, "subject": subject}
 
 
 def _level_of(node: dict[str, Any]) -> int:
@@ -125,10 +143,12 @@ def _linked_ids(concept_id: int, relation: str, reverse: bool = False) -> list[i
 
 def _self_mastery(conn: Any, concept_id: int) -> tuple[float, int]:
     """该概念被绑定题目的平均掌握度（0-1）与绑定题数。"""
+    subj = conn.execute("SELECT subject FROM concepts WHERE id = ?", (concept_id,)).fetchone()
+    subject = subj["subject"] if subj else "physics"
     r = conn.execute("""
         SELECT AVG(mastery) / 5.0 AS m, COUNT(*) AS c FROM problems
-        WHERE concept_ids LIKE ?
-    """, (f"%,{concept_id},%",)).fetchone()
+        WHERE subject = ? AND concept_ids LIKE ?
+    """, (subject, f"%,{concept_id},%")).fetchone()
     return float(r["m"] or 0.0), int(r["c"] or 0)
 
 
@@ -140,11 +160,13 @@ def concept_ids_to_list(raw: str) -> list[int]:
         return []
 
 
-def update_progress() -> None:
+def update_progress(subject: str = "physics") -> None:
     """重算掌握度：自身聚合 + 先修门传播两轮（A→B 表示 A 是先修）。"""
-    ensure_seed()
+    ensure_seed(subject)
     with DB_LOCK, db() as conn:
-        ids = [r["id"] for r in conn.execute("SELECT id FROM concepts WHERE parent_id <> 0").fetchall()]
+        ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM concepts WHERE parent_id <> 0 AND subject = ?", (subject,)
+        ).fetchall()]
         self_m: dict[int, float] = {}
         for cid in ids:
             m, cnt = _self_mastery(conn, cid)
@@ -204,12 +226,13 @@ def bind_problem(problem_id: int) -> list[int]:
 def _local_bind(problem: dict[str, Any]) -> list[int]:
     """本地降级：题目 topic > title > content 依次做概念名包含匹配，命中即绑定。"""
     ensure_seed()
+    subject = problem.get("subject") or "physics"
     text_fields = [problem.get("topic", ""), problem.get("title", ""), problem.get("content", "")]
     hits: list[int] = []
     for text in text_fields:
         if not text:
             continue
-        for c in rows("SELECT id, name FROM concepts WHERE parent_id <> 0"):
+        for c in rows("SELECT id, name FROM concepts WHERE parent_id <> 0 AND subject = ?", (subject,)):
             if c["name"] and c["name"] in text:
                 hits.append(int(c["id"]))
         if hits:
@@ -276,7 +299,7 @@ def problems_for_concepts(concept_ids: list[int], limit: int = 100) -> list[dict
         return [dict(r) for r in cur.fetchall()]
 
 
-def add_concept(name: str, parent_id: int = 0) -> int | None:
+def add_concept(name: str, parent_id: int = 0, subject: str = "physics") -> int | None:
     """用户新增概念（user_edited=1，不回写 seed）。parent_id 为章节点 id。"""
     name = str(name).strip()
     if not name:
@@ -284,6 +307,8 @@ def add_concept(name: str, parent_id: int = 0) -> int | None:
     parent = None
     if parent_id:
         parent = row("SELECT * FROM concepts WHERE id = ?", (parent_id,))
+        if parent and parent.get("subject") != subject:
+            return None
     chapter_id = 0
     if parent:
         if _level_of(parent) == _LEVEL_CHAPTER:
@@ -293,9 +318,9 @@ def add_concept(name: str, parent_id: int = 0) -> int | None:
     with DB_LOCK, db() as conn:
         try:
             cursor = conn.execute(
-                "INSERT INTO concepts(name, parent_id, chapter_id, difficulty, user_edited, created_at) "
-                "VALUES (?, ?, ?, 0.5, 1, ?)",
-                (name, parent_id, chapter_id, now()),
+                "INSERT INTO concepts(name, parent_id, chapter_id, difficulty, user_edited, created_at, subject) "
+                "VALUES (?, ?, ?, 0.5, 1, ?, ?)",
+                (name, parent_id, chapter_id, now(), subject),
             )
         except Exception as exc:
             LOG.warning("新增概念失败（可能重名）: %s", exc)

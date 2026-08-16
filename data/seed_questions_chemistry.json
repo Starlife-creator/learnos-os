@@ -1,0 +1,390 @@
+{
+ "version": 1,
+ "subject": "chemistry",
+ "questions": [
+  {
+   "id": "chem-物质的量浓度-01",
+   "unit": "化学基础",
+   "chapter": "物质的量",
+   "concept": "物质的量浓度",
+   "difficulty": 1,
+   "stem": "将 0.1 mol NaCl 溶解于水配成 500 mL 溶液，所得溶液的物质的量浓度为？",
+   "choices": [
+    "0.1 mol/L",
+    "0.2 mol/L",
+    "0.5 mol/L",
+    "1.0 mol/L"
+   ],
+   "answer": 1,
+   "explain": "c = n/V = 0.1 mol / 0.5 L = 0.2 mol/L"
+  },
+  {
+   "id": "chem-气体摩尔体积-02",
+   "unit": "化学基础",
+   "chapter": "物质的量",
+   "concept": "气体摩尔体积",
+   "difficulty": 1,
+   "stem": "标准状况下，22.4 L 氧气含有的分子数约为？",
+   "choices": [
+    "0.5 NA",
+    "1.0 NA",
+    "2.0 NA",
+    "6.02×10^22"
+   ],
+   "answer": 1,
+   "explain": "标况下 22.4 L 为 1 mol，分子数为 1 NA"
+  },
+  {
+   "id": "chem-物质的量-03",
+   "unit": "化学基础",
+   "chapter": "物质的量",
+   "concept": "物质的量",
+   "difficulty": 2,
+   "stem": "0.5 mol H2O 中含有的氧原子数目为？",
+   "choices": [
+    "0.5 NA",
+    "1.0 NA",
+    "1.5 NA",
+    "2.0 NA"
+   ],
+   "answer": 0,
+   "explain": "每个 H2O 含 1 个 O 原子，0.5 mol H2O 含 0.5 NA 个氧原子"
+  },
+  {
+   "id": "chem-胶体-04",
+   "unit": "化学基础",
+   "chapter": "分散系",
+   "concept": "胶体",
+   "difficulty": 1,
+   "stem": "鉴别溶液和胶体最简便的方法是？",
+   "choices": [
+    "观察颜色",
+    "丁达尔效应",
+    "过滤",
+    "蒸发"
+   ],
+   "answer": 1,
+   "explain": "胶体具有丁达尔效应，溶液没有"
+  },
+  {
+   "id": "chem-同位素-05",
+   "unit": "物质结构与元素周期律",
+   "chapter": "原子结构",
+   "concept": "同位素",
+   "difficulty": 1,
+   "stem": "¹²C 与 ¹⁴C 互为？",
+   "choices": [
+    "同素异形体",
+    "同位素",
+    "同分异构体",
+    "同系物"
+   ],
+   "answer": 1,
+   "explain": "质子数相同、中子数不同的原子互为同位素"
+  },
+  {
+   "id": "chem-元素周期律-06",
+   "unit": "物质结构与元素周期律",
+   "chapter": "元素周期律",
+   "concept": "元素周期律",
+   "difficulty": 2,
+   "stem": "第三周期元素中，金属性最强的是？",
+   "choices": [
+    "Na",
+    "Mg",
+    "Al",
+    "Si"
+   ],
+   "answer": 0,
+   "explain": "同周期从左到右金属性减弱，Na 最强"
+  },
+  {
+   "id": "chem-共价键-07",
+   "unit": "物质结构与元素周期律",
+   "chapter": "化学键",
+   "concept": "共价键",
+   "difficulty": 1,
+   "stem": "下列物质中只含共价键的是？",
+   "choices": [
+    "NaCl",
+    "KOH",
+    "H2O",
+    "CaO"
+   ],
+   "answer": 2,
+   "explain": "H2O 中只有共价键；NaCl/CaO 为离子键，KOH 兼有"
+  },
+  {
+   "id": "chem-氧化还原反应-08",
+   "unit": "氧化还原反应",
+   "chapter": "氧化还原反应基础",
+   "concept": "氧化还原反应",
+   "difficulty": 1,
+   "stem": "下列反应属于氧化还原反应的是？",
+   "choices": [
+    "NaOH + HCl → NaCl + H2O",
+    "CaCO3 高温分解",
+    "2Na + Cl2 → 2NaCl",
+    "Na2CO3 + 2HCl → 2NaCl + H2O + CO2↑"
+   ],
+   "answer": 2,
+   "explain": "有元素化合价变化（Na 0→+1，Cl 0→-1）的反应才是氧化还原反应"
+  },
+  {
+   "id": "chem-氧化剂与还原剂-09",
+   "unit": "氧化还原反应",
+   "chapter": "氧化还原反应基础",
+   "concept": "氧化剂与还原剂",
+   "difficulty": 2,
+   "stem": "反应 2KMnO4 + 16HCl → 2KCl + 2MnCl2 + 5Cl2↑ + 8H2O 中，氧化剂是？",
+   "choices": [
+    "KMnO4",
+    "HCl",
+    "KCl",
+    "Cl2"
+   ],
+   "answer": 0,
+   "explain": "KMnO4 中 Mn 由 +7 降为 +2，得电子被还原，作氧化剂"
+  },
+  {
+   "id": "chem-电子转移与化合价-10",
+   "unit": "氧化还原反应",
+   "chapter": "氧化还原反应基础",
+   "concept": "电子转移与化合价",
+   "difficulty": 2,
+   "stem": "反应 Cl2 + 2NaOH → NaCl + NaClO + H2O 中，Cl2 的电子转移情况是？",
+   "choices": [
+    "仅被还原",
+    "仅被氧化",
+    "既被氧化又被还原",
+    "不发生电子转移"
+   ],
+   "answer": 2,
+   "explain": "Cl 由 0 价变为 -1 和 +1，属于歧化反应，既氧化又还原"
+  },
+  {
+   "id": "chem-化学平衡状态-11",
+   "unit": "化学反应原理",
+   "chapter": "化学反应速率与平衡",
+   "concept": "化学平衡状态",
+   "difficulty": 2,
+   "stem": "可逆反应达到化学平衡的标志是？",
+   "choices": [
+    "正逆反应速率都为零",
+    "正逆反应速率相等且不为零",
+    "反应物浓度为零",
+    "生成物浓度最大"
+   ],
+   "answer": 1,
+   "explain": "平衡时 v正 = v逆 ≠ 0，各组分浓度不再改变"
+  },
+  {
+   "id": "chem-勒夏特列原理-12",
+   "unit": "化学反应原理",
+   "chapter": "化学反应速率与平衡",
+   "concept": "勒夏特列原理",
+   "difficulty": 2,
+   "stem": "对反应 N2 + 3H2 ⇌ 2NH3（放热），增大压强平衡如何移动？",
+   "choices": [
+    "正向移动",
+    "逆向移动",
+    "不移动",
+    "无法判断"
+   ],
+   "answer": 0,
+   "explain": "增大压强向气体分子数减少的方向（正反应）移动"
+  },
+  {
+   "id": "chem-pH-与溶液酸碱性-13",
+   "unit": "化学反应原理",
+   "chapter": "电离平衡",
+   "concept": "pH 与溶液酸碱性",
+   "difficulty": 1,
+   "stem": "25℃ 时，pH = 3 的盐酸中 c(H⁺) 为？",
+   "choices": [
+    "1×10⁻³ mol/L",
+    "1×10⁻⁷ mol/L",
+    "1×10⁻¹¹ mol/L",
+    "3 mol/L"
+   ],
+   "answer": 0,
+   "explain": "pH = -lg c(H⁺)，pH=3 时 c(H⁺)=1×10⁻³ mol/L"
+  },
+  {
+   "id": "chem-盐类水解-14",
+   "unit": "化学反应原理",
+   "chapter": "电离平衡",
+   "concept": "盐类水解",
+   "difficulty": 2,
+   "stem": "下列盐溶液呈酸性的是？",
+   "choices": [
+    "NaCl",
+    "Na2CO3",
+    "FeCl3",
+    "CH3COONa"
+   ],
+   "answer": 2,
+   "explain": "FeCl3 是强酸弱碱盐，Fe³⁺ 水解使溶液呈酸性"
+  },
+  {
+   "id": "chem-原电池-15",
+   "unit": "化学反应原理",
+   "chapter": "电化学",
+   "concept": "原电池",
+   "difficulty": 2,
+   "stem": "铜锌原电池中，负极是？",
+   "choices": [
+    "铜片",
+    "锌片",
+    "盐桥",
+    "稀硫酸"
+   ],
+   "answer": 1,
+   "explain": "较活泼金属 Zn 失电子作负极，Cu 作正极"
+  },
+  {
+   "id": "chem-电解池-16",
+   "unit": "化学反应原理",
+   "chapter": "电化学",
+   "concept": "电解池",
+   "difficulty": 2,
+   "stem": "电解饱和食盐水，阴极产物是？",
+   "choices": [
+    "Cl2",
+    "O2",
+    "H2",
+    "NaOH"
+   ],
+   "answer": 2,
+   "explain": "阴极 H⁺ 得电子生成 H2（同时产生 NaOH）"
+  },
+  {
+   "id": "chem-钠及其化合物-17",
+   "unit": "元素化合物",
+   "chapter": "金属元素",
+   "concept": "钠及其化合物",
+   "difficulty": 1,
+   "stem": "Na2O2 与 H2O 反应的产物是？",
+   "choices": [
+    "NaOH 和 O2",
+    "NaOH 和 H2",
+    "Na2O 和 O2",
+    "Na 和 H2O"
+   ],
+   "answer": 0,
+   "explain": "2Na2O2 + 2H2O = 4NaOH + O2↑，Na2O2 既是氧化剂又是还原剂"
+  },
+  {
+   "id": "chem-铁及其化合物-18",
+   "unit": "元素化合物",
+   "chapter": "金属元素",
+   "concept": "铁及其化合物",
+   "difficulty": 2,
+   "stem": "FeCl3 溶液与铁粉反应，产物是？",
+   "choices": [
+    "FeCl2",
+    "FeCl4",
+    "Fe2O3",
+    "Fe(OH)3"
+   ],
+   "answer": 0,
+   "explain": "2FeCl3 + Fe = 3FeCl2，Fe³⁺ 被 Fe 还原为 Fe²⁺"
+  },
+  {
+   "id": "chem-氯及其化合物-19",
+   "unit": "元素化合物",
+   "chapter": "非金属元素",
+   "concept": "氯及其化合物",
+   "difficulty": 1,
+   "stem": "实验室制取 Cl2 的试剂组合是？",
+   "choices": [
+    "MnO2 与稀盐酸",
+    "MnO2 与浓盐酸加热",
+    "NaCl 与稀硫酸",
+    "KMnO4 与稀盐酸不加热"
+   ],
+   "answer": 1,
+   "explain": "MnO2 + 4HCl(浓) 加热制 Cl2，需浓盐酸"
+  },
+  {
+   "id": "chem-硫及其化合物-20",
+   "unit": "元素化合物",
+   "chapter": "非金属元素",
+   "concept": "硫及其化合物",
+   "difficulty": 2,
+   "stem": "SO2 通入品红溶液，现象及恢复方式是？",
+   "choices": [
+    "褪色，加热恢复红色",
+    "褪色，加热不恢复",
+    "无明显现象",
+    "产生沉淀"
+   ],
+   "answer": 0,
+   "explain": "SO2 使品红褪色是暂时性的，加热可恢复红色"
+  },
+  {
+   "id": "chem-烷烃-21",
+   "unit": "有机化学基础",
+   "chapter": "烃",
+   "concept": "烷烃",
+   "difficulty": 1,
+   "stem": "甲烷与氯气在光照下发生的反应类型是？",
+   "choices": [
+    "加成反应",
+    "取代反应",
+    "氧化反应",
+    "消去反应"
+   ],
+   "answer": 1,
+   "explain": "甲烷光照与 Cl2 发生取代反应（逐步取代）"
+  },
+  {
+   "id": "chem-乙醇-22",
+   "unit": "有机化学基础",
+   "chapter": "烃的衍生物",
+   "concept": "乙醇",
+   "difficulty": 1,
+   "stem": "乙醇催化氧化的产物是？",
+   "choices": [
+    "乙醛",
+    "乙酸",
+    "乙烯",
+    "乙烷"
+   ],
+   "answer": 0,
+   "explain": "2CH3CH2OH + O2 →(Cu/Δ) 2CH3CHO + 2H2O，乙醇氧化成乙醛"
+  },
+  {
+   "id": "chem-加成反应-23",
+   "unit": "有机化学基础",
+   "chapter": "有机反应类型",
+   "concept": "加成反应",
+   "difficulty": 1,
+   "stem": "乙烯与溴水反应的类型是？",
+   "choices": [
+    "取代反应",
+    "加成反应",
+    "酯化反应",
+    "聚合反应"
+   ],
+   "answer": 1,
+   "explain": "乙烯含碳碳双键，与 Br2 发生加成反应使溴水褪色"
+  },
+  {
+   "id": "chem-酯-24",
+   "unit": "有机化学基础",
+   "chapter": "烃的衍生物",
+   "concept": "酯",
+   "difficulty": 2,
+   "stem": "乙酸与乙醇在浓硫酸催化下的产物是？",
+   "choices": [
+    "乙醛",
+    "乙酸乙酯",
+    "乙醚",
+    "乙烯"
+   ],
+   "answer": 1,
+   "explain": "酯化反应：CH3COOH + C2H5OH ⇌ CH3COOC2H5 + H2O"
+  }
+ ]
+}

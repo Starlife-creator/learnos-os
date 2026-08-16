@@ -670,5 +670,8 @@
   "today.reviewDue": "今日应复习 {n} 题",
   "today.wrongbook": "错题簿共 {n} 题",
   "today.bank": "去题库练习",
-  "rag.restored": "已恢复文档"
+  "rag.restored": "已恢复文档",
+  "nav.subject": "学科",
+  "set.subject": "默认学科",
+  "set.subjectPh": "新会话打开时默认进入的学科（存于本机设置）"
 }

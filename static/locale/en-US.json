@@ -670,5 +670,8 @@
   "today.reviewDue": "Review {n} due today",
   "today.wrongbook": "Wrong book: {n} problems",
   "today.bank": "Practice in bank",
-  "rag.restored": "Document restored"
+  "rag.restored": "Document restored",
+  "nav.subject": "Subject",
+  "set.subject": "Default subject",
+  "set.subjectPh": "Subject used when opening a new session (saved on this device)"
 }
