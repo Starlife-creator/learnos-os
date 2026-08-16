@@ -17,7 +17,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TypedDict
 
-from typing_extensions import Self
+try:
+    from typing import Self  # Python 3.11+
+except ImportError:
+    Self = None  # Python 3.10：注解惰性求值（from __future__ import annotations），运行时安全
 
 from fsrs.state import State
 

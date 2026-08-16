@@ -26,7 +26,10 @@ from fsrs.state import State
 
 if TYPE_CHECKING:
     from torch import Tensor  # torch is optional; import only for type checking
-from typing_extensions import Self
+try:
+    from typing import Self  # Python 3.11+
+except ImportError:
+    Self = None  # Python 3.10：注解惰性求值（from __future__ import annotations），运行时安全
 
 FSRS_DEFAULT_DECAY = 0.1542
 DEFAULT_PARAMETERS = (

@@ -103,7 +103,9 @@ class TestRag(unittest.TestCase):
         self.assertTrue(r["items"])
 
     def test_outside_workspace_rejected(self):
-        status, r = self.request_error("/api/rag/ingest", "POST", {"path": "C:/Windows/system32"})
+        # 跨平台：工作区父目录一定是绝对路径且在工作区外
+        outside = str(Path(config.APP_DIR).resolve().parent / "outside_test_dir")
+        status, r = self.request_error("/api/rag/ingest", "POST", {"path": outside})
         self.assertEqual(status, 400)
         self.assertIn("工作区", r["error"])
 

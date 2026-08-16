@@ -2,17 +2,38 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import config
+import db
 import fsrs_bridge
 from fsrs_bridge import compute_fsrs_review, next_interval_days
 
+# 测试临时数据严格限制在工作区内（tests/.tmp/），不留任何外部痕迹
+_TMP = Path(__file__).resolve().parent / ".tmp"
+_TMP.mkdir(exist_ok=True)
+
 
 class TestFsrsBridge(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory(prefix="fsrs_", dir=_TMP)
+        cls._orig_db = config.DB_PATH
+        config.DB_PATH = Path(cls._tmp.name) / "fsrs_test.db"
+        db.DB_PATH = config.DB_PATH
+        db.init_db()
+
+    @classmethod
+    def tearDownClass(cls):
+        db.DB_PATH = cls._orig_db
+        config.DB_PATH = cls._orig_db
+        cls._tmp.cleanup()
+
     def test_bridge_importable(self):
         self.assertIsInstance(fsrs_bridge._FSRS_AVAILABLE, bool)
 
