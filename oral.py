@@ -82,7 +82,8 @@ def start_feynman(problem: dict[str, Any]) -> tuple[int, str]:
             {"role": "system", "content": (
                 "你是 Feynman 学习法教练。围绕一道错题展开三步口述反转："
                 "①向新手讲解核心概念（禁公式）；②对照标准解析找漏点；③生成自评表。"
-                f"主题：{topic or title}。第一步请只提一个问题：让学生用大白话讲解。"
+                + _profile_context()
+                + f"主题：{topic or title}。第一步请只提一个问题：让学生用大白话讲解。"
             )},
             {"role": "user", "content": f"题目：{content}\n标题：{title}"},
         ], max_tokens=200, route="oral")
@@ -197,6 +198,19 @@ def _next_stage(current: int, level: int) -> tuple[int, int]:
     return current, min(3, level)
 
 
+def _profile_context() -> str:
+    """学习者画像注入（Tutor-GPT 式心智模型）：失败静默，不影响口试主流程。"""
+    try:
+        from profile import snapshot
+        line = snapshot()
+    except Exception as exc:
+        LOG.debug("口试画像注入失败（可忽略）: %s", exc)
+        return ""
+    return (f"{line}\n"
+            "请基于以上档案动态调整教学策略：优先往学生的薄弱知识点方向追问，"
+            "针对其高频错因设计检查点；回答质量判断参照其历史掌握水平。")
+
+
 def start_oral(topic: str) -> tuple[int, str]:
     state = "concept"
     question = STAGE_PROMPTS[state].format(topic=topic)
@@ -204,7 +218,8 @@ def start_oral(topic: str) -> tuple[int, str]:
         question = call_ai([
             {"role": "system", "content": (
                 "你是严格的大学物理口试老师（苏格拉底式）。"
-                f"学生刚开始学习「{topic}」。一次只问一个简洁的、关于物理图像的问题，不给答案。"
+                + _profile_context()  # 画像日内稳定，前置以命中前缀缓存
+                + f"学生刚开始学习「{topic}」。一次只问一个简洁的、关于物理图像的问题，不给答案。"
             )},
             {"role": "user", "content": f'围绕「{topic}」提出第一个概念理解问题。'},
         ], max_tokens=180, route="oral")
@@ -326,7 +341,10 @@ def _ai_followup(transcript: list[dict[str, str]], topic: str, stage: str, level
         "① 一句话诊断（指出最需修正或深化之处）；② 一个针对性的追问。不要给出完整答案。"
         f"剩余轮次：{remaining}。"
     )
-    messages = [{"role": "system", "content": "你是严格的大学物理口试老师（苏格拉底式）。" + instruction}]
+    messages = [{"role": "system", "content":
+                 "你是严格的大学物理口试老师（苏格拉底式）。"
+                 + _profile_context()  # 稳定前缀更长，命中缓存
+                 + instruction}]
     messages.extend(transcript[-6:])
     return call_ai(messages, max_tokens=300, tier="heavy", route="oral")
 

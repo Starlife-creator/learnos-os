@@ -99,8 +99,12 @@ class TestBackup(unittest.TestCase):
 
     def test_auto_backup_idempotent_and_prune(self):
         """C7：自动备份每天一次幂等，且最多保留 7 份。"""
+        from datetime import date as _date
         from config import APP_DIR
         backups_dir = APP_DIR / "backups"
+        # 清掉当日已有备份，避免幂等跳过导致环境依赖失败
+        for f in backups_dir.glob(f"auto_{_date.today().isoformat()}_*.db"):
+            f.unlink()
         # 预置 8 个陈旧备份模拟累积
         backups_dir.mkdir(parents=True, exist_ok=True)
         for i in range(8):

@@ -1,11 +1,14 @@
 """AI 调用层：OpenAI 兼容接口、提示词构造、降级提示。"""
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
+import socket
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -116,8 +119,12 @@ def display_settings() -> dict[str, str]:
         "fast_model": eff.get("fast_model", ""),
         "heavy_model": eff.get("heavy_model", ""),
         "vision_model": eff.get("vision_model", ""),
-        "temperature": eff.get("temperature", "0.3"),
+        "temperature": eff.get("temperature") or "0.3",
         "default_subject": eff.get("default_subject", "physics"),
+        "hint_cache_enabled": eff.get("hint_cache_enabled", "1") != "0",
+        "daily_review_cap": int(eff.get("daily_review_cap", "0") or 0),
+        "ai_context_tokens": int(eff.get("ai_context_tokens", "32000") or 32000),
+        "allow_local_ai": eff.get("allow_local_ai", "1") != "0",
         "has_api_key": has_key,
         "key_source": eff.get("key_source", "none"),
         # 存在 keys.enc 但当前未解锁（key_source 为 none/runtime）时提示可解锁
@@ -126,7 +133,14 @@ def display_settings() -> dict[str, str]:
 
 
 def api_endpoint(base: str) -> str:
+    """拼接 chat/completions 端点。仅允许 http/https 协议（防 file:/data: 等任意 URI 读取）。
+
+    主机不做私网/环回限制：本地优先设计，用户自配本地 Ollama（127.0.0.1:11434）
+    是核心特性；服务仅监听 127.0.0.1 单用户使用，写请求另有 CSRF 头闸门。
+    """
     base = base.strip().rstrip("/")
+    if not base.lower().startswith(("http://", "https://")):
+        raise ValueError("API 地址必须以 http:// 或 https:// 开头")
     if base.endswith("/chat/completions"):
         return base
     return base + "/chat/completions"
@@ -143,7 +157,7 @@ def probe_ollama(timeout: float = 1.5) -> dict[str, Any] | None:
     try:
         request = urllib.request.Request(
             "http://localhost:11434/api/tags", method="GET",
-            headers={"User-Agent": "LearnOS/0.3"},
+            headers={"User-Agent": "LearnOS/0.5"},
         )
         with urllib.request.urlopen(request, timeout=timeout) as response:
             data = json.loads(response.read().decode("utf-8"))
@@ -164,6 +178,114 @@ def _resolve_model(config: dict[str, str], tier: str | None) -> str:
     return model
 
 
+def _safe_temperature(config: dict[str, str]) -> float:
+    """温度解析兜底：空串/非法值回退 0.3，并夹在 0-2（防 float('') 崩溃）。"""
+    try:
+        value = float(config.get("temperature", "0.3"))
+    except (TypeError, ValueError):
+        return 0.3
+    return max(0.0, min(2.0, value))
+
+
+def _prepare_ai_request(
+    messages: list[dict[str, str]],
+    max_tokens: int,
+    tier: str | None,
+    route: str,
+    stream: bool,
+    model_override: str | None = None,
+) -> tuple[str, str, dict[str, str], dict[str, str], float]:
+    """call_ai / call_ai_stream 共用的配置校验与请求构造。
+
+    返回 (model, url, payload, headers, start)；未配置时记录 telemetry 并抛 ValueError。
+    """
+    from telemetry import record
+    start = time.monotonic()
+    config = get_cached_settings()
+    api_key = config.get("api_key", "").strip()
+    model = _resolve_model(config, tier)
+    if model_override:
+        model = model_override
+    base = config.get("api_base", "").strip()
+    if not model or not base or (not api_key and not is_local_endpoint(base)):
+        record(route=route, model=model, ok=False, error_kind="not_configured", start=start)
+        raise ValueError('请先在「AI 设置」中填写 API 地址、密钥和模型。')
+
+    body: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "temperature": _safe_temperature(config),
+        "max_tokens": max_tokens,
+        "stream": stream,
+    }
+    if stream:
+        # 请求最后一块附带 usage（DeepSeek/OpenAI 支持；本地实现不识别则忽略）
+        body["stream_options"] = {"include_usage": True}
+    payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "User-Agent": "LearnOS/0.5",
+    }
+    if stream:
+        headers["Accept"] = "text/event-stream"
+    return model, api_endpoint(base), payload, headers, start
+
+
+def _target_is_private(url: str) -> bool:
+    """解析 URL 主机：私网/环回/链路本地返回 True（解析失败按 False，交给连接层报错）。"""
+    try:
+        host = urllib.parse.urlsplit(url).hostname or ""
+        addr = ipaddress.ip_address(socket.gethostbyname(host))
+        return addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved
+    except (ValueError, socket.gaierror, OSError):
+        return False
+
+
+def _check_ai_target(url: str) -> None:
+    """AI 出站目标边界校验（SSRF 防护）。
+
+    - 仅允许 http/https 协议；
+    - 私网/环回目标需显式同意：设置 allow_local_ai（默认开——本地 Ollama 是本应用
+      核心特性；本服务仅绑定 127.0.0.1 单用户本机使用，写接口另有 CSRF 闸门）；
+    - 不跟随重定向（防校验后被 3xx 跳到内网目标）。
+    """
+    scheme = urllib.parse.urlsplit(url).scheme.lower()
+    if scheme not in ("http", "https"):
+        raise ValueError(f"AI 端点协议必须是 http/https（当前: {scheme or '缺失'}）")
+    if _target_is_private(url) and get_cached_settings().get("allow_local_ai", "1") != "1":
+        raise ValueError("该端点解析到本地/内网地址。如需使用本地模型（Ollama 等），"
+                         "请在设置中开启「允许本地/内网 AI 端点」。")
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None  # 禁止跟随：已校验的目标不可被 3xx 改写
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def _cached_tokens(usage: dict[str, Any]) -> int:
+    """输入侧 prompt 缓存命中 token：DeepSeek / OpenAI 兼容字段，缺失为 0。"""
+    try:
+        hit = usage.get("prompt_cache_hit_tokens")  # DeepSeek
+        if hit is None:
+            hit = (usage.get("prompt_tokens_details") or {}).get("cached_tokens")  # OpenAI 系
+        return int(hit or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _post_json(url: str, payload: bytes, headers: dict[str, str], timeout: int = 45) -> dict[str, Any]:
+    """发送 POST 并解析 JSON（入口过 _check_ai_target，经 _OPENER 禁重定向）。"""
+    _check_ai_target(url)
+    request = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+    with _OPENER.open(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def call_ai(
     messages: list[dict[str, str]],
     max_tokens: int = 700,
@@ -173,47 +295,29 @@ def call_ai(
     route: str = "",
 ) -> str:
     from telemetry import record
-    start = time.monotonic()
-    config = get_cached_settings()
-    api_key = config.get("api_key", "").strip()
-    model = _resolve_model(config, tier)
-    if model_override:
-        model = model_override
-    base = config.get("api_base", "").strip()
-    if not model or not base:
-        record(route=route, model=model, ok=False, error_kind="not_configured",
-               start=start)
-        raise ValueError('请先在「AI 设置」中填写 API 地址、密钥和模型。')
-    if not api_key and not is_local_endpoint(base):
-        record(route=route, model=model, ok=False, error_kind="not_configured",
-               start=start)
-        raise ValueError('请先在「AI 设置」中填写 API 地址、密钥和模型。')
-
-    payload = json.dumps({
-        "model": model,
-        "messages": messages,
-        "temperature": float(config.get("temperature", "0.3")),
-        "max_tokens": max_tokens,
-    }, ensure_ascii=False).encode("utf-8")
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "User-Agent": "LearnOS/0.2",
-    }
+    model, url, payload, headers, start = _prepare_ai_request(
+        messages, max_tokens, tier, route, stream=False, model_override=model_override,
+    )
 
     last_error: Exception | None = None
     for attempt in range(retries + 1):
-        request = urllib.request.Request(
-            api_endpoint(base), data=payload, headers=headers, method="POST",
-        )
         try:
-            with urllib.request.urlopen(request, timeout=45) as response:
-                result = json.loads(response.read().decode("utf-8"))
+            result = _post_json(url, payload, headers, timeout=45)
             usage = result.get("usage") or {}
             tokens = int(usage.get("total_tokens") or 0)
-            record(route=route, model=model, ok=True, tokens=tokens, start=start)
-            return result["choices"][0]["message"]["content"].strip()
+            record(route=route, model=model, ok=True, tokens=tokens, start=start,
+                   cached=_cached_tokens(usage))
+            message = result["choices"][0]["message"]
+            content = str(message.get("content") or "").strip()
+            if not content:
+                # DeepSeek reasoner 类模型内容在 reasoning_content；两者皆空 → 接口异常
+                content = str(message.get("reasoning_content") or "").strip()
+            if not content:
+                raise RuntimeError(
+                    "AI 返回了空内容（HTTP 200 但无文本）。常见原因：模型名不存在/未开通"
+                    "（检查设置中的模型名称，DeepSeek 官方用 deepseek-chat）、"
+                    "或接口被限流静默返回空。")
+            return content
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:500]
             last_error = RuntimeError(f"AI 接口返回 {exc.code}：{detail}")
@@ -257,45 +361,22 @@ def call_ai_stream(
     生成器每步产出增量文本；调用方负责关闭响应。
     """
     from telemetry import record
-    start = time.monotonic()
-    config = get_cached_settings()
-    api_key = config.get("api_key", "").strip()
-    model = _resolve_model(config, tier)
-    base = config.get("api_base", "").strip()
-    if not model or not base:
-        record(route=route, model=model, ok=False, error_kind="not_configured",
-               start=start)
-        raise ValueError('请先在「AI 设置」中填写 API 地址、密钥和模型。')
-    if not api_key and not is_local_endpoint(base):
-        record(route=route, model=model, ok=False, error_kind="not_configured",
-               start=start)
-        raise ValueError('请先在「AI 设置」中填写 API 地址、密钥和模型。')
-
-    payload = json.dumps({
-        "model": model,
-        "messages": messages,
-        "temperature": float(config.get("temperature", "0.3")),
-        "max_tokens": max_tokens,
-        "stream": True,
-    }, ensure_ascii=False).encode("utf-8")
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "Accept": "text/event-stream",
-        "User-Agent": "LearnOS/0.2",
-    }
+    model, url, payload, headers, start = _prepare_ai_request(
+        messages, max_tokens, tier, route, stream=True,
+    )
+    _check_ai_target(url)  # 与非流式同一出站边界校验
     request = urllib.request.Request(
-        api_endpoint(base), data=payload, headers=headers, method="POST",
+        url, data=payload, headers=headers, method="POST",
     )
     try:
-        response = urllib.request.urlopen(request, timeout=120)
+        response = _OPENER.open(request, timeout=120)
     except Exception as exc:
         record(route=route, model=model, ok=False,
                error_kind=type(exc).__name__, start=start)
         raise
 
     def _chunks():
+        usage_seen: dict[str, Any] = {}
         try:
             for raw in response:
                 line = raw.decode("utf-8", errors="replace").strip()
@@ -308,10 +389,18 @@ def call_ai_stream(
                     piece = json.loads(data)
                     delta = piece["choices"][0]["delta"].get("content", "")
                 except (KeyError, IndexError, TypeError, json.JSONDecodeError):
+                    # 兼容各家的最后一块 usage 汇总（choices 为空）
+                    try:
+                        if isinstance(piece, dict) and piece.get("usage"):
+                            usage_seen.update(piece["usage"])
+                    except Exception:
+                        pass
                     delta = ""
                 if delta:
                     yield delta
-            record(route=route, model=model, ok=True, start=start)
+            record(route=route, model=model, ok=True, start=start,
+                   tokens=int(usage_seen.get("total_tokens") or 0),
+                   cached=_cached_tokens(usage_seen))
         except Exception as exc:
             record(route=route, model=model, ok=False,
                    error_kind=type(exc).__name__, start=start)
@@ -654,7 +743,7 @@ def local_variants(problem: dict[str, Any]) -> list[dict[str, Any]]:
     return variants
 
 
-def generate_variants(problem: dict[str, Any]) -> list[dict[str, Any]]:
+def generate_variants(problem: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     """A4 变式生成：AI（C4 校验，不一致不返回）→ 失败降级离线模板。"""
     prompt = [
         {"role": "system", "content": (

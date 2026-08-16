@@ -33,14 +33,17 @@ async function loadReviews() {
     const interleave = localStorage.getItem('interleave') !== '0';
     const mode = interleave ? '' : '?mode=plain';
     document.getElementById('interleaveToggle').checked = interleave;
-    const list = await api('/api/reviews' + mode);
+    const resp = await api('/api/reviews' + mode);
+    const list = resp.items || resp;  // 兼容旧数组形状
     if (!list.length) {
       el.innerHTML = '<div class="empty"><p>' + t('review.noneToday') + '</p></div>';
       return;
     }
     const today = new Date().toISOString().slice(0, 10);
     const dueCount = list.filter(r => r.due_date <= today).length;
-    document.getElementById('reviewProgress').innerHTML = `
+    const capNote = resp.capped
+      ? `<p class="hint-text" style="color:var(--warning)">${t('review.capNote').replace('{n}', resp.cap).replace('{m}', resp.total)}</p>` : '';
+    document.getElementById('reviewProgress').innerHTML = capNote + `
       <div style="height:8px;background:var(--border);border-radius:4px;overflow:hidden;margin-bottom:10px">
         <div style="height:100%;width:0%;background:var(--accent);border-radius:4px;transition:width .3s" id="reviewProgressBar"></div>
       </div>
@@ -264,7 +267,8 @@ let _flashIdx = 0;
 let _flashDone = 0;
 
 async function startFlashReview() {
-  const list = await api('/api/reviews');
+  const resp = await api('/api/reviews');
+  const list = resp.items || resp;
   if (!list.length) { toast(t('flash.noToday'), 'warn'); return; }
   _flashQueue = list;
   _flashIdx = 0;

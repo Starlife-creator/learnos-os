@@ -19,20 +19,22 @@ function setSubject(id) {
   location.href = url.toString();
 }
 async function loadSubjectOptions(select, current) {
-  const subjects = BUILTIN_SUBJECTS.slice();
+  let subjects = BUILTIN_SUBJECTS.map(id => ({ id, title: id, builtin: true }));
   try {
     const data = await api('/api/subjects');
-    for (const s of data.subjects || []) {
-      if (!subjects.includes(s.id)) subjects.push(s.id);
+    const list = data.subjects || [];
+    if (list.length) {
+      subjects = list.map(s => ({ id: s.id, title: s.title || s.id, builtin: !!s.builtin }));
     }
   } catch (e) { /* 离线时仅内置三科 */ }
+  window.SUBJECT_LIST = subjects;
   if (!select) return;
-  const cur = current || subjects[0];
+  const cur = current || subjects[0].id;
   select.innerHTML = subjects.map(s =>
-    `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`
+    `<option value="${escapeHtml(s.id)}">${escapeHtml(s.title)}</option>`
   ).join('');
-  select.value = subjects.includes(cur) ? cur : subjects[0];
-  return subjects.includes(cur) ? cur : subjects[0];
+  select.value = subjects.some(s => s.id === cur) ? cur : subjects[0].id;
+  return select.value;
 }
 function withSubject(path) {
   const sep = path.includes('?') ? '&' : '?';
@@ -99,16 +101,119 @@ function refreshForLang() {
   const page = active.id;
   if (page === 'page-dashboard') loadDashboard();
   else if (page === 'page-bank') { loadBankUnits(); loadBank(); }
-  else if (page === 'page-problems') loadProblems(1);
+  else if (page === 'page-problems') { loadProblems(1); loadUnlinked(); }
   else if (page === 'page-review') loadReviews();
   else if (page === 'page-oral') { /* 动态对话内容不翻译 */ }
-  else if (page === 'page-rag') { loadRagDocs(); loadRagStatus(); }
+  else if (page === 'page-rag') { loadMatDocs(); loadRagDocs(); loadRagStatus(); }
   else if (page === 'page-exam') loadExamPapers();
   else if (page === 'page-settings') { loadSettings(); loadPrefs(); loadFsrsStatus(); }
 }
 
 function uid() {
   return 'req-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+}
+
+// ── data-action 事件委托（渐进替换内联 onclick，最终可收紧 script-src-attr）──
+// 元素写法：<button data-action="close-modal" data-modal-id="xxx"> / data-action="switch-page" data-page="bank"
+document.addEventListener('click', (e) => {
+  const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+  if (!el) return;
+  const action = el.dataset.action;
+  if (action === 'close-modal' && el.dataset.modalId) closeModal(el.dataset.modalId);
+  else if (action === 'switch-page' && el.dataset.page) switchPage(el.dataset.page);
+});
+
+// ── 全局搜索面板（Ctrl+K / Cmd+K）+ g 前缀页面快捷键 ──
+let _searchTimer = null;
+let _searchItems = [];   // 扁平化结果，供键盘导航
+let _searchSel = -1;
+let _gChordAt = 0;       // g 和弦：800ms 内按第二键跳页
+const _G_PAGES = { d: 'dashboard', b: 'bank', p: 'problems', r: 'review', o: 'oral', m: 'rag', e: 'exam', h: 'help', s: 'settings' };
+
+document.addEventListener('keydown', (e) => {
+  // 输入框/文本域内不拦截
+  const tag = (e.target && e.target.tagName) || '';
+  const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target && e.target.isContentEditable);
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+    e.preventDefault();
+    openModal('searchModal');
+    const input = document.getElementById('searchInput');
+    input.value = '';
+    document.getElementById('searchResults').innerHTML = '';
+    _searchItems = []; _searchSel = -1;
+    setTimeout(() => input.focus(), 50);
+    return;
+  }
+  if (e.key === 'Escape') {
+    const m = document.getElementById('searchModal');
+    if (m && m.classList.contains('active')) closeModal('searchModal');
+    return;
+  }
+  if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+  // g 和弦跳页：g 然后 d/b/p/r/o/m/e/h/s
+  const now = Date.now();
+  if (_gChordAt && now - _gChordAt < 800) {
+    const page = _G_PAGES[e.key.toLowerCase()];
+    _gChordAt = 0;
+    if (page) { e.preventDefault(); switchPage(page); }
+    return;
+  }
+  if (e.key.toLowerCase() === 'g') _gChordAt = now;
+});
+
+function searchPaletteInput() {
+  clearTimeout(_searchTimer);
+  const q = document.getElementById('searchInput').value.trim();
+  if (!q) { document.getElementById('searchResults').innerHTML = ''; _searchItems = []; return; }
+  _searchTimer = setTimeout(() => searchPaletteRun(q), 250);
+}
+
+async function searchPaletteRun(q) {
+  try {
+    const r = await api('/api/search?q=' + encodeURIComponent(q));
+    const groups = [];
+    if (r.problems?.length) groups.push({ label: t('search.problems'), items: r.problems.map(p => ({
+      text: p.title, sub: p.topic, go: () => { closeModal('searchModal'); viewProblem(p.id); } })) });
+    if (r.concepts?.length) groups.push({ label: t('search.concepts'), items: r.concepts.map(c => ({
+      text: c.name, sub: '', go: () => { closeModal('searchModal');
+        window.open('concept_map.html?subject=' + encodeURIComponent(currentSubject()) + '&focus=' + encodeURIComponent(c.name), '_self'); } })) });
+    if (r.bank?.length) groups.push({ label: t('search.bank'), items: r.bank.map(b => ({
+      text: b.stem, sub: b.concept, go: () => { closeModal('searchModal'); switchPage('bank'); } })) });
+    if (r.docs?.length) groups.push({ label: t('search.docs'), items: r.docs.map(d => ({
+      text: d.name + (d.page ? t('rag.pageSuffix').replace('{p}', d.page) : ''), sub: '', go: () => { closeModal('searchModal'); openRagSource(encodeURIComponent(d.path)); } })) });
+    _searchItems = groups.flatMap(g => g.items);
+    _searchSel = -1;
+    const el = document.getElementById('searchResults');
+    if (!_searchItems.length) { el.innerHTML = `<p class="text-sm text-muted">${t('search.none')}</p>`; return; }
+    el.innerHTML = groups.map(g => `
+      <div class="text-sm text-muted" style="margin:8px 0 4px;font-weight:600">${escapeHtml(g.label)}</div>
+      ${g.items.map(it => `<div class="search-hit" data-idx="${_searchItems.indexOf(it)}" onclick="searchPaletteGo(${_searchItems.indexOf(it)})" style="padding:6px 8px;border-radius:6px;cursor:pointer">
+        <div class="text-sm">${highlight(it.text, q)}</div>
+        ${it.sub ? `<div class="text-sm text-muted">${escapeHtml(it.sub)}</div>` : ''}
+      </div>`).join('')}`).join('');
+  } catch(e) { document.getElementById('searchResults').innerHTML = `<p class="text-sm text-muted">${escapeHtml(e.message)}</p>`; }
+}
+
+function highlight(text, q) {
+  const s = escapeHtml(text);
+  const i = s.toLowerCase().indexOf(escapeHtml(q).toLowerCase());
+  if (i < 0) return s;
+  return s.slice(0, i) + '<mark>' + s.slice(i, i + q.length) + '</mark>' + s.slice(i + q.length);
+}
+
+function searchPaletteGo(idx) { const it = _searchItems[idx]; if (it) it.go(); }
+
+function searchPaletteKeys(e) {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (!_searchItems.length) return;
+    _searchSel = (_searchSel + (e.key === 'ArrowDown' ? 1 : -1) + _searchItems.length) % _searchItems.length;
+    document.querySelectorAll('.search-hit').forEach(el => el.style.background = '');
+    const el = document.querySelector(`.search-hit[data-idx="${_searchSel}"]`);
+    if (el) { el.style.background = 'var(--hover,#f0f4ff)'; el.scrollIntoView({ block: 'nearest' }); }
+  } else if (e.key === 'Enter') {
+    if (_searchSel >= 0) searchPaletteGo(_searchSel);
+  }
 }
 
 async function api(path, opts = {}) {
@@ -120,7 +225,9 @@ async function api(path, opts = {}) {
   const url = withSubject(path);
 
   let fetchFailed = false;
-  const doFetch = () => fetch(API + url, { method, headers, body }).catch(e => { fetchFailed = true; throw e; });
+  // no-store：绕开 HTTP 缓存与 SW Cache 存写的互锁路径，API 必须实时
+  const doFetch = () => fetch(API + url, { method, headers, body, cache: 'no-store' })
+    .catch(e => { fetchFailed = true; throw e; });
   try {
     const res = await doFetch();
     const data = await res.json().catch(() => ({}));
@@ -362,7 +469,7 @@ function confirmDialog(message) {
 }
 
 // ── 导航 + 深链 ──
-const PAGES = ['dashboard', 'bank', 'problems', 'review', 'oral', 'rag', 'exam', 'settings'];
+const PAGES = ['dashboard', 'bank', 'problems', 'review', 'oral', 'rag', 'exam', 'help', 'settings'];
 function parseHash() {
   const h = (location.hash || '').replace('#', '');
   const [page, query] = h.split('?');

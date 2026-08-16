@@ -39,7 +39,8 @@ class SecretRedactor(logging.Filter):
     _PATTERNS = [
         re.compile(r"sk-[A-Za-z0-9_\-]{8,}"),
         re.compile(r"(Bearer\s+)[A-Za-z0-9_\-\.]{8,}"),
-        re.compile(r"(api_key['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9_\-]{8,}"),
+        re.compile(r"((?:api_)?key['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9_\-]{8,}"),
+        re.compile(r"(token['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9_\-]{8,}"),
     ]
 
     def filter(self, record: logging.LogRecord) -> bool:

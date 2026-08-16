@@ -1,0 +1,558 @@
+{
+  "schema_version": "mimosa-task-review/v2",
+  "run_id": "20260816T151247137Z-25472-dec805d983bf",
+  "run_status": "completed",
+  "errors": [],
+  "coverage": {
+    "schema_version": "mimosa-hook-coverage/v1",
+    "status": "complete",
+    "scope": "hook_observed_diff",
+    "baseline": {
+      "complete": true,
+      "captured_files": 55,
+      "candidate_limit": 5000,
+      "truncated": false,
+      "enumeration_error_count": 0,
+      "snapshot_error_count": 0,
+      "compensated_target_count": 10
+    },
+    "change_tracking": {
+      "touched_observed": 10,
+      "touched_retained": 10,
+      "truncated": false,
+      "bash_mutation": true,
+      "bash_discovered": 10,
+      "bash_discovery_limit": 80,
+      "bash_discovery_truncated": false
+    },
+    "candidates": {
+      "eligible_files": 10,
+      "selected_files": 10,
+      "limit": 20,
+      "truncated": false
+    },
+    "scanning": {
+      "required_files": 10,
+      "scanned_files": 10,
+      "skipped_files": 0,
+      "failed_files": 0,
+      "project_checks_required": 0,
+      "project_checks_completed": 0
+    },
+    "notification": {
+      "eligible_findings": 0,
+      "detailed_findings": 0,
+      "detail_limit": 3,
+      "truncated": false
+    },
+    "reason_counts": {},
+    "reasons": [],
+    "reasons_truncated": false
+  },
+  "generated_at": "2026-08-16T15:12:47.137Z",
+  "session_id": "sess_a5f4b984-d413-40d3-85c3-6f08178d3fde",
+  "target": ".",
+  "revision": "c57350a441d9d4906535938418b0424243c8dae5",
+  "rules_version": "unavailable",
+  "diff_hash": "fb390d0be568a7dbb0624583cce4d51afb5566681f73f1239497cebff19c937f",
+  "diff": {
+    "algorithm": "sha256",
+    "changed_file_count": 10,
+    "changed_files": [
+      {
+        "file": "ai.py",
+        "ranges": [
+          {
+            "start": 4,
+            "end": 4
+          },
+          {
+            "start": 8,
+            "end": 8
+          },
+          {
+            "start": 11,
+            "end": 11
+          },
+          {
+            "start": 126,
+            "end": 127
+          },
+          {
+            "start": 136,
+            "end": 140
+          },
+          {
+            "start": 142,
+            "end": 143
+          },
+          {
+            "start": 214,
+            "end": 214
+          },
+          {
+            "start": 220,
+            "end": 224
+          },
+          {
+            "start": 236,
+            "end": 288
+          },
+          {
+            "start": 305,
+            "end": 305
+          },
+          {
+            "start": 308,
+            "end": 309
+          },
+          {
+            "start": 357,
+            "end": 357
+          },
+          {
+            "start": 362,
+            "end": 362
+          },
+          {
+            "start": 369,
+            "end": 369
+          },
+          {
+            "start": 382,
+            "end": 387
+          },
+          {
+            "start": 391,
+            "end": 393
+          }
+        ],
+        "before_hash": "7ce5bd46cb84c59cc91863a8a2cf4cd9630644c8502029a55d69a890617fc0bf",
+        "after_hash": "e0f3babf3657a7c4efc5e898738b05690f38bc77e6f922a4fd0e30f4921b2f3c"
+      },
+      {
+        "file": "db.py",
+        "ranges": [
+          {
+            "start": 370,
+            "end": 377
+          }
+        ],
+        "before_hash": "2205e89d755156063b521449c82b3d43d6e75c2941bd9ce78e0335a44687ed71",
+        "after_hash": "621dc87ac4edf8c0138993dbf348cca9326536744497bab37e69d85e9c8b0be7"
+      },
+      {
+        "file": "handler.py",
+        "ranges": [
+          {
+            "start": 204,
+            "end": 204
+          },
+          {
+            "start": 206,
+            "end": 206
+          },
+          {
+            "start": 332,
+            "end": 332
+          },
+          {
+            "start": 340,
+            "end": 341
+          },
+          {
+            "start": 348,
+            "end": 350
+          },
+          {
+            "start": 1457,
+            "end": 1459
+          },
+          {
+            "start": 2244,
+            "end": 2245
+          },
+          {
+            "start": 2261,
+            "end": 2264
+          }
+        ],
+        "before_hash": "0f137ab0fead7b852fd52513723784bac37ce8d677d93e5ed8efe7b64ad7eede",
+        "after_hash": "906a9327463e4de43ab03498ad4b535f5aa3b158915209ee25ce13233356875e"
+      },
+      {
+        "file": "material.py",
+        "ranges": [
+          {
+            "start": 16,
+            "end": 29
+          },
+          {
+            "start": 65,
+            "end": 66
+          },
+          {
+            "start": 75,
+            "end": 82
+          },
+          {
+            "start": 101,
+            "end": 101
+          },
+          {
+            "start": 120,
+            "end": 120
+          },
+          {
+            "start": 137,
+            "end": 137
+          },
+          {
+            "start": 189,
+            "end": 194
+          },
+          {
+            "start": 198,
+            "end": 200
+          },
+          {
+            "start": 202,
+            "end": 204
+          },
+          {
+            "start": 256,
+            "end": 259
+          }
+        ],
+        "before_hash": "a5a31dc07cd9c7722b4a1137bf3295b621ce0daa51e3fb8439683642f161fe20",
+        "after_hash": "e9e78acade6f9e6a03e2e18eb9562cdc4a4085cd8d2289ed432c5588475adea5"
+      },
+      {
+        "file": "static/app-dashboard.js",
+        "ranges": [
+          {
+            "start": 259,
+            "end": 259
+          },
+          {
+            "start": 261,
+            "end": 261
+          }
+        ],
+        "before_hash": "543b0f2dc3413c9fb3ad578d0a61d51dfa487668d7fde61d5f005b63cbbfa969",
+        "after_hash": "4b77ec5ed9d99b38e279356e22c5fbd56d8a13d1cfaa55b9fc502cb58f403a46"
+      },
+      {
+        "file": "static/app-rag.js",
+        "ranges": [
+          {
+            "start": 175,
+            "end": 175
+          },
+          {
+            "start": 177,
+            "end": 180
+          },
+          {
+            "start": 209,
+            "end": 214
+          },
+          {
+            "start": 223,
+            "end": 224
+          }
+        ],
+        "before_hash": "1ad8f01dea5c6a44b65ba0e8ca6de164facbafafa7e83ef14cc3fdc88ff54ee0",
+        "after_hash": "5981409edb08b0d04a6650f307664fa2ea3cd59147bbd4f6c0b3928d4b30d561"
+      },
+      {
+        "file": "static/app-settings.js",
+        "ranges": [
+          {
+            "start": 21,
+            "end": 24
+          },
+          {
+            "start": 322,
+            "end": 325
+          }
+        ],
+        "before_hash": "d2cdb138db80cb2b00b60073c2d5fb0ffd41cfea637fb38fb159436ad74ce2ad",
+        "after_hash": "add82911bcbfd1d07525df33de3b0e0d8aec8c1045164ccdfce989d5098508a4"
+      },
+      {
+        "file": "telemetry.py",
+        "ranges": [
+          {
+            "start": 16,
+            "end": 21
+          },
+          {
+            "start": 27,
+            "end": 28
+          },
+          {
+            "start": 30,
+            "end": 30
+          },
+          {
+            "start": 39,
+            "end": 39
+          },
+          {
+            "start": 44,
+            "end": 44
+          },
+          {
+            "start": 57,
+            "end": 58
+          },
+          {
+            "start": 64,
+            "end": 67
+          }
+        ],
+        "before_hash": "d8c92fea4e0fa7cd65fbad85792701995e666f303effee7a5c3170afab5efcfd",
+        "after_hash": "b53df69eab11756ff809923769dd45ef10c48573cd5892b9fbaea0f750bb532c"
+      },
+      {
+        "file": "tests/test_features.py",
+        "ranges": [
+          {
+            "start": 147,
+            "end": 177
+          }
+        ],
+        "before_hash": "6f7c586e342d193de4c84d55874b9f751576adc618db4978e089c38918da676e",
+        "after_hash": "540520d67968f45a9745d760708a49dc07ae49b1467322c075fb771a89035fbf"
+      },
+      {
+        "file": "tests/test_material.py",
+        "ranges": [
+          {
+            "start": 43,
+            "end": 61
+          },
+          {
+            "start": 103,
+            "end": 123
+          }
+        ],
+        "before_hash": "0b89645a0bc7fe74f3c80efd4229e58e6def6d743ad73f5423587b107c49d900",
+        "after_hash": "fe94df75ef6d42eed22edf45cd4fd8f4695f1d55b99a46fdbf2be6ce4ea8df57"
+      }
+    ]
+  },
+  "timing": {
+    "started_at": "2026-08-16T15:12:45.462Z",
+    "completed_at": "2026-08-16T15:12:47.137Z",
+    "duration_ms": 1675,
+    "measurement": "hook_wall_clock"
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 0,
+    "model_calls": 0,
+    "measurement": "known-zero"
+  },
+  "telemetry": {
+    "schemaVersion": "mimosa-gate-telemetry/v1",
+    "profile": "gate",
+    "operation": "Stop",
+    "outcome": "complete",
+    "latencyMs": 1675,
+    "peakMemoryBytes": 143929344,
+    "memoryMeasurement": "max-observed-process-rss",
+    "scannedFiles": 10,
+    "cache": {
+      "hits": 0,
+      "misses": 0,
+      "measurement": "not-applicable"
+    },
+    "denyCount": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "total": 0,
+      "modelCalls": 0,
+      "measurement": "known-zero"
+    }
+  },
+  "finding_count": 0,
+  "rewake_finding_count": 0,
+  "evidence_boundary": {
+    "scan": "candidate",
+    "static_fix_verification": "observed_static_only",
+    "runtime_verification": "not_performed"
+  },
+  "finding_events": [
+    {
+      "finding_id": "mimosa-b7627d29009076c6be126334",
+      "file": "ai.py",
+      "line": 251,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "SSRF 服务端请求伪造",
+      "status": "blocked",
+      "decision": "deny",
+      "at": "2026-08-16T15:00:12.473Z",
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "e9271666802610b26bf7697740da2c0376f21ffb94a167063cd53404ed4feac7",
+        "runtime_oracle": false
+      }
+    },
+    {
+      "finding_id": "mimosa-b7627d29009076c6be126334",
+      "file": "ai.py",
+      "line": 251,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "SSRF 服务端请求伪造",
+      "status": "blocked",
+      "decision": "deny",
+      "at": "2026-08-16T15:01:00.546Z",
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "e9271666802610b26bf7697740da2c0376f21ffb94a167063cd53404ed4feac7",
+        "runtime_oracle": false
+      }
+    },
+    {
+      "finding_id": "mimosa-7fa1a3cb248438f7fad73dc0",
+      "file": "ai.py",
+      "line": 231,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "SSRF 服务端请求伪造",
+      "status": "blocked",
+      "decision": "deny",
+      "at": "2026-08-16T15:01:41.091Z",
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "933b978a6409188b07ff2186513b533f50fd11ce96630b537ef249ef76ec0c93",
+        "runtime_oracle": false
+      }
+    },
+    {
+      "finding_id": "mimosa-b7627d29009076c6be126334",
+      "file": "ai.py",
+      "line": 251,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "SSRF 服务端请求伪造",
+      "status": "fixed_candidate",
+      "decision": "repair_observed",
+      "at": "2026-08-16T15:04:21.837Z",
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "e9271666802610b26bf7697740da2c0376f21ffb94a167063cd53404ed4feac7",
+        "candidate_before_evidence_hash": "e9271666802610b26bf7697740da2c0376f21ffb94a167063cd53404ed4feac7",
+        "post_change_evidence_hash_at_previous_location": "a399babb130a5af194e4151821d27f2fb88f9db2eff81466e42e3e51cf26b9a1",
+        "runtime_oracle": false,
+        "verification": {
+          "method": "mimosa-posttool-static-rescan",
+          "finding_absent": true,
+          "runtime_oracle": false
+        }
+      }
+    },
+    {
+      "finding_id": "mimosa-b7627d29009076c6be126334",
+      "file": "ai.py",
+      "line": 251,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "SSRF 服务端请求伪造",
+      "status": "static_verified",
+      "decision": "static_rescan_passed",
+      "at": "2026-08-16T15:04:21.837Z",
+      "evidence": {
+        "kind": "static_scan",
+        "boundary": "observed",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "e9271666802610b26bf7697740da2c0376f21ffb94a167063cd53404ed4feac7",
+        "candidate_before_evidence_hash": "e9271666802610b26bf7697740da2c0376f21ffb94a167063cd53404ed4feac7",
+        "post_change_evidence_hash_at_previous_location": "a399babb130a5af194e4151821d27f2fb88f9db2eff81466e42e3e51cf26b9a1",
+        "runtime_oracle": false,
+        "verification": {
+          "method": "mimosa-posttool-static-rescan",
+          "finding_absent": true,
+          "runtime_oracle": false
+        }
+      }
+    },
+    {
+      "finding_id": "mimosa-7fa1a3cb248438f7fad73dc0",
+      "file": "ai.py",
+      "line": 231,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "SSRF 服务端请求伪造",
+      "status": "fixed_candidate",
+      "decision": "repair_observed",
+      "at": "2026-08-16T15:04:21.837Z",
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "933b978a6409188b07ff2186513b533f50fd11ce96630b537ef249ef76ec0c93",
+        "candidate_before_evidence_hash": "933b978a6409188b07ff2186513b533f50fd11ce96630b537ef249ef76ec0c93",
+        "post_change_evidence_hash_at_previous_location": "840f0da7055b5b83303efb3fae5546413993148e3de1336c9b676ae6165cfeef",
+        "runtime_oracle": false,
+        "verification": {
+          "method": "mimosa-posttool-static-rescan",
+          "finding_absent": true,
+          "runtime_oracle": false
+        }
+      }
+    },
+    {
+      "finding_id": "mimosa-7fa1a3cb248438f7fad73dc0",
+      "file": "ai.py",
+      "line": 231,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "SSRF 服务端请求伪造",
+      "status": "static_verified",
+      "decision": "static_rescan_passed",
+      "at": "2026-08-16T15:04:21.837Z",
+      "evidence": {
+        "kind": "static_scan",
+        "boundary": "observed",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "933b978a6409188b07ff2186513b533f50fd11ce96630b537ef249ef76ec0c93",
+        "candidate_before_evidence_hash": "933b978a6409188b07ff2186513b533f50fd11ce96630b537ef249ef76ec0c93",
+        "post_change_evidence_hash_at_previous_location": "840f0da7055b5b83303efb3fae5546413993148e3de1336c9b676ae6165cfeef",
+        "runtime_oracle": false,
+        "verification": {
+          "method": "mimosa-posttool-static-rescan",
+          "finding_absent": true,
+          "runtime_oracle": false
+        }
+      }
+    }
+  ],
+  "findings": [],
+  "artifacts": {
+    "immutable_report": ".mimosa/reports/task-review-sess_a5f4b984-d413-40d3-85c3-6f08178d3fde-20260816T151247137Z-25472-dec805d983bf.json",
+    "latest_report": ".mimosa/reports/task-review-sess_a5f4b984-d413-40d3-85c3-6f08178d3fde.json",
+    "history_summary": ".mimosa/history/run-20260816T151247137Z-25472-dec805d983bf.json"
+  }
+}

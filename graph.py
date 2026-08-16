@@ -35,8 +35,11 @@ def subject_seed_path(subject: str) -> Path:
 
 
 def _load_seed(subject: str = "physics") -> dict[str, Any] | None:
+    path = subject_seed_path(subject)
+    if not path.is_file():
+        return None  # 无种子文件的学科（网页端自建）为正常情况
     try:
-        return json.loads(subject_seed_path(subject).read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
         LOG.warning("种子图谱文件不可读 (%s): %s", subject, exc)
         return None
@@ -160,8 +163,43 @@ def concept_ids_to_list(raw: str) -> list[int]:
         return []
 
 
-def update_progress(subject: str = "physics") -> None:
-    """重算掌握度：自身聚合 + 先修门传播两轮（A→B 表示 A 是先修）。"""
+_progress_ttl: dict[str, float] = {}
+
+
+def _progress_key(subject: str) -> str:
+    """TTL 键绑定 DB 路径：测试重建临时库后自动失效，避免跨库误命中。"""
+    from db import DB_PATH
+    return f"{DB_PATH}:{subject}"
+
+
+def invalidate_progress_cache(subject: str | None = None) -> None:
+    """主动失效掌握度 TTL 缓存（测试在重建 DB 后调用；生产路径也可按需调用）。"""
+    if subject is None:
+        _progress_ttl.clear()
+    else:
+        key = _progress_key(subject)
+        _progress_ttl.pop(key, None)
+
+
+def update_progress_cached(subject: str = "physics") -> None:
+    """图谱加载用：带 15 秒 TTL 的掌握度重算（键含 DB 路径，测试重建库自动失效）。
+
+    数据变化点必须调用 update_progress（永远重算），避免掌握度滞后。
+    """
+    import time as _time
+    key = _progress_key(subject)
+    now_ts = _time.monotonic()
+    if _progress_ttl.get(key, 0) > now_ts:
+        return
+    update_progress(subject)
+    _progress_ttl[key] = now_ts + 15.0
+
+
+def update_progress(subject: str = "physics", force: bool = False) -> None:
+    """重算掌握度：自身聚合 + 先修门传播两轮（A→B 表示 A 是先修）。
+
+    显式调用 = 数据已变，永远立即重算（force 参数保留兼容，行为不变）。
+    """
     ensure_seed(subject)
     with DB_LOCK, db() as conn:
         ids = [r["id"] for r in conn.execute(
@@ -219,7 +257,7 @@ def bind_problem(problem_id: int) -> list[int]:
     csv = ",".join(f",{cid}," for cid in concept_ids) or ""
     with DB_LOCK, db() as conn:
         conn.execute("UPDATE problems SET concept_ids = ? WHERE id = ?", (csv, problem_id))
-    update_progress()
+    update_progress(force=True)
     return concept_ids
 
 
@@ -326,6 +364,100 @@ def add_concept(name: str, parent_id: int = 0, subject: str = "physics") -> int 
             LOG.warning("新增概念失败（可能重名）: %s", exc)
             return None
         return int(cursor.lastrowid)
+
+
+def update_aliases(concept_id: int, aliases: str) -> bool:
+    """更新概念别名（逗号分隔，如 "N2L,F=ma"）。用于未链接提及的别名匹配。"""
+    cleaned = ",".join(a.strip()[:40] for a in str(aliases or "").replace("，", ",").split(",") if a.strip())
+    with DB_LOCK, db() as conn:
+        cur = conn.execute(
+            "UPDATE concepts SET aliases = ? WHERE id = ?", (cleaned, concept_id))
+    invalidate_mentions()
+    return cur.rowcount > 0
+
+
+_mentions_cache: dict[str, tuple[str, list[dict[str, Any]]]] = {}
+
+
+def invalidate_mentions(subject: str | None = None) -> None:
+    """显式失效提及缓存（指纹是秒级时间戳，同秒内的绑定/别名变更需主动失效）。"""
+    if subject is None:
+        _mentions_cache.clear()
+    else:
+        _mentions_cache.pop(subject, None)
+
+
+def unlinked_mentions(subject: str = "physics") -> list[dict[str, Any]]:
+    """Obsidian 式未链接提及：扫描错题文本中出现但未绑定的概念（含别名）。
+
+    纯本地字符串匹配，不依赖 AI。返回建议列表（按概念出现次数排序）。
+    带指纹缓存：概念/错题数量与最后更新时间不变时直接复用上次结果，
+    避免大库（概念×错题全量扫）在每次切页时重复执行。
+    """
+    with DB_LOCK, db() as conn:
+        fp_row = conn.execute(
+            "SELECT (SELECT COUNT(*) FROM problems WHERE subject = ?) || ':' || "
+            "(SELECT COALESCE(MAX(updated_at), '') FROM problems WHERE subject = ?) || ':' || "
+            "(SELECT COUNT(*) FROM concepts WHERE subject = ?) || ':' || "
+            "(SELECT COALESCE(MAX(created_at), '') FROM concepts WHERE subject = ?) AS fp",
+            (subject, subject, subject, subject)).fetchone()
+    fingerprint = str(fp_row["fp"]) if fp_row else ""
+    cached = _mentions_cache.get(subject)
+    if cached and cached[0] == fingerprint:
+        return cached[1]
+    result = _scan_unlinked(subject)
+    _mentions_cache[subject] = (fingerprint, result)
+    return result
+
+
+def _scan_unlinked(subject: str) -> list[dict[str, Any]]:
+    concepts = rows("SELECT id, name, aliases FROM concepts WHERE subject = ?", (subject,))
+    problems = rows(
+        "SELECT id, title, topic, content, concept_ids FROM problems WHERE subject = ?", (subject,))
+    id_to_name = {c["id"]: c["name"] for c in concepts}
+    # 概念名/别名 → id（按长度降序匹配，避免"力"误命中"力学"）
+    names: list[tuple[str, int]] = []
+    for c in concepts:
+        names.append((c["name"], c["id"]))
+        for a in (c["aliases"] or "").split(","):
+            if a.strip():
+                names.append((a.strip(), c["id"]))
+    names.sort(key=lambda x: len(x[0]), reverse=True)
+    suggestions: dict[tuple[int, int], dict[str, Any]] = {}
+    for p in problems:
+        bound = {int(x) for x in str(p["concept_ids"] or "").split(",") if x.strip().isdigit()}
+        text = f"{p['title']}\n{p['topic']}\n{p['content'] or ''}"
+        for name, cid in names:
+            if len(name) < 2 or cid in bound:
+                continue  # 单字概念误报率高，跳过
+            if name in text:
+                key = (p["id"], cid)
+                if key not in suggestions:
+                    suggestions[key] = {"problem_id": p["id"], "problem_title": p["title"][:60],
+                                        "concept_id": cid, "concept_name": id_to_name[cid],
+                                        "matched": name}
+    out = list(suggestions.values())
+    out.sort(key=lambda s: -s["problem_id"])
+    return out[:50]
+
+
+def bind_concept(problem_id: int, concept_id: int, subject: str = "physics") -> bool:
+    """把概念绑定到错题（concept_ids 追加，规范 ,id, 格式）。"""
+    problem = row("SELECT concept_ids FROM problems WHERE id = ?", (problem_id,))
+    concept = row("SELECT id FROM concepts WHERE id = ? AND subject = ?", (concept_id, subject))
+    if not problem or not concept:
+        return False
+    ids = [int(x) for x in str(problem["concept_ids"] or "").split(",") if x.strip().isdigit()]
+    if concept_id in ids:
+        return True
+    ids.append(concept_id)
+    csv = f",{','.join(str(i) for i in ids)},"
+    with DB_LOCK, db() as conn:
+        conn.execute("UPDATE problems SET concept_ids = ?, updated_at = ? WHERE id = ?",
+                     (csv, now(), problem_id))
+    update_progress(subject, force=True)
+    invalidate_mentions(subject)
+    return True
 
 
 def delete_concept(concept_id: int) -> bool:

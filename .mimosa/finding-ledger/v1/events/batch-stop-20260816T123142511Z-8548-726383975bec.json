@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "mimosa-finding-ledger-batch/v1",
+  "batchId": "stop-20260816T123142511Z-8548-726383975bec",
+  "runId": "20260816T123142511Z-8548-726383975bec",
+  "runStatus": "completed",
+  "coverage": {
+    "status": "complete",
+    "reasons": []
+  },
+  "source": {
+    "component": "zcode-hook",
+    "operationId": "Stop"
+  },
+  "revision": "c57350a441d9d4906535938418b0424243c8dae5",
+  "diffHash": "e8ff750e0aa746e73f9477368c41ae48d4d2f3fd061220271999ea00e0b78dee",
+  "rulesVersion": "unavailable",
+  "sessionHash": "d8ce2cdd9770db2534735c68ef16d5c99347c9d1a9438a555a0ba830109cbfd4",
+  "reportRef": ".mimosa/reports/task-review-sess_a5f4b984-d413-40d3-85c3-6f08178d3fde-20260816T123142511Z-8548-726383975bec.json",
+  "events": [],
+  "observedFindingIds": [
+    "mimosa-9f056cc9e5718cb5eeda0a7d",
+    "mimosa-2aa429f3f18494090134c460"
+  ],
+  "verifiedFiles": [
+    {
+      "file": "material.py",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "handler.py",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "static/app-rag.js",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "static/app-core.js",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "tests/test_material.py",
+      "direct": "complete",
+      "projectContext": "partial"
+    }
+  ],
+  "recordedAt": "2026-08-16T12:31:42.842Z"
+}

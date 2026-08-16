@@ -98,10 +98,16 @@ class TestMultiSubject(unittest.TestCase):
         ids = [s["id"] for s in data["subjects"]]
         for bid in ("physics", "chemistry", "math"):
             self.assertIn(bid, ids)
-        # 合法自建 id 被接受（graph 种子缺省，节点为空即可，不应 500）
+        # 注册表驱动：先注册自建学科，再访问（graph 无种子则节点为空，不应 500）
+        status, _ = self._request("POST", "/api/subjects", {"id": "mycustom"})
+        self.assertEqual(status, 201)
         status, g = self._request("GET", "/api/graph/concepts?subject=mycustom")
         self.assertEqual(status, 200)
         self.assertEqual(g["subject"], "mycustom")
+        # 未注册的合法 id 回退默认学科
+        status, g = self._request("GET", "/api/graph/concepts?subject=unregistered")
+        self.assertEqual(status, 200)
+        self.assertEqual(g["subject"], "physics")
 
     def test_invalid_subject_falls_back(self):
         status, g = self._request("GET", "/api/graph/concepts?subject=bad%20id%21")

@@ -313,6 +313,49 @@ def train_async(reviews: list[tuple[int, int, str]]) -> bool:
     return True
 
 
+def optimal_retention(stabilities: list[float], n_total: int,
+                      seconds_per_review: float = 30.0) -> dict[str, object]:
+    """CMRR 式最优保持率估算（FSRS wiki The Optimal Retention 思路的解析近似）。
+
+    用你自己的卡量与平均稳定度，遍历候选保持率 R：
+      - FSRS 遗忘曲线 R(t)=(1+FACTOR·t/S)^DECAY（DECAY=-0.5, FACTOR=19/81）
+        反解间隔 t = S·(R^-2-1)·81/19
+      - 稳态每日复习量 ≈ 卡量 / 平均间隔
+      - 效率 = R / 每日复习量（单位工作量的记忆量），取最大者为推荐值
+    纯估算（假设每题复习耗时固定、卡池规模稳定），供决策参考而非精确承诺。
+    """
+    active = [s for s in stabilities if s and s > 0]
+    n = n_total
+    assumed = False
+    avg_s = sum(active) / len(active) if active else 0.0
+    if avg_s <= 0:
+        avg_s = 5.0  # 无 FSRS 历史时的默认稳定度假设
+        assumed = True
+    points = []
+    best = None
+    r = 0.75
+    while r <= 0.9501:
+        interval = max(1.0, avg_s * (r ** -2 - 1) * 81.0 / 19.0)
+        daily = n / interval
+        minutes = daily * seconds_per_review / 60.0
+        eff = r / daily if daily > 0 else 0.0
+        points.append({"retention": round(r, 2), "interval_days": round(interval, 1),
+                       "daily_reviews": round(daily, 1), "minutes": round(minutes, 1),
+                       "efficiency": round(eff, 5)})
+        if best is None or eff > best["efficiency"]:
+            best = points[-1]
+        r += 0.05
+    return {
+        "has_data": len(active) >= 5 and n >= 5,
+        "assumed_stability": assumed,
+        "n_items": n,
+        "avg_stability": round(avg_s, 2),
+        "recommended": best["retention"] if best else 0.9,
+        "points": points,
+        "note": "估算假设：卡池规模稳定、每题复习耗时固定 30 秒；仅供参考。",
+    }
+
+
 def reset_parameters() -> bool:
     """P0：清除个性化参数，回默认。"""
     try:

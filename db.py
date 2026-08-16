@@ -1,6 +1,7 @@
 """数据访问层：SQLite 连接管理与通用查询。"""
 from __future__ import annotations
 
+import re
 import threading
 from contextlib import contextmanager
 from datetime import datetime
@@ -96,18 +97,25 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # v6: A1 FSRS 调度状态 — 持久化 state/stability/difficulty（SM-2 字段保留兼容）
     if current < 6:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(problems)").fetchall()}
-        for col, default in (("state", "0"), ("stability", "0"), ("difficulty", "0")):
-            if col not in cols:
-                conn.execute(f"ALTER TABLE problems ADD COLUMN {col} REAL NOT NULL DEFAULT {default}")
+        # 固定 SQL 白名单，不与变量拼接
+        if "state" not in cols:
+            conn.execute("ALTER TABLE problems ADD COLUMN state REAL NOT NULL DEFAULT 0")
+        if "stability" not in cols:
+            conn.execute("ALTER TABLE problems ADD COLUMN stability REAL NOT NULL DEFAULT 0")
+        if "difficulty" not in cols:
+            conn.execute("ALTER TABLE problems ADD COLUMN difficulty REAL NOT NULL DEFAULT 0")
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (6, ?)", (now(),))
         LOG.info("数据库已迁移到 v6 (FSRS 状态列 state/stability/difficulty)")
 
     # v7: B5 自动标签 + 知识提取 — 已确认标签 / AI 草稿（R3 不静默落库）/ 状态标记
     if current < 7:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(problems)").fetchall()}
-        for col, default in (("tags", "[]"), ("tags_suggested", ""), ("tags_status", "none")):
-            if col not in cols:
-                conn.execute(f"ALTER TABLE problems ADD COLUMN {col} TEXT NOT NULL DEFAULT '{default}'")
+        if "tags" not in cols:
+            conn.execute("ALTER TABLE problems ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'")
+        if "tags_suggested" not in cols:
+            conn.execute("ALTER TABLE problems ADD COLUMN tags_suggested TEXT NOT NULL DEFAULT ''")
+        if "tags_status" not in cols:
+            conn.execute("ALTER TABLE problems ADD COLUMN tags_status TEXT NOT NULL DEFAULT 'none'")
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (7, ?)", (now(),))
         LOG.info("数据库已迁移到 v7 (B5 标签列 tags/tags_suggested/tags_status)")
 
@@ -342,6 +350,75 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (17, ?)", (now(),))
         LOG.info("数据库已迁移到 v17 (多学科 subject 列 + 复合唯一)")
 
+    # v18: 学科注册表 — 内置三科 + 种子文件学科自动注册，网页端可增删自建学科
+    if current < 18:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS subjects (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT '',
+                builtin INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (18, ?)", (now(),))
+        LOG.info("数据库已迁移到 v18 (学科注册表 subjects)")
+
+    # v19: 概念别名 — 支持未链接提及扫描的别名匹配（如 N2L = 牛顿第二定律）
+    if current < 19:
+        ccols = {r[1] for r in conn.execute("PRAGMA table_info(concepts)").fetchall()}
+        if "aliases" not in ccols:
+            conn.execute("ALTER TABLE concepts ADD COLUMN aliases TEXT NOT NULL DEFAULT ''")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (19, ?)", (now(),))
+        LOG.info("数据库已迁移到 v19 (概念别名 concepts.aliases)")
+
+    # v20: AI 遥测缓存命中 — 记录 prompt 缓存命中 token（DeepSeek/OpenAI 自动缓存可观测）
+    if current < 20:
+        tcols = {r[1] for r in conn.execute("PRAGMA table_info(ai_telemetry)").fetchall()}
+        if "cached_tokens" not in tcols:
+            conn.execute("ALTER TABLE ai_telemetry ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (20, ?)", (now(),))
+        LOG.info("数据库已迁移到 v20 (ai_telemetry.cached_tokens)")
+
+
+def register_builtin_subjects() -> None:
+    """启动注册：内置三科 + data/ 下种子文件学科（幂等，已存在不覆盖标题）。"""
+    from config import BUNDLE_ROOT
+    with DB_LOCK, db() as conn:
+        for sid in ("physics", "chemistry", "math"):
+            conn.execute(
+                "INSERT OR IGNORE INTO subjects(id, title, builtin, created_at) VALUES (?, ?, 1, ?)",
+                (sid, sid, now()),
+            )
+    seed_dir = BUNDLE_ROOT / "data"
+    if not seed_dir.is_dir():
+        return
+    with DB_LOCK, db() as conn:
+        for p in sorted(seed_dir.glob("seed_concepts_*.json")):
+            sid = p.stem[len("seed_concepts_"):]
+            if not sid or sid in ("physics", "chemistry", "math"):
+                continue
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,19}", sid) or not p.stat().st_size:
+                continue
+            conn.execute(
+                "INSERT OR IGNORE INTO subjects(id, title, builtin, created_at) VALUES (?, ?, 0, ?)",
+                (sid, sid, now()),
+            )
+
+
+def list_subjects() -> list[dict[str, Any]]:
+    """注册学科列表：内置在前，其余按创建时间。"""
+    with DB_LOCK, db() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT id, title, builtin, created_at FROM subjects ORDER BY builtin DESC, created_at, id"
+        ).fetchall()]
+
+
+def subject_exists(subject_id: str) -> bool:
+    with DB_LOCK, db() as conn:
+        return conn.execute(
+            "SELECT 1 FROM subjects WHERE id = ?", (subject_id,)
+        ).fetchone() is not None
+
 
 def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -353,6 +430,7 @@ def init_db() -> None:
             DEFAULT_SETTINGS.items(),
         )
     LOG.info("数据库已初始化: %s", DB_PATH)
+    register_builtin_subjects()
 
     # 性能索引（幂等，已存在则跳过）
     with DB_LOCK, db() as conn:

@@ -14,6 +14,25 @@ async function loadSettings() {
     document.getElementById('setMasterPassword').value = '';
     document.getElementById('setMasterPassword').placeholder = s.key_source === 'keyfile' ? t('set.masterPhKeyfile') : t('set.masterPh');
     document.getElementById('setTemp').value = s.temperature || '0.3';
+    const hintCacheSel = document.getElementById('setHintCache');
+    if (hintCacheSel) hintCacheSel.value = s.hint_cache_enabled === false ? '0' : '1';
+    const capEl = document.getElementById('setDailyCap');
+    if (capEl) capEl.value = s.daily_review_cap || 0;
+    const ctxSel = document.getElementById('setContextTokens');
+    const ctxCustom = document.getElementById('setContextCustom');
+    if (ctxSel) {
+      const v = String(s.ai_context_tokens || 32000);
+      const preset = Array.from(ctxSel.options).some(o => o.value === v && o.value !== 'custom');
+      if (preset) {
+        ctxSel.value = v;
+        if (ctxCustom) { ctxCustom.style.display = 'none'; ctxCustom.value = ''; }
+      } else {
+        ctxSel.value = 'custom';
+        if (ctxCustom) { ctxCustom.style.display = ''; ctxCustom.value = v; }
+      }
+    }
+    const localSel = document.getElementById('setAllowLocal');
+    if (localSel) localSel.value = s.allow_local_ai === false ? '0' : '1';
     const defSel = document.getElementById('setDefaultSubject');
     if (defSel) {
       loadSubjectOptions(defSel, s.default_subject || 'physics');
@@ -29,6 +48,58 @@ async function loadSettings() {
       ? t('set.keyFileLocked') + '（' + (srcLabel[s.key_source] || srcLabel.none) + '）'
       : (srcLabel[s.key_source] || srcLabel.none);
     loadPrefs();
+    loadSubjectsAdmin();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ── 学科管理（注册表驱动，网页端增删）──
+function onCtxPresetChange() {
+  const sel = document.getElementById('setContextTokens');
+  const custom = document.getElementById('setContextCustom');
+  if (!sel || !custom) return;
+  const isCustom = sel.value === 'custom';
+  custom.style.display = isCustom ? '' : 'none';
+  if (isCustom && !custom.value) custom.value = '';
+}
+async function loadSubjectsAdmin() {
+  const wrap = document.getElementById('subjectAdminList');
+  if (!wrap) return;
+  try {
+    const data = await api('/api/subjects');
+    const list = data.subjects || [];
+    wrap.innerHTML = list.map(s => `
+      <div class="subject-admin-row" style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border,#eee)">
+        <span style="flex:1">${escapeHtml(s.title || s.id)}
+          <span class="text-muted text-sm">${escapeHtml(s.id)}</span>
+        </span>
+        ${s.builtin ? `<span class="tag tag-gray">${t('set.subjBuiltin')}</span>`
+                    : `<button class="btn btn-secondary btn-sm" onclick="deleteSubject('${escapeHtml(s.id)}')">${t('set.subjDelete')}</button>`}
+      </div>`).join('');
+  } catch(e) { /* 静默：列表加载失败不阻塞设置页 */ }
+}
+
+async function addSubject() {
+  const idEl = document.getElementById('newSubjectId');
+  const titleEl = document.getElementById('newSubjectTitle');
+  const id = (idEl.value || '').trim();
+  const title = (titleEl.value || '').trim();
+  if (!id) { toast(t('set.subjNewIdPh'), 'error'); return; }
+  try {
+    await api('/api/subjects', { method: 'POST', body: { id, title } });
+    toast(t('set.subjAdded').replace('{s}', title || id));
+    idEl.value = ''; titleEl.value = '';
+    loadSubjectsAdmin();
+    loadSubjectOptions(document.getElementById('setDefaultSubject'));
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function deleteSubject(id) {
+  if (!confirm(t('set.subjConfirm').replace('{s}', id))) return;
+  try {
+    await api('/api/subjects/' + encodeURIComponent(id), { method: 'DELETE' });
+    toast(t('set.subjDeleted').replace('{s}', id));
+    loadSubjectsAdmin();
+    loadSubjectOptions(document.getElementById('setDefaultSubject'));
   } catch(e) { toast(e.message, 'error'); }
 }
 
@@ -64,6 +135,7 @@ async function showPeriodicReport() {
       <div class="flex gap-8 mb-8">
         <button class="btn btn-primary btn-sm" onclick="periodicTab('week')">${t('report.weekTab')}</button>
         <button class="btn btn-secondary btn-sm" onclick="periodicTab('month')">${t('report.monthTab')}</button>
+        <button class="btn btn-secondary btn-sm" onclick="printPeriodicReport()" data-i18n="report.print">🖨 打印报告</button>
       </div>
       <div id="periodicWeek">${periodicWeekHtml(w)}</div>
       <div id="periodicMonth" class="hidden">${periodicMonthHtml(m)}</div>`;
@@ -73,6 +145,23 @@ async function showPeriodicReport() {
     renderMath(mb);
     openModal('problemModal');
   } catch(e) { toast(e.message || t('report.loadFail'), 'error'); }
+}
+
+// 报告打印：新窗口呈现当前可见 tab 的内容 + 打印
+function printPeriodicReport() {
+  const week = document.getElementById('periodicWeek');
+  const month = document.getElementById('periodicMonth');
+  const body = (!week.classList.contains('hidden') ? week : month) || week;
+  if (!body) { toast(t('report.loadFail'), 'error'); return; }
+  const w = window.open('', '_blank');
+  if (!w) { toast(t('report.popBlocked'), 'error'); return; }
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${document.title} · ${t('card.weeklyMore')}</title>
+    <style>body{font-family:system-ui,sans-serif;max-width:720px;margin:24px auto;color:#222;line-height:1.6}
+    .hidden{display:none}.error-bar-track{background:#eee;border-radius:4px;height:10px;flex:1}
+    .error-bar-fill{height:100%;border-radius:4px}.error-bar-row{display:flex;align-items:center;gap:8px;margin:4px 0}
+    @media print{body{margin:0}}</style></head><body>${body.innerHTML}
+    <script>window.onload=()=>window.print()<\/script></body></html>`);
+  w.document.close();
 }
 
 function periodicTab(tab) {
@@ -205,6 +294,53 @@ async function trainFsrs() {
   btn.disabled = false;
 }
 
+// ── 复习提醒（浏览器通知，最小可用）──
+function enableReviewNotify() {
+  if (!('Notification' in window)) { toast(t('set.notifyUnsupported'), 'warn'); return; }
+  Notification.requestPermission().then(p => {
+    toast(p === 'granted' ? t('set.notifyOn') : t('set.notifyOff'), p === 'granted' ? '' : 'warn');
+  });
+}
+
+async function loadOptimalRetention() {
+  const el = document.getElementById('optimalRetentionResult');
+  if (!el) return;
+  el.innerHTML = '<p class="text-sm text-muted">' + t('msg.loading') + '</p>';
+  try {
+    const r = await api('/api/fsrs/optimal');
+    const maxMin = Math.max(...r.points.map(p => p.minutes), 1);
+    el.innerHTML = `
+      <p class="text-sm"><strong>${t('fsrs.optimalReco').replace('{r}', r.recommended).replace('{c}', r.current)}</strong>
+        ${!r.has_data ? `<span class="tag tag-amber">${t('fsrs.optimalThin')}</span>` : ''}
+        ${r.assumed_stability ? `<span class="tag tag-gray">${t('fsrs.optimalAssumed')}</span>` : ''}
+      </p>
+      <p class="text-sm text-muted">${t('fsrs.optimalMeta').replace('{n}', r.n_items).replace('{s}', r.avg_stability)}</p>
+      <div style="display:flex;gap:6px;align-items:flex-end;height:80px;margin:8px 0">
+        ${r.points.map(p => `
+          <div style="flex:1;text-align:center" title="R=${p.retention}">
+            <div style="height:${Math.round(p.minutes / maxMin * 70)}px;background:${p.retention === r.recommended ? 'var(--accent)' : 'var(--border,#ccc)'};border-radius:3px 3px 0 0"></div>
+            <div class="text-sm text-muted">${p.retention}</div>
+          </div>`).join('')}
+      </div>
+      <table class="text-sm" style="width:100%;border-collapse:collapse">
+        <tr style="text-align:left;border-bottom:1px solid var(--border,#ddd)">
+          <th style="padding:4px 8px">${t('fsrs.optRet')}</th>
+          <th style="padding:4px 8px">${t('fsrs.optInterval')}</th>
+          <th style="padding:4px 8px">${t('fsrs.optDaily')}</th>
+          <th style="padding:4px 8px">${t('fsrs.optMinutes')}</th>
+        </tr>
+        ${r.points.map(p => `
+          <tr style="${p.retention === r.recommended ? 'font-weight:600;background:var(--hover,#f0f4ff)' : ''}border-bottom:1px solid var(--border,#eee)">
+            <td style="padding:4px 8px">${p.retention}${p.retention === r.current ? ' ◀' : ''}</td>
+            <td style="padding:4px 8px">${p.interval_days}d</td>
+            <td style="padding:4px 8px">${p.daily_reviews}</td>
+            <td style="padding:4px 8px">${p.minutes} min</td>
+          </tr>`).join('')}
+      </table>
+      <p class="hint-text mt-8">${t('fsrs.optimalNote')}</p>`;
+  } catch(e) { el.innerHTML = `<p class="text-sm text-muted">${escapeHtml(e.message)}</p>`; }
+}
+
 async function resetFsrs() {
   try {
     const r = await api('/api/fsrs/reset', { method: 'POST', body: {} });
@@ -224,6 +360,18 @@ async function saveSettings() {
   };
   const defSel = document.getElementById('setDefaultSubject');
   if (defSel && defSel.value) body.default_subject = defSel.value;
+  const hintCacheSel = document.getElementById('setHintCache');
+  if (hintCacheSel) body.hint_cache_enabled = hintCacheSel.value;
+  const capEl = document.getElementById('setDailyCap');
+  if (capEl && capEl.value !== '') body.daily_review_cap = parseInt(capEl.value, 10) || 0;
+  const ctxSel = document.getElementById('setContextTokens');
+  const ctxCustom = document.getElementById('setContextCustom');
+  if (ctxSel) {
+    const val = ctxSel.value === 'custom' ? (ctxCustom ? ctxCustom.value : '') : ctxSel.value;
+    body.ai_context_tokens = parseInt(val, 10) || 32000;
+  }
+  const localSel = document.getElementById('setAllowLocal');
+  if (localSel) body.allow_local_ai = localSel.value;
   const key = document.getElementById('setApiKey').value;
   if (key) body.api_key = key;
   const master = document.getElementById('setMasterPassword').value;

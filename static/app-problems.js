@@ -1,17 +1,29 @@
 // 错题：列表 / 详情 / 提示 / 语音 / 批量 / 打印 / 解题方法 / 照片
-// ── 错题（真分页 + 搜索 + 排序）──
+// ── 错题（真分页 + 搜索 + 排序 + 表格视图 + 保存筛选）──
 let problemPage = 1;
 let problemPages = 1;
 let _searchTimer = null;
 
+function problemViewMode() {
+  return localStorage.getItem('problemView') === 'table' ? 'table' : 'cards';
+}
+
+function toggleProblemView() {
+  localStorage.setItem('problemView', problemViewMode() === 'table' ? 'cards' : 'table');
+  loadProblems(problemPage);
+}
+
 function onSearchInput() {
   clearTimeout(_searchTimer);
   _searchTimer = setTimeout(() => loadProblems(1), 250);
+  renderSavedFilters();
 }
 
 async function loadProblems(page = 1) {
   problemPage = page;
   const listEl = document.getElementById('problemsList');
+  const btn = document.getElementById('viewToggleBtn');
+  if (btn) btn.textContent = problemViewMode() === 'table' ? t('prob.cardsView') : t('prob.tableView');
   listEl.innerHTML = '<div class="skeleton"></div><div class="skeleton"></div>';
   const q = document.getElementById('searchInput').value.trim();
   const sort = document.getElementById('sortSelect').value;
@@ -20,6 +32,7 @@ async function loadProblems(page = 1) {
   if (prereqId) params.set('prereq', prereqId);
   const filterHint = document.getElementById('prereqFilterHint');
   if (filterHint) filterHint.style.display = prereqId ? 'flex' : 'none';
+  renderSavedFilters();
   try {
     const data = await api(`/api/problems?${params.toString()}`);
     problemPages = data.pages || 1;
@@ -30,6 +43,8 @@ async function loadProblems(page = 1) {
         <p class="text-sm text-muted" style="margin-top:6px">${t('prob.emptyGuide')}</p>
         <button class="btn btn-primary btn-sm" style="margin-top:10px" onclick="switchPage('bank')">${t('prob.goBank')}</button>
       </div>`;
+    } else if (problemViewMode() === 'table') {
+      listEl.innerHTML = _problemTable(items);
     } else {
       listEl.innerHTML = items.map(p => `
         <div class="list-item" style="display:flex;gap:10px;align-items:flex-start">
@@ -47,6 +62,90 @@ async function loadProblems(page = 1) {
   } catch(e) { toast(e.message, 'error'); }
 }
 
+// 思源式表格视图：列排序（点击表头切换），行点击进详情
+let _tableSort = { key: 'mastery', asc: true };
+function _problemTable(items) {
+  const key = _tableSort.key;
+  const sorted = [...items].sort((a, b) => {
+    const va = a[key] ?? '', vb = b[key] ?? '';
+    const cmp = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb));
+    return _tableSort.asc ? cmp : -cmp;
+  });
+  const arrow = k => _tableSort.key === k ? (_tableSort.asc ? ' ↑' : ' ↓') : '';
+  return `<div style="overflow-x:auto">
+    <table class="text-sm" style="width:100%;border-collapse:collapse">
+      <thead><tr style="text-align:left;border-bottom:2px solid var(--border,#ddd)">
+        <th style="padding:6px 8px;cursor:pointer" onclick="tableSortBy('title')">${t('prob.colTitle')}${arrow('title')}</th>
+        <th style="padding:6px 8px;cursor:pointer" onclick="tableSortBy('mastery')">${t('prob.colMastery')}${arrow('mastery')}</th>
+        <th style="padding:6px 8px;cursor:pointer" onclick="tableSortBy('error_type')">${t('prob.colError')}${arrow('error_type')}</th>
+        <th style="padding:6px 8px;cursor:pointer" onclick="tableSortBy('topic')">${t('prob.colTopic')}${arrow('topic')}</th>
+        <th style="padding:6px 8px;cursor:pointer" onclick="tableSortBy('created_at')">${t('prob.colTime')}${arrow('created_at')}</th>
+      </tr></thead>
+      <tbody>
+      ${sorted.map(p => `
+        <tr onclick="viewProblem(${p.id})" style="cursor:pointer;border-bottom:1px solid var(--border,#eee)">
+          <td style="padding:6px 8px">${p.starred ? '⭐ ' : ''}${escapeHtml(p.title)}</td>
+          <td style="padding:6px 8px">${masteryTag(p.mastery)}</td>
+          <td style="padding:6px 8px">${escapeHtml(errLabel(p.error_type))}</td>
+          <td style="padding:6px 8px">${escapeHtml(p.topic)}</td>
+          <td style="padding:6px 8px" class="text-muted">${escapeHtml(p.created_at)}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function tableSortBy(key) {
+  if (_tableSort.key === key) _tableSort.asc = !_tableSort.asc;
+  else _tableSort = { key, asc: true };
+  loadProblems(problemPage);
+}
+
+// ── 保存的筛选器（Dataview 式自定义视图，存本机）──
+function _savedFilters() {
+  return JSON.parse(localStorage.getItem('savedFilters') || '[]');
+}
+
+function saveCurrentFilter() {
+  const q = document.getElementById('searchInput').value.trim();
+  if (!q) { toast(t('prob.filterNeedQuery'), 'error'); return; }
+  const name = prompt(t('prob.filterNamePh'));
+  if (!name) return;
+  const list = _savedFilters();
+  list.push({ name, q, sort: document.getElementById('sortSelect').value });
+  localStorage.setItem('savedFilters', JSON.stringify(list.slice(-20)));
+  renderSavedFilters();
+  toast(t('prob.filterSaved'));
+}
+
+function applySavedFilter(i) {
+  const f = _savedFilters()[i];
+  if (!f) return;
+  document.getElementById('searchInput').value = f.q;
+  document.getElementById('sortSelect').value = f.sort || 'time';
+  loadProblems(1);
+}
+
+function deleteSavedFilter(i) {
+  const list = _savedFilters();
+  list.splice(i, 1);
+  localStorage.setItem('savedFilters', JSON.stringify(list));
+  renderSavedFilters();
+}
+
+function renderSavedFilters() {
+  const wrap = document.getElementById('savedFilterChips');
+  if (!wrap) return;
+  const list = _savedFilters();
+  wrap.innerHTML = list.map((f, i) => `
+    <span class="tag tag-gray" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer" onclick="applySavedFilter(${i})">
+      ${escapeHtml(f.name)}
+      <span onclick="event.stopPropagation();deleteSavedFilter(${i})" style="cursor:pointer" title="delete">×</span>
+    </span>`).join('');
+  const row = document.getElementById('savedFiltersRow');
+  if (row) row.style.display = list.length ? 'flex' : 'none';
+}
+
 function renderPager() {
   const pager = document.getElementById('pager');
   if (problemPages <= 1) { pager.innerHTML = ''; return; }
@@ -55,6 +154,46 @@ function renderPager() {
     <span class="text-sm text-muted">${problemPage} / ${problemPages}</span>
     <button class="btn btn-secondary btn-sm" ${problemPage >= problemPages ? 'disabled' : ''} onclick="loadProblems(${problemPage + 1})">${t('pager.next')}</button>
   `;
+}
+
+// ── 未链接提及（Obsidian 式）：错题文本出现但未绑定的概念，一键确认绑定 ──
+let _unlinkedDismissed = new Set(JSON.parse(localStorage.getItem('unlinkedDismissed') || '[]'));
+
+async function loadUnlinked() {
+  const card = document.getElementById('unlinkedCard');
+  const list = document.getElementById('unlinkedList');
+  if (!card || !list) return;
+  try {
+    const r = await api('/api/graph/unlinked');
+    const items = (r.items || []).filter(it => !_unlinkedDismissed.has(it.problem_id + ':' + it.concept_id));
+    if (!items.length) { card.classList.add('hidden'); return; }
+    card.classList.remove('hidden');
+    list.innerHTML = items.slice(0, 10).map(it => `
+      <div class="flex-between" style="padding:6px 0;border-bottom:1px solid var(--border,#eee)">
+        <span class="text-sm" style="flex:1">${escapeHtml(it.problem_title)}
+          → <strong>${escapeHtml(it.concept_name)}</strong>
+          ${it.matched !== it.concept_name ? `<span class="tag tag-gray">${escapeHtml(it.matched)}</span>` : ''}
+        </span>
+        <span class="flex gap-8">
+          <button class="btn btn-primary btn-sm" onclick="bindMention(${it.problem_id}, ${it.concept_id})">${t('unlinked.bind')}</button>
+          <button class="btn btn-secondary btn-sm" onclick="dismissMention(${it.problem_id}, ${it.concept_id})">×</button>
+        </span>
+      </div>`).join('');
+  } catch(e) { /* 静默：建议卡片非关键路径 */ }
+}
+
+async function bindMention(pid, cid) {
+  try {
+    await api('/api/graph/bind', { method: 'POST', body: { problem_id: pid, concept_id: cid } });
+    toast(t('unlinked.bound'));
+    loadUnlinked();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function dismissMention(pid, cid) {
+  _unlinkedDismissed.add(pid + ':' + cid);
+  localStorage.setItem('unlinkedDismissed', JSON.stringify([..._unlinkedDismissed].slice(-200)));
+  loadUnlinked();
 }
 
 async function viewProblem(id) {
@@ -185,6 +324,7 @@ async function getHint(id, level) {
       const srcTag = data.source === 'ai' ? '<span class="tag tag-green">AI</span>' :
                      data.source === 'fallback' ? '<span class="tag tag-amber">' + t('hint.fallbackTag') + '</span>' : '<span class="tag tag-gray">' + t('hint.cacheTag') + '</span>';
       card.querySelector('.tag-green').textContent = srcTag.replace(/<[^>]+>/g, '').trim();
+      if (data.cached) card.querySelector('h4').insertAdjacentHTML('beforeend', ' <span class="tag tag-gray">' + t('hint.cachedTag') + '</span>');
       streamText.textContent = data.content || streamText.textContent;
       if (data.diagnose) card.insertAdjacentHTML('afterbegin', diagnoseHtml(true));
       if (data.sources) card.insertAdjacentHTML('afterbegin', ragSourcesHtml(data.sources));
@@ -223,6 +363,7 @@ async function getHint(id, level) {
           streamText.textContent = payload.content || streamText.textContent;
           renderMath(card);
           if (payload.diagnose) card.insertAdjacentHTML('afterbegin', diagnoseHtml(true));
+          if (payload.cached) card.querySelector('h4').insertAdjacentHTML('beforeend', ' <span class="tag tag-gray">' + t('hint.cachedTag') + '</span>');
           done = true;
         } else if (event === 'error') {
           if (payload.partial) streamText.textContent = payload.partial;
@@ -549,6 +690,8 @@ async function removeMethod(id, idx) {
 async function probeLocalModels() {
   const el = document.getElementById('ollamaStatus');
   if (!el) return;
+  // 延后探测：避免 3 秒级的探测请求抢占设置页首屏数据的请求通道
+  await new Promise(res => setTimeout(res, 600));
   try {
     const r = await api('/api/models/probe');
     if (r.ollama && r.ollama.available) {

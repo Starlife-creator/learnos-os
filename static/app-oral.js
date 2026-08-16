@@ -42,8 +42,11 @@ let oralSessionId = null;
 let oralTurn = 0;
 
 async function startOral() {
+  startOralWith(document.getElementById('oralTopic').value.trim());
+}
+
+async function startOralWith(topic) {
   _feynmanMode = false;
-  const topic = document.getElementById('oralTopic').value.trim();
   if (!topic) { toast(t('oral.needTopic'), 'error'); return; }
   try {
     const r = await api('/api/oral/start', { method: 'POST', body: { topic } });

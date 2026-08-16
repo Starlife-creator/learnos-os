@@ -256,7 +256,9 @@ function drawTelemetry(t) {
     <span class="text-sm">${t('stat.failRate')}</span><span class="tag ${rate}">${(t.fail_rate * 100).toFixed(0)}%</span>
     <span class="text-sm">${t('stat.avgLatency')}</span><b>${t.avg_latency_ms}ms</b>
     <span class="text-sm">${t('stat.tokens')}</span><b>${t.tokens}</b>
+    ${t.cached_tokens !== undefined ? `<span class="text-sm">${t('stat.cacheHit')}</span><span class="tag ${t.cache_hit_rate >= 0.3 ? 'tag-green' : 'tag-gray'}">${(t.cache_hit_rate * 100).toFixed(0)}%</span>` : ''}
   </div>
+  ${t.cached_tokens ? `<p class="hint-text">${t('stat.cacheNote').replace('{c}', t.cached_tokens)}</p>` : ''}
   ${t.slow_routes && t.slow_routes.length ? `<p class="hint-text">${t('stat.slowRoutes')}：${t.slow_routes.map(escapeHtml).join('、')}</p>` : ''}`;
 }
 
@@ -428,38 +430,72 @@ async function saveProfile() {
   } catch(e) { toast(e.message, 'error'); }
 }
 
-// ── 今日行动向导：按优先级渲染行动按钮 ──
+// ── 统一学习队列（RemNote Queue 式）：按优先级逐项推进 ──
+let _queueItems = [];
+let _queueIdx = 0;
+
 function renderTodayActions(d) {
   const card = document.getElementById('todayActions');
   const list = document.getElementById('todayActionsList');
   if (!card || !list) return;
-  const items = [];
+  _queueItems = [];
+  _queueIdx = 0;
   if ((d.due || 0) > 0) {
-    items.push({
+    _queueItems.push({
       label: t('today.reviewDue').replace('{n}', d.due),
-      page: 'review',
-      primary: true,
+      run: () => switchPage('review'),
+    });
+  }
+  const weak = (d.topics || []).find(x => parseFloat(x.avg_mastery) < 3);
+  if (weak) {
+    _queueItems.push({
+      label: t('queue.oralWeak').replace('{s}', weak.topic),
+      run: () => { switchPage('oral'); setTimeout(() => startOralWith(weak.topic), 300); },
     });
   }
   const focus = (d.tasks || []).find(x => x.kind === 'error_focus');
   if (focus) {
-    items.push({ label: focus.label, page: 'problems' });
+    _queueItems.push({ label: focus.label, run: () => switchPage('problems') });
   }
   if ((d.stats && d.stats.total) || 0 > 0) {
-    items.push({
+    _queueItems.push({
       label: t('today.wrongbook').replace('{n}', d.stats.total || 0),
-      page: 'problems',
+      run: () => switchPage('problems'),
     });
   }
-  items.push({ label: t('today.bank'), page: 'bank' });
-  if (!items.length) {
+  _queueItems.push({ label: t('today.bank'), run: () => switchPage('bank') });
+  if (_queueItems.length <= 1) {  // 只剩题库入口时不显示队列
     card.style.display = 'none';
     return;
   }
   card.style.display = '';
-  list.innerHTML = items.map(it => `
-    <button class="btn ${it.primary ? 'btn-primary' : 'btn-secondary'}"
-            onclick="switchPage('${it.page}')">${escapeHtml(it.label)}</button>
-  `).join('');
+  renderQueue();
+}
+
+function renderQueue() {
+  const list = document.getElementById('todayActionsList');
+  const done = _queueIdx >= _queueItems.length;
+  list.innerHTML = `
+    <div class="text-sm text-muted" style="width:100%;margin-bottom:6px">
+      ${done ? t('queue.allDone') : t('queue.progress').replace('{n}', _queueIdx + 1).replace('{m}', _queueItems.length)}
+    </div>
+    ${_queueItems.map((it, i) => `
+      <button class="btn ${!done && i === _queueIdx ? 'btn-primary' : i < _queueIdx ? 'btn-secondary' : 'btn-secondary'}"
+              style="${i < _queueIdx ? 'opacity:.55;text-decoration:line-through' : (!done && i === _queueIdx ? '' : 'opacity:.8')}"
+              ${(!done && i === _queueIdx) ? `onclick="queueStep(${i})"` : `onclick="queueStep(${i}, true)"`}
+              >${i < _queueIdx ? '✓ ' : (!done && i === _queueIdx ? '▶ ' : '')}${escapeHtml(it.label)}</button>
+    `).join('')}`;
+}
+
+async function queueStep(idx, skip = false) {
+  const it = _queueItems[idx];
+  if (!it) return;
+  if (!skip) {
+    it.run();
+    _queueIdx = idx + 1;
+  } else {
+    _queueIdx = idx;  // 跳到该项（不计完成）
+  }
+  renderQueue();
 }
 

@@ -27,6 +27,7 @@ class TestGraphCore(unittest.TestCase):
         config.DB_PATH = Path(cls._tmp.name) / "graph_test.db"
         db.DB_PATH = config.DB_PATH
         db.init_db()
+        graph.invalidate_progress_cache()  # 新会话：清掉跨测试残留的掌握度 TTL 缓存
 
     @classmethod
     def tearDownClass(cls):

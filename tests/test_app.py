@@ -91,7 +91,7 @@ class LearnOSTest(unittest.TestCase):
 
         # 获取今日复习列表
         _, reviews = self.request("/api/reviews")
-        review = next(item for item in reviews if item["problem_id"] == problem_id)
+        review = next(item for item in reviews["items"] if item["problem_id"] == problem_id)
 
         # 完成复习（rating=3，SM-2 首次记住 interval=1）
         _, result = self.request(f"/api/reviews/{review['id']}/complete", "POST", {"rating": 3})
@@ -99,7 +99,7 @@ class LearnOSTest(unittest.TestCase):
 
         # 再次完成复习（rating=4，第二次记住 interval=3）
         _, reviews2 = self.request("/api/reviews")
-        review2 = next(item for item in reviews2 if item["problem_id"] == problem_id)
+        review2 = next(item for item in reviews2["items"] if item["problem_id"] == problem_id)
         _, result2 = self.request(f"/api/reviews/{review2['id']}/complete", "POST", {"rating": 4})
         self.assertGreaterEqual(result2["interval_days"], 3)
 

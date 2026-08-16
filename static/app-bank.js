@@ -54,6 +54,79 @@ async function loadBank() {
   }
 }
 
+// ── 错题重练：把状态为 wrong 的题组成顺序重练卷 ──
+let _drillQueue = [];
+let _drillIdx = 0;
+
+function startWrongDrill() {
+  _drillQueue = (_bankItems || []).filter(x => x.status === 'wrong');
+  if (!_drillQueue.length) { toast(t('bank.drillEmpty'), 'warn'); return; }
+  _drillIdx = 0;
+  openDrillNext();
+}
+
+function openDrillNext() {
+  if (_drillIdx >= _drillQueue.length) {
+    document.getElementById('bankModalBody').innerHTML =
+      `<div class="text-center" style="padding:20px 0">
+        <p style="font-size:28px">🎉</p>
+        <p class="text-sm">${t('bank.drillDone')}</p>
+      </div>`;
+    return;
+  }
+  const item = _drillQueue[_drillIdx];
+  openModal('bankModal');
+  document.getElementById('bankModalBody').innerHTML = `
+    <p class="text-sm text-muted mb-8">${t('bank.drillProgress').replace('{n}', _drillIdx + 1).replace('{m}', _drillQueue.length)} · ${escapeHtml(item.concept)}</p>
+    <p class="text-sm mb-12" style="white-space:pre-wrap;line-height:1.6">${escapeHtml(item.stem)}</p>
+    <div class="bank-choices">
+      ${item.choices.map((c, i) => `
+        <label class="bank-choice" id="bc${i}">
+          <input type="radio" name="bankAnswer" value="${i}">
+          <span class="bank-choice-key">${String.fromCharCode(65 + i)}</span>
+          <span class="bank-choice-text">${escapeHtml(c)}</span>
+        </label>`).join('')}
+    </div>
+    <div class="flex gap-12 mt-12">
+      <button class="btn btn-primary" id="bankSubmit" onclick="submitDrillAnswer('${item.id}')">${t('bank.submit')}</button>
+    </div>
+    <div id="bankResult" class="mt-12"></div>`;
+}
+
+async function submitDrillAnswer(qid) {
+  const sel = document.querySelector('input[name="bankAnswer"]:checked');
+  if (!sel) { toast(t('bank.needAnswer'), 'error'); return; }
+  const btn = document.getElementById('bankSubmit');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await api('/api/bank/attempt', {
+      method: 'POST',
+      body: { qid, answer: parseInt(sel.value, 10) },
+    });
+    document.querySelectorAll('input[name="bankAnswer"]').forEach(r => {
+      const i = parseInt(r.value, 10);
+      const label = document.getElementById('bc' + i);
+      if (label) {
+        if (i === res.answer) label.classList.add('bank-correct');
+        else if (r.checked) label.classList.add('bank-incorrect');
+      }
+    });
+    document.getElementById('bankResult').innerHTML = `
+      <div class="card ${res.correct ? 'bank-ok-card' : 'bank-bad-card'}">
+        <p class="text-sm" style="font-weight:600">${res.correct ? t('bank.correct') : t('bank.wrong')}</p>
+        <p class="text-sm mt-8">${t('bank.answerIs')} <b>${String.fromCharCode(65 + res.answer)}</b> · ${escapeHtml(res.explain)}</p>
+      </div>
+      <div class="flex gap-8 mt-12">
+        <button class="btn btn-primary btn-sm" onclick="_drillIdx++;openDrillNext()">${t('bank.drillNext')}</button>
+      </div>`;
+    loadBankUnits();
+  } catch (e) {
+    toast(e.message, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 function openBankPractice(qid) {
   const item = (_bankItems || []).find(x => x.id === qid);
   if (!item) return;

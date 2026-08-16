@@ -70,7 +70,7 @@ class TestEndpoints(unittest.TestCase):
         self.assertEqual(data["source"], "fallback")
         self.assertFalse(data["diagnose"])
         # 完成一次失败复习 → 再取提示应带诊断建议
-        _, reviews = self._request("GET", "/api/reviews")
+        _, _rv = self._request("GET", "/api/reviews"); reviews = _rv["items"]
         rid = next(r["id"] for r in reviews if r["problem_id"] == pid)
         self._request("POST", f"/api/reviews/{rid}/complete", {"rating": 1})
         status, data = self._request("POST", f"/api/problems/{pid}/hint", {"level": 1})
@@ -105,7 +105,7 @@ class TestEndpoints(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertGreaterEqual(data["total"], 1)
         # 复习变式（variant_id=1）完成 → 质量分回写
-        _, reviews = self._request("GET", "/api/reviews")
+        _, _rv = self._request("GET", "/api/reviews"); reviews = _rv["items"]
         rid = next(r["id"] for r in reviews if r["problem_id"] == pid)
         with db.db() as conn:
             conn.execute("UPDATE reviews SET variant_id = 1 WHERE id = ?", (rid,))
@@ -267,7 +267,8 @@ class TestEndpoints(unittest.TestCase):
     def test_reviews_empty(self):
         status, data = self._request("GET", "/api/reviews")
         self.assertEqual(status, 200)
-        self.assertIsInstance(data, list)
+        self.assertIsInstance(data["items"], list)
+        self.assertIn("cap", data)
 
     def test_settings_get(self):
         status, data = self._request("GET", "/api/settings")
@@ -340,7 +341,7 @@ class TestEndpoints(unittest.TestCase):
     def test_trend_records_after_review(self):
         pid = self._create_problem()
         # 完成一次复习，触发掌握度日志
-        _, reviews = self._request("GET", "/api/reviews")
+        _, _rv = self._request("GET", "/api/reviews"); reviews = _rv["items"]
         rid = next(r["id"] for r in reviews if r["problem_id"] == pid)
         self._request("POST", f"/api/reviews/{rid}/complete", {"rating": 3})
         status, data = self._request("GET", "/api/trend")
@@ -355,7 +356,7 @@ class TestEndpoints(unittest.TestCase):
         if not fsrs_bridge.fsrs_available():
             self.skipTest("FSRS vendored 缺失")
         pid = self._create_problem()
-        _, reviews = self._request("GET", "/api/reviews")
+        _, _rv = self._request("GET", "/api/reviews"); reviews = _rv["items"]
         rid = next(r["id"] for r in reviews if r["problem_id"] == pid)
         status, result = self._request("POST", f"/api/reviews/{rid}/complete", {"rating": 4})
         self.assertEqual(status, 200)
@@ -442,7 +443,7 @@ class TestEndpoints(unittest.TestCase):
         from datetime import date, timedelta
         from fsrs_bridge import next_interval_days
         pid = self._create_problem()
-        _, reviews = self._request("GET", "/api/reviews")
+        _, _rv = self._request("GET", "/api/reviews"); reviews = _rv["items"]
         rid = next(r["id"] for r in reviews if r["problem_id"] == pid)
         with db.DB_LOCK, db.db() as conn:
             conn.execute("UPDATE reviews SET due_date = ?, interval_days = 16 WHERE id = ?",
@@ -457,7 +458,7 @@ class TestEndpoints(unittest.TestCase):
         """C6：逾期 >=21 天 → 降级为新学：interval=1、repetition=0、掌握度减一。"""
         from datetime import date, timedelta
         pid = self._create_problem()
-        _, reviews = self._request("GET", "/api/reviews")
+        _, _rv = self._request("GET", "/api/reviews"); reviews = _rv["items"]
         rid = next(r["id"] for r in reviews if r["problem_id"] == pid)
         with db.DB_LOCK, db.db() as conn:
             conn.execute("UPDATE reviews SET due_date = ?, interval_days = 30 WHERE id = ?",
@@ -560,14 +561,14 @@ class TestEndpoints(unittest.TestCase):
             self._create_problem(title=f"交错题{i}", topic=topic)
         status, data = self._request("GET", "/api/reviews?mode=interleave")
         self.assertEqual(status, 200)
-        topics = [r["topic"] for r in data]
+        topics = [r["topic"] for r in data["items"]]
         # 交错：相邻两题不应同知识点（分桶轮转）
         for a, b in zip(topics, topics[1:]):
             self.assertNotEqual(a, b)
 
     def test_today_summary(self):
         self._create_problem()
-        _, reviews = self._request("GET", "/api/reviews")
+        _, _rv = self._request("GET", "/api/reviews"); reviews = _rv["items"]
         rid = reviews[0]["id"]
         self._request("POST", f"/api/reviews/{rid}/complete", {"rating": 4})
         status, data = self._request("GET", "/api/reviews/summary/today")
@@ -582,7 +583,7 @@ class TestEndpoints(unittest.TestCase):
         """P0：重复出错(≥2 次)的题进入顽固错题榜，含再错统计。"""
         pid = self._create_problem(title="P0顽固题", error_type="careless")
         for _ in range(2):  # 两次都答错
-            _, reviews = self._request("GET", "/api/reviews")
+            _, _rv = self._request("GET", "/api/reviews"); reviews = _rv["items"]
             rid = next(r["id"] for r in reviews if r["problem_id"] == pid)
             status, _ = self._request("POST", f"/api/reviews/{rid}/complete", {"rating": 1})
             self.assertEqual(status, 200)
@@ -600,7 +601,7 @@ class TestEndpoints(unittest.TestCase):
         pid = self._create_problem(title="P0遥测题", error_type="careless")
         # hint 无 AI 时走降级，仍记遥测（ok=0）
         self._request("POST", f"/api/problems/{pid}/hint", {"level": 2})
-        _, reviews = self._request("GET", "/api/reviews")
+        _, _rv = self._request("GET", "/api/reviews"); reviews = _rv["items"]
         rid = next(r["id"] for r in reviews if r["problem_id"] == pid)
         self._request("POST", f"/api/reviews/{rid}/complete", {"rating": 4})
         status, d = self._request("GET", "/api/dashboard")
@@ -640,7 +641,7 @@ class TestEndpoints(unittest.TestCase):
     def test_analytics_forgetting_curve(self):
         """D4：完成 FSRS 复习后 analytics 含遗忘曲线（实测桶 + 预测曲线）。"""
         pid = self._create_problem(title="D4遗忘曲线", content="求电场强度")
-        _, reviews = self._request("GET", "/api/reviews")
+        _, _rv = self._request("GET", "/api/reviews"); reviews = _rv["items"]
         rid = next(r["id"] for r in reviews if r["problem_id"] == pid)
         self._request("POST", f"/api/reviews/{rid}/complete", {"rating": 4})
         status, data = self._request("GET", "/api/analytics")
@@ -792,7 +793,7 @@ class TestEndpoints(unittest.TestCase):
             keystore.KEY_FILE = orig_key_file
         # ── 周期报告：创建 1 题 1 复习后周报/月报应含数据 ──
         pid = self._create_problem(title="周期报告题", error_type="计算错误")
-        _, reviews = self._request("GET", "/api/reviews")
+        _, _rv = self._request("GET", "/api/reviews"); reviews = _rv["items"]
         rid = next(r["id"] for r in reviews if r["problem_id"] == pid)
         self._request("POST", f"/api/reviews/{rid}/complete", {"rating": 4})
         status, w = self._request("GET", "/api/report/weekly")
