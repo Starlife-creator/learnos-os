@@ -20,7 +20,7 @@ _TEST_TMP_DIR = Path(__file__).resolve().parent / ".tmp"
 _TEST_TMP_DIR.mkdir(exist_ok=True)
 
 
-class PhysicsStudyOSTest(unittest.TestCase):
+class LearnOSTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.temp_dir = tempfile.TemporaryDirectory(prefix="e2e_", dir=_TEST_TMP_DIR)
@@ -48,7 +48,7 @@ class PhysicsStudyOSTest(unittest.TestCase):
             f"http://127.0.0.1:{self.port}{path}",
             data=data,
             method=method,
-            headers={"Content-Type": "application/json", "X-Requested-With": "PhysicsStudyOS"},
+            headers={"Content-Type": "application/json", "X-Requested-With": "LearnOS"},
         )
         with urllib.request.urlopen(req, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
@@ -64,7 +64,7 @@ class PhysicsStudyOSTest(unittest.TestCase):
 
         page_status, page = self.text_request("/")
         self.assertEqual(page_status, 200)
-        self.assertIn("物理学习", page)
+        self.assertIn("学习 OS", page)
 
     def test_02_problem_learning_loop(self):
         # 创建题目

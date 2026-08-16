@@ -36,7 +36,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='PhysicsStudyOS',
+    name='LearnOS',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

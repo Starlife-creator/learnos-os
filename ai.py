@@ -143,7 +143,7 @@ def probe_ollama(timeout: float = 1.5) -> dict[str, Any] | None:
     try:
         request = urllib.request.Request(
             "http://localhost:11434/api/tags", method="GET",
-            headers={"User-Agent": "PhysicsStudyOS/0.3"},
+            headers={"User-Agent": "LearnOS/0.3"},
         )
         with urllib.request.urlopen(request, timeout=timeout) as response:
             data = json.loads(response.read().decode("utf-8"))
@@ -199,7 +199,7 @@ def call_ai(
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "User-Agent": "PhysicsStudyOS/0.2",
+        "User-Agent": "LearnOS/0.2",
     }
 
     last_error: Exception | None = None
@@ -283,7 +283,7 @@ def call_ai_stream(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
-        "User-Agent": "PhysicsStudyOS/0.2",
+        "User-Agent": "LearnOS/0.2",
     }
     request = urllib.request.Request(
         api_endpoint(base), data=payload, headers=headers, method="POST",

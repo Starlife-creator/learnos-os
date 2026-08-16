@@ -47,7 +47,7 @@ class TestMultiSubject(unittest.TestCase):
 
     def _request(self, method, path, body=None):
         conn = HTTPConnection("127.0.0.1", self._port, timeout=10)
-        headers = {"X-Requested-With": "PhysicsStudyOS"}
+        headers = {"X-Requested-With": "LearnOS"}
         data = None
         if body is not None:
             data = json.dumps(body).encode("utf-8")

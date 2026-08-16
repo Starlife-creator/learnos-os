@@ -49,7 +49,7 @@ class TestEndpoints(unittest.TestCase):
     def _request(self, method, path, body=None):
         conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
         data = json.dumps(body) if body else None
-        headers = {"Content-Type": "application/json", "X-Requested-With": "PhysicsStudyOS"}
+        headers = {"Content-Type": "application/json", "X-Requested-With": "LearnOS"}
         conn.request(method, path, data, headers)
         resp = conn.getresponse()
         result = json.loads(resp.read().decode("utf-8"))
@@ -291,7 +291,7 @@ class TestEndpoints(unittest.TestCase):
         body = resp.read().decode("utf-8")
         conn.close()
         self.assertEqual(resp.status, 200)
-        self.assertIn("物理学习", body)
+        self.assertIn("学习 OS", body)
 
     def test_pwa_assets(self):
         """C7：PWA 离线缓存资产（sw.js/manifest/图标）可访问。"""
@@ -483,7 +483,7 @@ class TestEndpoints(unittest.TestCase):
 
     def _raw_get(self, path, accept=None):
         conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
-        headers = {"X-Requested-With": "PhysicsStudyOS"}
+        headers = {"X-Requested-With": "LearnOS"}
         if accept:
             headers["Accept"] = accept
         conn.request("GET", path, headers=headers)
@@ -750,10 +750,10 @@ class TestEndpoints(unittest.TestCase):
         rid = "idem-1"
         conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
         conn.request("POST", "/api/problems", json.dumps(body).encode(),
-                     {"Content-Type": "application/json", "X-Requested-With": "PhysicsStudyOS", "X-Request-Id": rid})
+                     {"Content-Type": "application/json", "X-Requested-With": "LearnOS", "X-Request-Id": rid})
         r1 = json.loads(conn.getresponse().read().decode())
         conn.request("POST", "/api/problems", json.dumps(body).encode(),
-                     {"Content-Type": "application/json", "X-Requested-With": "PhysicsStudyOS", "X-Request-Id": rid})
+                     {"Content-Type": "application/json", "X-Requested-With": "LearnOS", "X-Request-Id": rid})
         r2 = json.loads(conn.getresponse().read().decode())
         conn.close()
         self.assertEqual(r1["id"], r2["id"])

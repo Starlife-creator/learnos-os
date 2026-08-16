@@ -53,7 +53,7 @@ class TestBackup(unittest.TestCase):
             f"http://127.0.0.1:{self.port}{path}",
             data=data,
             method=method,
-            headers={"Content-Type": "application/json", "X-Requested-With": "PhysicsStudyOS"},
+            headers={"Content-Type": "application/json", "X-Requested-With": "LearnOS"},
         )
         with urllib.request.urlopen(req, timeout=8) as response:
             return response.status, json.loads(response.read().decode("utf-8"))

@@ -1,6 +1,6 @@
 // 策略：全站网络优先（本地应用网络必然可达），缓存仅作离线兜底。
 // 新版发布后无需硬刷新，也无需再递增 CACHE_NAME（仅本次 v6 用于清掉旧缓存）。
-const CACHE_NAME = 'physics-os-v6';
+const CACHE_NAME = 'learnos-os-v1';
 
 self.addEventListener('install', () => {
   self.skipWaiting();

@@ -1,6 +1,6 @@
-"""Physics Study OS — 主入口。
+"""LearnOS — 主入口。
 
-启动本地 HTTP 服务器，提供物理学习辅助工具。
+启动本地 HTTP 服务器，提供个人学习辅助工具。
 零第三方依赖，纯 Python 标准库实现。
 """
 from __future__ import annotations
@@ -27,11 +27,11 @@ def main() -> None:
 
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     url = f"http://{HOST}:{PORT}"
-    LOG.info("Physics Study OS 已启动: %s", url)
+    LOG.info("LearnOS 已启动: %s", url)
     LOG.info("按 Ctrl+C 停止。")
     LOG.info("数据保存在 SQLite 数据库中。")
 
-    if not os.environ.get("PHYSICS_OS_NO_BROWSER"):
+    if not os.environ.get("LEARNOS_NO_BROWSER"):
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
 
     try:
@@ -46,7 +46,7 @@ def main() -> None:
             or "已被使用" in str(exc)
         )
         if addr_in_use:
-            LOG.error("端口 %d 已被占用，请更换端口: set PHYSICS_OS_PORT=9000 && python app.py", PORT)
+            LOG.error("端口 %d 已被占用，请更换端口: set LEARNOS_PORT=9000 && python app.py", PORT)
         else:
             LOG.error("服务器错误: %s", exc)
     finally:

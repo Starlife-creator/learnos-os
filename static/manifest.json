@@ -1,7 +1,7 @@
 {
-  "name": "物理学习 OS",
-  "short_name": "物理OS",
-  "description": "本地物理错题学习系统：错题管理、间隔复习、知识图谱、真题演练",
+  "name": "学习 OS",
+  "short_name": "学习OS",
+  "description": "本地个人学习系统：错题管理、间隔复习、知识图谱、真题演练",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

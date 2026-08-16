@@ -2,7 +2,7 @@
 
 ## 工作区隔离红线（最高优先级）
 - 所有修改、生成文件、运行产物必须严格限制在本工作区
-  `E:\tool\biancheng\AI project 2\physics-study-os` 内。
+  `E:\tool\biancheng\AI project 2\learnos-os` 内。
 - 禁止对工作区外部造成任何影响：
   - 不写工作区外的任何文件（包括系统临时目录、用户目录）
   - 不修改系统设置、注册表、环境变量（系统级）、服务、计划任务、启动项

@@ -1,7 +1,7 @@
 """密钥安全存储（D1）：工作区加密文件 keys.enc + 内存降级。
 
 R4 合规：密钥绝不写入数据库。
-优先级：环境变量 PHYSICS_OS_API_KEY > keys.enc（工作区） > 内存（会话级）。
+优先级：环境变量 LEARNOS_API_KEY > keys.enc（工作区） > 内存（会话级）。
 
 加密实现：优先使用可用的 cryptography（vendored 或用户安装）；
 依赖缺失时降级为纯内存密钥（每次启动重新录入），绝不在无加密时落盘明文。

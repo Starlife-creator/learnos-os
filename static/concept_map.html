@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>知识图谱 - 物理学习</title>
+<title>知识图谱 - 学习 OS</title>
 <style>
   :root {
     --bg: #f4f7fb; --surface: #ffffff; --border: #e3e9f2;
@@ -623,7 +623,7 @@ async function addConcept() {
   if (!name) return;
 const resp = await fetch('/api/graph/concepts', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'PhysicsStudyOS' },
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'LearnOS' },
       body: JSON.stringify({ name, parent_id: parent ? parseInt(parent, 10) : 0, subject: graphSubject() }),
     });
   const data = await resp.json();

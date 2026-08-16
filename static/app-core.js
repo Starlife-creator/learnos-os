@@ -1,8 +1,8 @@
 // 核心：i18n / API / 弹窗 / 导航 / 主题 / 标签 / 通用工具（全局函数，按序加载）
-// 个人物理学习 OS — 前端逻辑（抽离自 inline，便于静态语法校验）
+// 个人学习 OS — 前端逻辑（抽离自 inline，便于静态语法校验）
 const API = '';
 const X_HEADER = 'X-Requested-With';
-const X_VALUE = 'PhysicsStudyOS';
+const X_VALUE = 'LearnOS';
 
 // ── 多学科：当前学科上下文（URL ?subject= 优先，其次 localStorage，最后默认 physics）──
 const BUILTIN_SUBJECTS = ['physics', 'chemistry', 'math'];

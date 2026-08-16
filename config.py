@@ -9,27 +9,27 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 # ── 日志器（必须先于其它使用，避免 NameError）──
-LOG = logging.getLogger("physics_os")
+LOG = logging.getLogger("learnos")
 
 BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 STATIC_DIR = BUNDLE_ROOT / "static"
-DB_PATH = Path(os.environ.get("PHYSICS_OS_DB", APP_DIR / "physics_study.db"))
+DB_PATH = Path(os.environ.get("LEARNOS_DB", APP_DIR / "learnos.db"))
 
 # ── 网络配置 ──
-HOST = os.environ.get("PHYSICS_OS_HOST", "127.0.0.1")
+HOST = os.environ.get("LEARNOS_HOST", "127.0.0.1")
 try:
-    PORT = int(os.environ.get("PHYSICS_OS_PORT", "8765"))
+    PORT = int(os.environ.get("LEARNOS_PORT", "8765"))
 except ValueError:
-    LOG.warning("PHYSICS_OS_PORT 值无效，使用默认端口 8765")
+    LOG.warning("LEARNOS_PORT 值无效，使用默认端口 8765")
     PORT = 8765
 
 # ── AI 配置（支持环境变量，优先级高于本地数据库）──
-API_KEY_ENV = os.environ.get("PHYSICS_OS_API_KEY", "").strip()
-API_BASE_ENV = os.environ.get("PHYSICS_OS_API_BASE", "").strip()
-MODEL_ENV = os.environ.get("PHYSICS_OS_MODEL", "").strip()
+API_KEY_ENV = os.environ.get("LEARNOS_API_KEY", "").strip()
+API_BASE_ENV = os.environ.get("LEARNOS_API_BASE", "").strip()
+MODEL_ENV = os.environ.get("LEARNOS_MODEL", "").strip()
 
-LOG_FILE = APP_DIR / "physics_study.log"
+LOG_FILE = APP_DIR / "learnos.log"
 MEDIA_DIR = APP_DIR / "media"
 
 

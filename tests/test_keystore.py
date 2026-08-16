@@ -9,7 +9,7 @@ import config
 import keystore
 from config import APP_DIR
 
-_TMP = Path(tempfile.gettempdir()) / "physics_os_tests" / "keystore"
+_TMP = Path(tempfile.gettempdir()) / "learnos_tests" / "keystore"
 
 
 class TestKeystore(unittest.TestCase):

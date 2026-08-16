@@ -1,6 +1,6 @@
-# Physics Study OS — 个人物理学习 OS
+# LearnOS — 个人学习 OS
 
-> 本地优先、零第三方依赖的物理学习辅助工具。
+> 本地优先、零第三方依赖的个人学习辅助工具。
 > 记录尝试 → 分级提示 → 主动回忆 → 间隔复习 → AI 口试。
 
 ## 功能
@@ -17,13 +17,13 @@
 
 ```bash
 # 克隆项目
-cd physics-study-os
+cd learnos-os
 
 # 启动（自动打开浏览器）
 python app.py
 
 # 或指定端口
-set PHYSICS_OS_PORT=9000 && python app.py
+set LEARNOS_PORT=9000 && python app.py
 ```
 
 **Windows 一键启动**：直接双击 `start.bat`（自动校验 Python 3.10+、运行启动自检、启动服务并自动打开浏览器）。
@@ -36,30 +36,30 @@ set PHYSICS_OS_PORT=9000 && python app.py
 
 | 配置项 | 环境变量 | 默认值 |
 |--------|---------|--------|
-| API 地址 | `PHYSICS_OS_API_BASE` | `https://api.openai.com/v1` |
-| API Key | `PHYSICS_OS_API_KEY` | 空（环境变量 / 内存优先，绝不写入数据库） |
-| 模型名称 | `PHYSICS_OS_MODEL` | 空 |
+| API 地址 | `LEARNOS_API_BASE` | `https://api.openai.com/v1` |
+| API Key | `LEARNOS_API_KEY` | 空（环境变量 / 内存优先，绝不写入数据库） |
+| 模型名称 | `LEARNOS_MODEL` | 空 |
 | Temperature | - | `0.3` |
-| 数据库路径 | `PHYSICS_OS_DB` | 项目目录下 `physics_study.db` |
-| 监听地址 | `PHYSICS_OS_HOST` | `127.0.0.1` |
-| 监听端口 | `PHYSICS_OS_PORT` | `8765` |
+| 数据库路径 | `LEARNOS_DB` | 项目目录下 `learnos.db` |
+| 监听地址 | `LEARNOS_HOST` | `127.0.0.1` |
+| 监听端口 | `LEARNOS_PORT` | `8765` |
 
 > **密钥安全**：API Key 仅来自环境变量或本次运行内存（UI 录入后重启失效），**永远不会以明文写入数据库文件**。设置页会显示当前密钥来源（environment / runtime / local）。
 
 ### 数据备份与迁移
 
-- **导出**：概览页「导出数据」生成 `physics_study_YYYY-MM-DD.json`（题目 + 提示 + 复习记录）。
+- **导出**：概览页「导出数据」生成 `learnos_YYYY-MM-DD.json`（题目 + 提示 + 复习记录）。
 - **导入**：概览页「导入数据」会**先自动备份**当前数据库，再以参数化写入导入，不会造成注入或数据损坏。导入前会弹出确认框。
 
 ### 安全
 
 - 所有写请求（POST/PUT/DELETE）需携带 `X-Requested-With` 头，缺失即 403——防范同机恶意网页对 localhost 的跨站调用。
-- SQLite 启用 WAL 模式提升并发读写；日志写入 `physics_study.log`（滚动 1MB × 3，自动脱敏密钥）。
+- SQLite 启用 WAL 模式提升并发读写；日志写入 `learnos.log`（滚动 1MB × 3，自动脱敏密钥）。
 
 ## 项目结构
 
 ```
-physics-study-os/
+learnos-os/
   app.py           # 主入口：启动服务器
   config.py        # 全局配置、路径常量、Schema
   db.py            # 数据访问层：SQLite 连接、查询、迁移
@@ -97,7 +97,7 @@ pip install pyinstaller
 pyinstaller build.spec
 ```
 
-产物在 `dist/PhysicsStudyOS.exe`。
+产物在 `dist/LearnOS.exe`。
 
 ## 技术栈
 

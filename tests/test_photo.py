@@ -60,7 +60,7 @@ class TestPhotoUpload(unittest.TestCase):
             f"http://127.0.0.1:{self.port}{path}",
             data=data,
             method=method,
-            headers={"Content-Type": "application/json", "X-Requested-With": "PhysicsStudyOS"},
+            headers={"Content-Type": "application/json", "X-Requested-With": "LearnOS"},
         )
         with urllib.request.urlopen(req, timeout=8) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
@@ -71,7 +71,7 @@ class TestPhotoUpload(unittest.TestCase):
             f"http://127.0.0.1:{self.port}{path}",
             data=data,
             method=method,
-            headers={"Content-Type": "application/json", "X-Requested-With": "PhysicsStudyOS"},
+            headers={"Content-Type": "application/json", "X-Requested-With": "LearnOS"},
         )
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             urllib.request.urlopen(req, timeout=8)
@@ -102,7 +102,7 @@ class TestPhotoUpload(unittest.TestCase):
 
     def test_media_traversal_rejected(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
-            urllib.request.urlopen(f"http://127.0.0.1:{self.port}/media/..%2F..%2Fphysics_study.db", timeout=8)
+            urllib.request.urlopen(f"http://127.0.0.1:{self.port}/media/..%2F..%2Flearnos.db", timeout=8)
         self.assertEqual(ctx.exception.code, 400)
 
     def test_extract_photo_degrades_without_vision(self):

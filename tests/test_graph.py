@@ -139,7 +139,7 @@ class TestGraphEndpoints(unittest.TestCase):
     def _req(self, method, path, body=None):
         conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
         data = json.dumps(body) if body else None
-        conn.request(method, path, data, {"Content-Type": "application/json", "X-Requested-With": "PhysicsStudyOS"})
+        conn.request(method, path, data, {"Content-Type": "application/json", "X-Requested-With": "LearnOS"})
         resp = conn.getresponse()
         result = json.loads(resp.read().decode("utf-8"))
         conn.close()

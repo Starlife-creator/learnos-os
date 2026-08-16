@@ -172,7 +172,7 @@ async function getHint(id, level) {
   const streamOnce = async () => {
     const r = await fetch(`/api/problems/${id}/hint`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'PhysicsStudyOS', 'Accept': 'text/event-stream' },
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'LearnOS', 'Accept': 'text/event-stream' },
       body: JSON.stringify({ level, lang: currentLang() }),
     });
     if (!r.ok) {

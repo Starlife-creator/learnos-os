@@ -37,7 +37,7 @@ from fsrs_bridge import next_interval_days
 # 跨站页无法设置自定义请求头（会触发预检而本服务不响应 OPTIONS），
 # 因此同源的 X-Requested-With 头即可作为写请求的合法来源证明。
 X_HEADER = "X-Requested-With"
-X_VALUE = "PhysicsStudyOS"
+X_VALUE = "LearnOS"
 
 # 写幂等：客户端携带 X-Request-Id，重复提交返回首次结果，杜绝重复建题。
 _IDEMPOTENCY: dict[str, tuple[int, dict[str, Any]]] = {}
@@ -85,7 +85,7 @@ def _prune_idempotency() -> None:
 
 
 class Handler(SimpleHTTPRequestHandler):
-    server_version = "PhysicsStudyOS/0.3.0"
+    server_version = "LearnOS/0.3.0"
 
     # 路由表：(正则模式, 处理方法名, 是否需要请求体)。路径数字组自动转 int 传入。
     # 保持声明顺序：互斥 fullmatch，先声明先命中。
@@ -1088,7 +1088,7 @@ class Handler(SimpleHTTPRequestHandler):
         self._text_response(
             body,
             "application/json",
-            f"physics-study-backup-{time.strftime('%Y%m%d-%H%M%S')}.json",
+            f"learnos-backup-{time.strftime('%Y%m%d-%H%M%S')}.json",
         )
 
     def _handle_backup_restore(self, data) -> None:
@@ -1144,7 +1144,7 @@ class Handler(SimpleHTTPRequestHandler):
             except json.JSONDecodeError:
                 pass
             writer.writerow([front, back, tags])
-        self._text_response("\ufeff" + buf.getvalue(), "text/csv; charset=utf-8", "physics_study_anki.csv")
+        self._text_response("\ufeff" + buf.getvalue(), "text/csv; charset=utf-8", "learnos_anki.csv")
 
     def _export_ics(self) -> None:
         """复习日程 .ics：未完成的 due 复习任务导出为 VEVENT。"""
@@ -1152,12 +1152,12 @@ class Handler(SimpleHTTPRequestHandler):
         lines = [
             "BEGIN:VCALENDAR",
             "VERSION:2.0",
-            "PRODID:-//PhysicsStudyOS//CN",
+            "PRODID:-//LearnOS//CN",
             "CALSCALE:GREGORIAN",
             "X-WR-CALNAME:物理复习日程",
         ]
         for r in due:
-            uid = f"pso-review-{r['id']}@physics-study-os"
+            uid = f"pso-review-{r['id']}@learnos-os"
             stamp = r["due_date"].replace("-", "") + "T090000"
             summary = f"复习：{r['title']}"
             lines += [
@@ -1169,7 +1169,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "END:VEVENT",
             ]
         lines.append("END:VCALENDAR")
-        self._text_response("\r\n".join(lines), "text/calendar; charset=utf-8", "physics_study_review.ics")
+        self._text_response("\r\n".join(lines), "text/calendar; charset=utf-8", "learnos_review.ics")
 
     def _handle_get_problem(self, problem_id: int) -> None:
         item = row("SELECT * FROM problems WHERE id = ?", (problem_id,))

@@ -244,7 +244,7 @@ async function testSettings() {
 
 // ── 数据导入 / 导出 ──
 function _downloadFromApi(path, filename) {
-  return fetch(path, { headers: { 'X-Requested-With': 'PhysicsStudyOS' } })
+  return fetch(path, { headers: { 'X-Requested-With': 'LearnOS' } })
     .then(r => { if (!r.ok) throw new Error(t('export.fail').replace('{s}', r.status)); return r.blob(); })
     .then(blob => {
       const url = URL.createObjectURL(blob);
@@ -256,14 +256,14 @@ function _downloadFromApi(path, filename) {
 
 async function exportAnki() {
   try {
-    await _downloadFromApi('/api/export?format=anki-csv', `physics_study_anki_${new Date().toISOString().slice(0, 10)}.csv`);
+    await _downloadFromApi('/api/export?format=anki-csv', `learnos_anki_${new Date().toISOString().slice(0, 10)}.csv`);
     toast(t('export.anki'));
   } catch(e) { toast(e.message, 'error'); }
 }
 
 async function exportIcs() {
   try {
-    await _downloadFromApi('/api/export?format=ics', `physics_study_review_${new Date().toISOString().slice(0, 10)}.ics`);
+    await _downloadFromApi('/api/export?format=ics', `learnos_review_${new Date().toISOString().slice(0, 10)}.ics`);
     toast(t('export.ics'));
   } catch(e) { toast(e.message, 'error'); }
 }
@@ -275,7 +275,7 @@ async function exportData() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `physics_study_${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `learnos_${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
     toast(t('export.data'));
@@ -285,7 +285,7 @@ async function exportData() {
 // ── 一键备份 / 还原（全库 JSON）──
 async function exportBackup() {
   try {
-    await _downloadFromApi('/api/export/backup', `physics-study-backup-${new Date().toISOString().slice(0, 10)}.json`);
+    await _downloadFromApi('/api/export/backup', `learnos-backup-${new Date().toISOString().slice(0, 10)}.json`);
     toast(t('export.backup'));
   } catch(e) { toast(e.message, 'error'); }
 }

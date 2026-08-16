@@ -382,7 +382,7 @@ def settings_dict(include_secret: bool = False) -> dict[str, str]:
     import os
     data = {item["key"]: item["value"] for item in rows("SELECT key, value FROM settings")}
     data.pop("api_key", None)  # R4：DB 中永不存放密钥明文
-    env_key = os.environ.get("PHYSICS_OS_API_KEY", "")
+    env_key = os.environ.get("LEARNOS_API_KEY", "")
     if env_key:
         data["api_key"] = env_key
         data["key_source"] = "environment"

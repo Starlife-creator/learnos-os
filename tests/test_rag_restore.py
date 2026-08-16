@@ -59,7 +59,7 @@ class RagRestoreTest(unittest.TestCase):
 
     def _post(self, port, path):
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        headers = {"Content-Type": "application/json", "X-Requested-With": "PhysicsStudyOS"}
+        headers = {"Content-Type": "application/json", "X-Requested-With": "LearnOS"}
         conn.request("POST", path, body="{}", headers=headers)
         resp = conn.getresponse()
         data = json.loads(resp.read().decode("utf-8"))

@@ -2,10 +2,10 @@
 setlocal
 chcp 65001 >nul 2>&1
 cd /d "%~dp0"
-title Physics Study OS - Launcher
+title LearnOS - Launcher
 
 echo ============================================
-echo   Physics Study OS - One-Click Launcher
+echo   LearnOS - One-Click Launcher
 echo ============================================
 echo.
 
@@ -63,12 +63,12 @@ powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath 'pyt
 ping -n 4 127.0.0.1 >nul
 python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8765/', timeout=3).status==200 else 1)" >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [ERROR] Server did not respond. Check logs: physics_study.log
+    echo [ERROR] Server did not respond. Check logs: learnos.log
     echo.
     pause
     exit /b 1
 )
-echo Server is running. Logs: physics_study.log
+echo Server is running. Logs: learnos.log
 echo To stop it, run stop.bat
 echo.
 ping -n 2 127.0.0.1 >nul

@@ -107,7 +107,7 @@ class TestSettingsDict(unittest.TestCase):
         cls._tmp.cleanup()
         db.DB_PATH = cls._orig_db
         config.DB_PATH = cls._orig_db
-        os.environ.pop("PHYSICS_OS_API_KEY", None)
+        os.environ.pop("LEARNOS_API_KEY", None)
 
     def test_secret_masked_by_default(self):
         # D1（R4）：DB 中写入 api_key 会被无视——密钥不落库。
@@ -126,14 +126,14 @@ class TestSettingsDict(unittest.TestCase):
         self.assertEqual(s["key_source"], "none")
 
     def test_env_key_overrides(self):
-        os.environ["PHYSICS_OS_API_KEY"] = "sk-from-env"
+        os.environ["LEARNOS_API_KEY"] = "sk-from-env"
         s = db.settings_dict(include_secret=True)
         self.assertEqual(s["api_key"], "sk-from-env")
         self.assertEqual(s["key_source"], "environment")
-        os.environ.pop("PHYSICS_OS_API_KEY", None)
+        os.environ.pop("LEARNOS_API_KEY", None)
 
     def test_no_key_returns_empty(self):
-        os.environ.pop("PHYSICS_OS_API_KEY", None)
+        os.environ.pop("LEARNOS_API_KEY", None)
         s = db.settings_dict()
         self.assertFalse(s["has_api_key"])
         self.assertEqual(s["api_key"], "")
