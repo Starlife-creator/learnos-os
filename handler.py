@@ -87,6 +87,79 @@ def _prune_idempotency() -> None:
 class Handler(SimpleHTTPRequestHandler):
     server_version = "PhysicsStudyOS/0.3.0"
 
+    # 路由表：(正则模式, 处理方法名, 是否需要请求体)。路径数字组自动转 int 传入。
+    # 保持声明顺序：互斥 fullmatch，先声明先命中。
+    GET_ROUTES: list[tuple[str, str]] = [
+        (r"/api/dashboard", "_handle_dashboard"),
+        (r"/api/problems", "_handle_list_problems"),
+        (r"/api/problems/(\d+)/history", "_handle_problem_history"),
+        (r"/api/problems/(\d+)/related", "_handle_related_problems"),
+        (r"/api/problems/duplicates", "_handle_duplicates"),
+        (r"/api/problems/(\d+)", "_handle_get_problem"),
+        (r"/api/fsrs/train", "_handle_fsrs_train"),
+        (r"/api/fsrs/reset", "_handle_fsrs_reset"),
+        (r"/api/fsrs/status", "_handle_fsrs_status"),
+        (r"/api/gamification", "_handle_gamification"),
+        (r"/api/report/weekly", "_handle_weekly_report"),
+        (r"/api/report/monthly", "_handle_monthly_report"),
+        (r"/api/reviews", "_handle_list_reviews"),
+        (r"/api/reviews/summary/today", "_handle_today_summary"),
+        (r"/api/settings", "_handle_settings"),
+        (r"/api/trend", "_handle_trend"),
+        (r"/api/analytics", "_handle_analytics"),
+        (r"/api/profile", "_handle_profile"),
+        (r"/api/graph/concepts", "_handle_graph"),
+        (r"/api/graph/problems", "_handle_graph_problems"),
+        (r"/api/feynman/(\d+)/self-review", "_handle_feynman_self_review_get"),
+        (r"/api/oral/(\d+)", "_handle_get_oral"),
+        (r"/api/export", "_handle_export"),
+        (r"/api/export/backup", "_handle_backup_export"),
+        (r"/api/ocr/probe", "_handle_ocr_probe"),
+        (r"/api/health", "_handle_health"),
+        (r"/api/models/probe", "_handle_models_probe"),
+        (r"/api/rag/docs", "_handle_rag_docs"),
+        (r"/api/rag/search", "_handle_rag_search"),
+        (r"/api/rag/open", "_handle_rag_open"),
+        (r"/api/exam/papers", "_handle_exam_papers"),
+        (r"/api/exam/papers/(\d+)", "_handle_exam_paper"),
+        (r"/api/bank", "_handle_bank"),
+        (r"/api/bank/units", "_handle_bank_units"),
+        (r"/api/bank/stats", "_handle_bank_stats"),
+    ]
+
+    POST_ROUTES: list[tuple[str, str, bool]] = [
+        (r"/api/problems", "_handle_create_problem", True),
+        (r"/api/problems/(\d+)/hint", "_handle_hint", True),
+        (r"/api/problems/(\d+)/variants/generate", "_handle_generate_variants", False),
+        (r"/api/problems/(\d+)/variants", "_handle_save_variants", True),
+        (r"/api/problems/batch", "_handle_batch", True),
+        (r"/api/reviews/(\d+)/complete", "_handle_complete_review", True),
+        (r"/api/oral/(\d+)/end", "_handle_oral_end", False),
+        (r"/api/oral/(\d+)/draft-card", "_handle_oral_draft_card", False),
+        (r"/api/oral/start", "_handle_oral_start", True),
+        (r"/api/oral/respond", "_handle_oral_respond", True),
+        (r"/api/feynman/(\d+)/self-review", "_handle_feynman_self_review", True),
+        (r"/api/feynman/start", "_handle_feynman_start", True),
+        (r"/api/upload/photo", "_handle_upload_photo", True),
+        (r"/api/ai/extract-photo", "_handle_extract_photo", True),
+        (r"/api/ai/extract-tags", "_handle_extract_tags", True),
+        (r"/api/rag/ingest", "_handle_rag_ingest", True),
+        (r"/api/rag/doc/(\d+)/restore", "_handle_rag_restore", False),
+        (r"/api/exam/papers/(\d+)/questions", "_handle_exam_add_questions", True),
+        (r"/api/exam/papers", "_handle_exam_create", True),
+        (r"/api/graph/concepts", "_handle_graph_add", True),
+        (r"/api/ocr/extract", "_handle_ocr_extract", True),
+        (r"/api/import", "_handle_import", True),
+        (r"/api/import/restore", "_handle_backup_restore", True),
+        (r"/api/settings/test", "_handle_settings_test", True),
+        (r"/api/fsrs/train", "_handle_fsrs_train", False),
+        (r"/api/fsrs/retention", "_handle_fsrs_retention", True),
+        (r"/api/keystore/unlock", "_handle_keystore_unlock", True),
+        (r"/api/keystore/clear", "_handle_keystore_clear", True),
+        (r"/api/bank/attempt", "_handle_bank_attempt", True),
+        (r"/api/bank/import", "_handle_bank_import", True),
+    ]
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
 
@@ -134,138 +207,12 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         try:
-            if path == "/api/dashboard":
-                self._handle_dashboard()
-                return
-            if path == "/api/problems":
-                self._handle_list_problems()
-                return
-            match = re.fullmatch(r"/api/problems/(\d+)", path)
-            if match:
-                self._handle_get_problem(int(match.group(1)))
-                return
-            match = re.fullmatch(r"/api/problems/(\d+)/history", path)
-            if match:
-                self._handle_problem_history(int(match.group(1)))
-                return
-            match = re.fullmatch(r"/api/problems/(\d+)/related", path)
-            if match:
-                self._handle_related_problems(int(match.group(1)))
-                return
-            if path == "/api/problems/duplicates":
-                self._handle_duplicates()
-                return
-            if path == "/api/fsrs/train":
-                self._handle_fsrs_train()
-                return
-            if path == "/api/fsrs/reset":
-                self.json_response({"ok": fsrs_bridge.reset_parameters()})
-                return
-            if path == "/api/fsrs/status":
-                self.json_response(fsrs_bridge.fsrs_status())
-                return
-            if path == "/api/gamification":
-                from gamification import state as game_state
-                self.json_response(game_state())
-                return
-            if path == "/api/report/weekly":
-                self._handle_weekly_report()
-                return
-            if path == "/api/report/monthly":
-                self._handle_monthly_report()
-                return
-            if path == "/api/reviews":
-                self._handle_list_reviews()
-                return
-            if path == "/api/reviews/summary/today":
-                self._handle_today_summary()
-                return
-            if path == "/api/settings":
-                self.json_response(display_settings())
-                return
-            if path == "/api/trend":
-                self._handle_trend()
-                return
-            if path == "/api/analytics":
-                self._handle_analytics()
-                return
-            if path == "/api/profile":
-                from profile import aggregate
-                self.json_response(aggregate())
-                return
-            if path == "/api/graph/concepts":
-                self._handle_graph()
-                return
-            if path == "/api/graph/problems":
-                self._handle_graph_problems()
-                return
-            match = re.fullmatch(r"/api/feynman/(\d+)/self-review", path)
-            if match:
-                self._handle_feynman_self_review_get(int(match.group(1)))
-                return
-            match = re.fullmatch(r"/api/oral/(\d+)", path)
-            if match:
-                self._handle_get_oral(int(match.group(1)))
-                return
-            if path == "/api/export":
-                self._handle_export()
-                return
-            if path == "/api/export/backup":
-                self._handle_backup_export()
-                return
-            if path == "/api/ocr/probe":
-                import ocr
-                self.json_response({"ok": True, **ocr.probe()})
-                return
-            if path == "/api/health":
-                self.json_response({"ok": True, "version": "0.3.0"})
-                return
-            if path == "/api/models/probe":
-                from ai import probe_ollama
-                self.json_response({"ollama": probe_ollama()})
-                return
-            if path == "/api/rag/docs":
-                import rag
-                self.json_response({"items": rag.list_docs()})
-                return
-            if path == "/api/rag/search":
-                self._handle_rag_search()
-                return
-            if path == "/api/rag/open":
-                self._handle_rag_open()
-                return
-            if path == "/api/exam/papers":
-                import exam
-                self.json_response(exam.overall_readiness())
-                return
-            if path == "/api/bank":
-                import bank
-                qs = parse_qs(urlparse(self.path).query)
-                self.json_response({
-                    "items": bank.list_questions(
-                        unit=qs.get("unit", [""])[0],
-                        status=qs.get("status", ["all"])[0],
-                        q=qs.get("q", [""])[0],
-                    ),
-                    "stats": bank.stats(),
-                })
-                return
-            if path == "/api/bank/units":
-                import bank
-                self.json_response({"units": bank.units()})
-                return
-            if path == "/api/bank/stats":
-                import bank
-                self.json_response(bank.stats())
-                return
-            match = re.fullmatch(r"/api/exam/papers/(\d+)", path)
-            if match:
-                import exam
-                data = exam.paper_readiness(int(match.group(1)))
-                if not data:
-                    self.json_response({"error": "试卷不存在"}, 404)
-                    return
-                self.json_response(data)
+            for pattern, method in Handler.GET_ROUTES:
+                match = re.fullmatch(pattern, path)
+                if not match:
+                    continue
+                args = tuple(int(g) for g in match.groups())
+                getattr(self, method)(*args)
                 return
             if path.startswith("/media/"):
                 self._serve_media(path)
@@ -273,6 +220,72 @@ class Handler(SimpleHTTPRequestHandler):
             super().do_GET()
         except Exception as exc:
             self._safe_error(exc)
+
+    # ── GET 轻量端点（原内联分支，统一为方法以便路由表分发）──
+
+    def _handle_fsrs_reset(self) -> None:
+        self.json_response({"ok": fsrs_bridge.reset_parameters()})
+
+    def _handle_fsrs_status(self) -> None:
+        self.json_response(fsrs_bridge.fsrs_status())
+
+    def _handle_gamification(self) -> None:
+        from gamification import state as game_state
+        self.json_response(game_state())
+
+    def _handle_settings(self) -> None:
+        self.json_response(display_settings())
+
+    def _handle_profile(self) -> None:
+        from profile import aggregate
+        self.json_response(aggregate())
+
+    def _handle_ocr_probe(self) -> None:
+        import ocr
+        self.json_response({"ok": True, **ocr.probe()})
+
+    def _handle_health(self) -> None:
+        self.json_response({"ok": True, "version": "0.3.0"})
+
+    def _handle_models_probe(self) -> None:
+        from ai import probe_ollama
+        self.json_response({"ollama": probe_ollama()})
+
+    def _handle_rag_docs(self) -> None:
+        import rag
+        self.json_response({"items": rag.list_docs()})
+
+    def _handle_exam_papers(self) -> None:
+        import exam
+        self.json_response(exam.overall_readiness())
+
+    def _handle_exam_paper(self, paper_id: int) -> None:
+        import exam
+        data = exam.paper_readiness(paper_id)
+        if not data:
+            self.json_response({"error": "试卷不存在"}, 404)
+            return
+        self.json_response(data)
+
+    def _handle_bank(self) -> None:
+        import bank
+        qs = parse_qs(urlparse(self.path).query)
+        self.json_response({
+            "items": bank.list_questions(
+                unit=qs.get("unit", [""])[0],
+                status=qs.get("status", ["all"])[0],
+                q=qs.get("q", [""])[0],
+            ),
+            "stats": bank.stats(),
+        })
+
+    def _handle_bank_units(self) -> None:
+        import bank
+        self.json_response({"units": bank.units()})
+
+    def _handle_bank_stats(self) -> None:
+        import bank
+        self.json_response(bank.stats())
 
     def _handle_list_reviews(self) -> None:
         """复习队列。默认同知识点隔开（P0 交错），?mode=plain 关闭（A7 遗留参数保留）。"""
@@ -1220,138 +1233,78 @@ class Handler(SimpleHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             data = self.read_json()
-            if path == "/api/problems":
-                self._handle_create_problem(data)
-                return
-            if path == "/api/bank/attempt":
-                try:
-                    import bank
-                    result = bank.judge(str(data.get("qid", "")), data.get("answer"))
-                except ValueError as exc:
-                    self.json_response({"error": str(exc)}, 400)
-                    return
-                self.json_response(result)
-                return
-            if path == "/api/bank/import":
-                try:
-                    import bank
-                    result = bank.import_questions(data.get("questions"))
-                except ValueError as exc:
-                    self.json_response({"error": str(exc)}, 400)
-                    return
-                self.json_response(result)
-                return
-            match = re.fullmatch(r"/api/problems/(\d+)/hint", path)
-            if match:
-                self._handle_hint(int(match.group(1)), data)
-                return
-            match = re.fullmatch(r"/api/problems/(\d+)/variants/generate", path)
-            if match:
-                self._handle_generate_variants(int(match.group(1)))
-                return
-            match = re.fullmatch(r"/api/problems/(\d+)/variants", path)
-            if match:
-                self._handle_save_variants(int(match.group(1)), data)
-                return
-            match = re.fullmatch(r"/api/reviews/(\d+)/complete", path)
-            if match:
-                self._handle_complete_review(int(match.group(1)), data)
-                return
-            match = re.fullmatch(r"/api/oral/(\d+)/end", path)
-            if match:
-                self._handle_oral_end(int(match.group(1)))
-                return
-            match = re.fullmatch(r"/api/oral/(\d+)/draft-card", path)
-            if match:
-                self._handle_oral_draft_card(int(match.group(1)))
-                return
-            match = re.fullmatch(r"/api/feynman/(\d+)/self-review", path)
-            if match:
-                self._handle_feynman_self_review(int(match.group(1)), data)
-                return
-            if path == "/api/feynman/start":
-                self._handle_feynman_start(data)
-                return
-            if path == "/api/upload/photo":
-                self._handle_upload_photo(data)
-                return
-            if path == "/api/ai/extract-photo":
-                self._handle_extract_photo(data)
-                return
-            if path == "/api/rag/ingest":
-                self._handle_rag_ingest(data)
-                return
-            if path == "/api/exam/papers":
-                import exam
-                name = str(data.get("name", "")).strip()
-                if not name:
-                    self.json_response({"error": "试卷名称不能为空"}, 400)
-                    return
-                pid = exam.create_paper(name, str(data.get("exam_date", "")).strip(),
-                                        float(data.get("target", 80) or 80))
-                self.json_response({"id": pid}, 201)
-                return
-            match = re.fullmatch(r"/api/exam/papers/(\d+)/questions", path)
-            if match:
-                import exam
-                paper_id = int(match.group(1))
-                if not row("SELECT 1 FROM exam_papers WHERE id = ?", (paper_id,)):
-                    self.json_response({"error": "试卷不存在"}, 404)
-                    return
-                count = exam.add_questions(paper_id, data.get("questions") or [])
-                self.json_response({"added": count}, 201)
-                return
-            if path == "/api/graph/concepts":
-                self._handle_graph_add(data)
-                return
-            if path == "/api/ocr/extract":
-                self._handle_ocr_extract(data)
-                return
-            if path == "/api/oral/start":
-                self._handle_oral_start(data)
-                return
-            if path == "/api/oral/respond":
-                self._handle_oral_respond(data)
-                return
-            if path == "/api/import":
-                self._handle_import(data)
-                return
-            if path == "/api/import/restore":
-                self._handle_backup_restore(data)
-                return
-            if path == "/api/ai/extract-tags":
-                self._handle_extract_tags(data)
-                return
-            if path == "/api/problems/batch":
-                self._handle_batch(data)
-                return
-            if path == "/api/settings/test":
-                reply = call_ai([
-                    {"role": "system", "content": "只回答：连接成功"},
-                    {"role": "user", "content": "测试连接"},
-                ], max_tokens=20, route="test")
-                self.json_response({"ok": True, "reply": reply})
-                return
-            if path == "/api/fsrs/train":
-                self._handle_fsrs_train()
-                return
-            if path == "/api/fsrs/retention":
-                ok = fsrs_bridge.set_desired_retention(data.get("value", 0))
-                self.json_response({"ok": ok})
-                return
-            if path == "/api/keystore/unlock":
-                from ai import unlock_keyfile
-                ok = unlock_keyfile(data.get("master_password", ""))
-                self.json_response({"ok": ok, **display_settings()})
-                return
-            if path == "/api/keystore/clear":
-                from ai import clear_session_key
-                clear_session_key()
-                self.json_response({"ok": True, **display_settings()})
+            for pattern, method, needs_data in Handler.POST_ROUTES:
+                match = re.fullmatch(pattern, path)
+                if not match:
+                    continue
+                args = tuple(int(g) for g in match.groups())
+                if needs_data:
+                    getattr(self, method)(*args, data)
+                else:
+                    getattr(self, method)(*args)
                 return
             self.json_response({"error": "接口不存在"}, 404)
         except Exception as exc:
             self._safe_error(exc)
+
+    # ── POST 轻量端点（原内联分支，统一为方法以便路由表分发）──
+
+    def _handle_bank_attempt(self, data: dict[str, Any]) -> None:
+        try:
+            import bank
+            result = bank.judge(str(data.get("qid", "")), data.get("answer"))
+        except ValueError as exc:
+            self.json_response({"error": str(exc)}, 400)
+            return
+        self.json_response(result)
+
+    def _handle_bank_import(self, data: dict[str, Any]) -> None:
+        try:
+            import bank
+            result = bank.import_questions(data.get("questions"))
+        except ValueError as exc:
+            self.json_response({"error": str(exc)}, 400)
+            return
+        self.json_response(result)
+
+    def _handle_exam_create(self, data: dict[str, Any]) -> None:
+        import exam
+        name = str(data.get("name", "")).strip()
+        if not name:
+            self.json_response({"error": "试卷名称不能为空"}, 400)
+            return
+        pid = exam.create_paper(name, str(data.get("exam_date", "")).strip(),
+                                float(data.get("target", 80) or 80))
+        self.json_response({"id": pid}, 201)
+
+    def _handle_exam_add_questions(self, paper_id: int, data: dict[str, Any]) -> None:
+        import exam
+        if not row("SELECT 1 FROM exam_papers WHERE id = ?", (paper_id,)):
+            self.json_response({"error": "试卷不存在"}, 404)
+            return
+        count = exam.add_questions(paper_id, data.get("questions") or [])
+        self.json_response({"added": count}, 201)
+
+    def _handle_settings_test(self, data: dict[str, Any]) -> None:
+        reply = call_ai([
+            {"role": "system", "content": "只回答：连接成功"},
+            {"role": "user", "content": "测试连接"},
+        ], max_tokens=20, route="test")
+        self.json_response({"ok": True, "reply": reply})
+
+    def _handle_fsrs_retention(self, data: dict[str, Any]) -> None:
+        ok = fsrs_bridge.set_desired_retention(data.get("value", 0))
+        self.json_response({"ok": ok})
+
+    def _handle_keystore_unlock(self, data: dict[str, Any]) -> None:
+        from ai import unlock_keyfile
+        ok = unlock_keyfile(data.get("master_password", ""))
+        self.json_response({"ok": ok, **display_settings()})
+
+    def _handle_keystore_clear(self, data: dict[str, Any]) -> None:
+        from ai import clear_session_key
+        clear_session_key()
+        self.json_response({"ok": True, **display_settings()})
 
     def _handle_create_problem(self, data: dict[str, Any]) -> None:
         rid = self.headers.get("X-Request-Id")
@@ -1775,6 +1728,14 @@ class Handler(SimpleHTTPRequestHandler):
             # 未配置 vision 模型：图片仅作附件 + 手动录入（方案降级路径）
             LOG.warning("视觉识别不可用，降级为附件模式: %s", exc)
             self.json_response({"draft": None, "degraded": True, "error": str(exc)})
+
+    def _handle_rag_restore(self, doc_id: int) -> None:
+        """撤销误删：恢复已删除的文档（内存快照）。"""
+        import rag
+        if not rag.restore_doc(doc_id):
+            self.json_response({"error": "恢复失败（已过期或存在冲突）"}, 400)
+            return
+        self.json_response({"ok": True})
 
     def _handle_rag_ingest(self, data: dict[str, Any]) -> None:
         """B3：摄取工作区内教材/课件/笔记（文件或目录）。"""

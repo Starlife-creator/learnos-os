@@ -664,5 +664,11 @@
   "report.tipWeekLow": "本周记忆保持率不足 70%。建议放慢节奏：把错题按知识点分组，每天只复习 1 个薄弱知识点。",
   "report.tipMonthNone": "近 30 天暂无复习记录。建议先完成今日到期任务，从薄弱知识点小步开始。",
   "report.tipMonthGood": "近 30 天保持稳定投入。建议把错因分布的前 2 类各做 1 次「错因专项」变式。",
-  "report.tipMonthLow": "近 30 天保持率不足 70%。建议减少每日新增题量，专注把薄弱错因重做一遍。"
+  "report.tipMonthLow": "近 30 天保持率不足 70%。建议减少每日新增题量，专注把薄弱错因重做一遍。",
+  "nav.more": "更多 ▾",
+  "card.today": "今日行动",
+  "today.reviewDue": "今日应复习 {n} 题",
+  "today.wrongbook": "错题簿共 {n} 题",
+  "today.bank": "去题库练习",
+  "rag.restored": "已恢复文档"
 }

@@ -664,5 +664,11 @@
   "report.tipWeekLow": "Retention this week is below 70%. Slow down: group problems by knowledge point and review only 1 weak point per day.",
   "report.tipMonthNone": "No reviews in the last 30 days. Start with today's due tasks, taking small steps from weak points.",
   "report.tipMonthGood": "Steady input over the last 30 days. Try one \"error-type drill\" variant for each of your top 2 error categories.",
-  "report.tipMonthLow": "Retention over the last 30 days is below 70%. Reduce new problems per day and redo the weak error categories."
+  "report.tipMonthLow": "Retention over the last 30 days is below 70%. Reduce new problems per day and redo the weak error categories.",
+  "nav.more": "More ▾",
+  "card.today": "Today Actions",
+  "today.reviewDue": "Review {n} due today",
+  "today.wrongbook": "Wrong book: {n} problems",
+  "today.bank": "Practice in bank",
+  "rag.restored": "Document restored"
 }

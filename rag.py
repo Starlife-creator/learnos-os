@@ -196,11 +196,45 @@ def list_docs() -> list[dict[str, Any]]:
     return rows("SELECT * FROM rag_docs ORDER BY ingested_at DESC")
 
 
+_UNDO: dict[int, dict[str, Any]] = {}
+"""删除快照：doc_id -> {doc, chunks}，供前端撤销误删（内存态，进程内有效）。"""
+
+
 def delete_doc(doc_id: int) -> bool:
     with DB_LOCK, db() as conn:
+        doc = row("SELECT * FROM rag_docs WHERE id = ?", (doc_id,))
+        if doc is None:
+            return False
+        chunks = rows("SELECT chunk_index, page, content FROM rag_chunks WHERE doc_id = ? ORDER BY chunk_index", (doc_id,))
+        conn.execute("DELETE FROM rag_chunks WHERE doc_id = ?", (doc_id,))
         cur = conn.execute("DELETE FROM rag_docs WHERE id = ?", (doc_id,))
         _invalidate_bm25()
+        if cur.rowcount > 0:
+            _UNDO[doc_id] = {"doc": doc, "chunks": chunks}
         return cur.rowcount > 0
+
+
+def restore_doc(doc_id: int) -> bool:
+    """撤销删除：恢复 rag_docs + rag_chunks（同 id）。"""
+    snap = _UNDO.pop(doc_id, None)
+    if not snap:
+        return False
+    doc = snap["doc"]
+    with DB_LOCK, db() as conn:
+        try:
+            conn.execute(
+                "INSERT INTO rag_docs(id, source_path, file_type, pages, chunk_count, ingested_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (doc["id"], doc["source_path"], doc["file_type"], doc["pages"], doc["chunk_count"], doc["ingested_at"]),
+            )
+        except Exception:
+            return False
+        conn.executemany(
+            "INSERT INTO rag_chunks(doc_id, chunk_index, page, content) VALUES (?, ?, ?, ?)",
+            [(doc_id, c["chunk_index"], c["page"], c["content"]) for c in snap["chunks"]],
+        )
+        _sync_fts(conn, doc_id)
+        _invalidate_bm25()
+        return True
 
 
 _BM25_CACHE: dict[str, Any] = {"docs": None}
