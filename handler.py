@@ -635,11 +635,15 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         self.json_response({"added": count}, 201)
 
     def _handle_settings_test(self, data: dict[str, Any]) -> None:
-        reply = call_ai([
-            {"role": "system", "content": "只回答：连接成功"},
-            {"role": "user", "content": "测试连接"},
-        ], max_tokens=20, route="test")
-        self.json_response({"ok": True, "reply": reply})
+        try:
+            reply = call_ai([
+                {"role": "system", "content": "只回答：连接成功"},
+                {"role": "user", "content": "测试连接"},
+            ], max_tokens=20, route="test")
+            self.json_response({"ok": True, "reply": reply})
+        except Exception as exc:
+            # reasoner 模型/AI 异常时给出可读错误而非 500 崩溃
+            self.json_response({"ok": False, "error": str(exc)}, 200)
 
     def _handle_fsrs_optimal(self) -> None:
         """CMRR 式最优保持率估算：基于本学科卡量与平均稳定度的解析模拟。"""

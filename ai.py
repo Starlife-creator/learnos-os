@@ -382,6 +382,8 @@ def call_ai_stream(
 
     def _chunks():
         usage_seen: dict[str, Any] = {}
+        saw_content = False
+        piece: dict[str, Any] = {}
         try:
             for raw in response:
                 line = raw.decode("utf-8", errors="replace").strip()
@@ -402,7 +404,13 @@ def call_ai_stream(
                         pass
                     delta = ""
                 if delta:
+                    saw_content = True
                     yield delta
+            # reasoner 模型整段只有推理、无正文 → 明确报错（调用方降级），不返回空白
+            if not saw_content:
+                raise RuntimeError(
+                    "AI 流式仅返回了推理内容、未生成最终答案（reasoning_content 非空而 "
+                    "content 为空）。建议：使用非推理模型，或在配置中提高 max_tokens。")
             record(route=route, model=model, ok=True, start=start,
                    tokens=int(usage_seen.get("total_tokens") or 0),
                    cached=_cached_tokens(usage_seen))
@@ -1171,12 +1179,22 @@ _ai_available: bool | None = None
 
 
 def ai_configured() -> bool:
-    """AI 是否可用（有 key 或密钥文件）。结果缓存，可被 invalidate_settings_cache 重置。"""
+    """AI 是否真正可用（能拿到有效密钥或本地端点），而非只看密钥文件是否存在。
+
+    修复：keys.enc 存在但未解锁（口令未设置/错误）时，旧实现仍返回 True，
+    导致 UI 显示 AI 可用而实际请求 401/失败、提取报"JSON 解析失败"误导用户。
+    现在改为检查合并后的设置是否含非空 api_key（或本地 Ollama 等允许无钥端点）。
+    """
     try:
-        from keystore import key_file_exists
+        s = get_cached_settings()
+        key = (s.get("api_key") or "").strip()
+        if key:
+            return True
+        base = (s.get("api_base") or "").strip()
+        # 本地端点（Ollama 等）允许空密钥
+        return bool(base) and is_local_endpoint(base)
     except Exception:
-        key_file_exists = lambda: False  # type: ignore[assignment]
-    return bool(_runtime_key or key_file_exists())
+        return bool(_runtime_key)
 
 
 def review_bank_question(question: dict[str, Any], subject: str = "") -> dict[str, Any]:

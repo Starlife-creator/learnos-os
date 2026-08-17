@@ -166,5 +166,61 @@ class TestCompositeShortStemImport(unittest.TestCase):
         self.assertEqual(res["errors"], [])
 
 
+class TestAiConfigured(unittest.TestCase):
+    """ai_configured 判断修正：文件存在 ≠ 已解锁可用。"""
+
+    def tearDown(self):
+        ai.set_runtime_key(None)
+        ai.set_master_password(None)
+        ai.invalidate_settings_cache()
+        try:
+            ai.ai_configured = ai.ai_configured  # 恢复（若被 mock 覆盖）
+        except Exception:
+            pass
+
+    def _reset(self):
+        ai.set_runtime_key(None)
+        ai.set_master_password(None)
+        ai.invalidate_settings_cache()
+
+    def test_no_key_file_no_local_endpoint_false(self):
+        # 无 runtime key、无 master password（且本地无 keys.enc 或未解锁）→ False
+        self._reset()
+        import keystore
+        orig_exists = keystore.key_file_exists
+        keystore.key_file_exists = lambda: False
+        try:
+            self.assertFalse(ai.ai_configured())
+        finally:
+            keystore.key_file_exists = orig_exists
+
+    def test_runtime_key_true(self):
+        self._reset()
+        ai.set_runtime_key("sk-test-123")
+        self.assertTrue(ai.ai_configured())
+
+    def test_local_endpoint_allows_empty_key(self):
+        # 本地 Ollama 端点允许空 key → 仍算可用
+        self._reset()
+        import ai as ai_mod
+        orig = ai_mod.get_cached_settings
+        ai_mod.get_cached_settings = lambda: {"api_base": "http://127.0.0.1:11434", "api_key": ""}
+        try:
+            self.assertTrue(ai.ai_configured())
+        finally:
+            ai_mod.get_cached_settings = orig
+
+    def test_locked_keyfile_without_password_false(self):
+        # keys.enc 存在但未解锁（无主口令）→ 旧实现误判 True，新实现应为 False
+        self._reset()
+        import keystore
+        orig_exists = keystore.key_file_exists
+        keystore.key_file_exists = lambda: True
+        try:
+            self.assertFalse(ai.ai_configured())
+        finally:
+            keystore.key_file_exists = orig_exists
+
+
 if __name__ == "__main__":
     unittest.main()
