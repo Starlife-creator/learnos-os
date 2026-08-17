@@ -226,21 +226,35 @@ def analyze(text: str, subject: str, targets: list[str],
     draft: dict[str, Any] = {}
     warnings: list[str] = []
     source = "ai"
+    # 逐批容错：单批 AI 失败仅跳过该批（记录 warning），不整体降级；
+    # 仅当某目标的所有批都失败时才对其回退启发式（仅 concepts 支持）。
+    ok_counts = {t: 0 for t in targets}
     try:
         for target in targets:
             if target == "concepts":
                 acc: dict[str, Any] = {"chapters": [], "concepts": []}
                 for b in batches:
-                    part = _clean_concepts(b)
-                    if part:
-                        _merge_concepts(acc, part)
+                    try:
+                        part = _clean_concepts(b)
+                        if part:
+                            ok_counts[target] += 1
+                            _merge_concepts(acc, part)
+                    except (ValueError, SchemaError) as exc:
+                        warnings.append(f"概念提取某批失败已跳过（{exc}）")
                     _tick("concepts")
                 draft["concepts"] = acc
             elif target == "questions":
                 qs: list[dict[str, Any]] = []
                 seen_stem: set[str] = set()
                 for b in batches:
-                    part = _clean_questions(b)
+                    try:
+                        part = _clean_questions(b)
+                    except (ValueError, SchemaError) as exc:
+                        warnings.append(f"例题提取某批失败已跳过（{exc}）")
+                        _tick("questions")
+                        continue
+                    if part:
+                        ok_counts[target] += 1
                     for q in part or []:
                         stem = str(q["stem"]).strip()
                         if stem in seen_stem:
@@ -260,10 +274,16 @@ def analyze(text: str, subject: str, targets: list[str],
             else:  # paper
                 paper: dict[str, Any] | None = None
                 for i, b in enumerate(batches):
-                    part = _clean_paper(b, first=(from_batch + i == 0 and paper is None))
+                    try:
+                        part = _clean_paper(b, first=(from_batch + i == 0 and paper is None))
+                    except (ValueError, SchemaError) as exc:
+                        warnings.append(f"试卷识别某批失败已跳过（{exc}）")
+                        _tick("paper")
+                        continue
                     if not part:
                         _tick("paper")
                         continue
+                    ok_counts[target] += 1
                     if paper is None:
                         paper = {"name": str(part.get("name", "")).strip()[:60] or "导入试卷",
                                  "questions": []}
@@ -278,6 +298,12 @@ def analyze(text: str, subject: str, targets: list[str],
         draft = {"concepts": _heuristic_concepts("\n".join(batches))}
         source = "heuristic"
         warnings.append(f"AI 提取不可用（{exc}），已按标题层级降级提取概念；例题/试卷提取需配置 AI。")
+    # concepts 目标全部批失败 → 回退启发式，保证有产出
+    if source == "ai" and "concepts" in targets and ok_counts["concepts"] == 0:
+        LOG.warning("概念提取全部批失败，降级为标题启发式")
+        draft["concepts"] = _heuristic_concepts("\n".join(batches))
+        source = "heuristic"
+        warnings.append("概念 AI 提取全部失败，已按标题层级降级提取概念。")
     ai_calls = 0 if source == "heuristic" else done_calls
     return {"draft": draft, "source": source, "from_batch": from_batch,
             "to_batch": end, "batches_total": len(batches_all), "batches": len(batches),

@@ -76,9 +76,12 @@ class TestMaterialUnit(unittest.TestCase):
         self.assertEqual(result["draft"]["concepts"]["chapters"][0]["name"], "力学")
 
     def test_analyze_fails_for_questions_without_ai(self):
+        # 未配置 AI + questions 目标（无启发式兜底）→ 逐批失败不 raise，返回空 + warning
         with mock.patch("ai.call_ai", side_effect=ValueError("not configured")):
-            with self.assertRaises(ValueError):
-                material.analyze(_MD, "physics", ["questions"])
+            result = material.analyze(_MD, "physics", ["questions"])
+        self.assertEqual(result["source"], "ai")
+        self.assertEqual(result["draft"]["questions"], [])
+        self.assertTrue(result["warnings"])
 
     def test_analyze_ai_concepts_and_questions(self):
         ai_concepts = json.dumps({
@@ -122,11 +125,41 @@ class TestMaterialUnit(unittest.TestCase):
         self.assertEqual(calls["n"], result["batches"])
 
     def test_analyze_bad_schema_falls_back(self):
-        # AI 返回非 JSON → SchemaError → concepts 目标走启发式降级并带警告
+        # AI 返回非 JSON → SchemaError → 单批失败（=全部批失败）→ concepts 回退启发式
         with mock.patch("ai.call_ai", return_value="not json"):
             result = material.analyze(_MD, "physics", ["concepts"])
         self.assertEqual(result["source"], "heuristic")
         self.assertTrue(result["warnings"])
+
+    def test_analyze_all_batches_fail_falls_back(self):
+        # 多批长文 + 全部批返回非 JSON → concepts 目标回退启发式给出产出
+        long_text = "\n\n".join(f"# 第{i}章\n\n## 概念{i}\n\n内容" for i in range(3))
+        with mock.patch("ai.call_ai", return_value="not json"):
+            result = material.analyze(long_text, "physics", ["concepts"], context_tokens=2000)
+        self.assertEqual(result["source"], "heuristic")
+        self.assertTrue(result["draft"]["concepts"]["concepts"])
+
+    def test_analyze_skip_failed_batch_keep_successes(self):
+        # 前 2 批成功、第 3 批失败 → 保留成功批结果，不整体降级
+        good = json.dumps({"chapters": [{"name": "力学"}],
+                           "concepts": [{"name": "惯性", "chapter": "力学", "related": []}]})
+        calls = {"n": 0}
+
+        def flaky(messages, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 3:
+                return ""  # 第 3 批失败（空返回 → JSON 解析 char 0）
+            return good
+
+        # 每章约 6KB 内容 → batch_chars(2000)=4000 → 3 批
+        long_text = "\n\n".join(f"# 第{i}章\n\n## 概念{i}\n\n{('内容' * 3000)}" for i in range(3))
+        with mock.patch("ai.call_ai", side_effect=flaky):
+            result = material.analyze(long_text, "physics", ["concepts"], context_tokens=2000)
+        self.assertEqual(result["source"], "ai")
+        self.assertGreaterEqual(len(result["draft"]["concepts"]["concepts"]), 1)
+        self.assertGreaterEqual(len(result["warnings"]), 1)
+        # 失败批被跳过，但后续批继续调用（不是一失败就中断整体）
+        self.assertGreaterEqual(calls["n"], 3)
 
 
 class TestMaterialEndpoints(unittest.TestCase):

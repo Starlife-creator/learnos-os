@@ -12,12 +12,15 @@ from http.server import ThreadingHTTPServer
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# 关键：必须在 import 任何项目模块之前把数据库指向临时文件，
+# 否则 db.DB_PATH 在 import 时已被固定为真实 learnos.db（会污染生产库）。
+_TMP = Path(__file__).resolve().parent / ".tmp"
+_TMP.mkdir(exist_ok=True)
+os.environ["LEARNOS_DB"] = str(_TMP / "rag_restore_test.db")
+
 import config
 import db
 from handler import Handler
-
-_TMP = Path(__file__).resolve().parent / ".tmp"
-_TMP.mkdir(exist_ok=True)
 
 
 class RagRestoreTest(unittest.TestCase):
@@ -26,7 +29,9 @@ class RagRestoreTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        os.environ["PHYSICS_DB"] = str(_TMP / "rag_restore_test.db")
+        # 临时库隔离（环境变量已在 import 前设置；这里再显式覆盖模块路径兜底）
+        config.DB_PATH = _TMP / "rag_restore_test.db"
+        db.DB_PATH = config.DB_PATH
         db.init_db()
         # 清空 rag 表，保持干净
         with db.DB_LOCK, db.db() as conn:
@@ -48,7 +53,10 @@ class RagRestoreTest(unittest.TestCase):
             cls.server.shutdown()
         p = _TMP / "rag_restore_test.db"
         if p.exists():
-            p.unlink()
+            try:
+                p.unlink()
+            except OSError:
+                pass  # 沙箱 SAFE_DELETE_FAIL_CLOSED 钩子拦截清理，属环境性噪音
 
     def _start(self):
         from handler import Handler as H
