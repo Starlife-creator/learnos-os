@@ -188,24 +188,51 @@ def _safe_temperature(config: dict[str, str]) -> float:
     return max(0.0, min(2.0, value))
 
 
-# ── 模型预设库（全网调研 2026-08）：按模型名/端点自动注入"关闭思考"参数 ──
-# 各模型族关闭思考方式差异巨大，单一开关无法覆盖。规则按顺序匹配，命中即停。
-# 依据：阿里云百炼（enable_thinking，非流式必须 false）、DeepSeek 官方（模型名即
-# 开关：deepseek-chat=非思考 / deepseek-reasoner=思考）、OpenAI（reasoning_effort=none）、
-# Qwen 自托管（chat_template_kwargs.enable_thinking）。
+# ── 模型预设库（全网调研 2026-08，提供商×模型名双重映射）──
+# 各模型族关闭思考方式差异巨大，按"提供商默认端点 + 模型名"双重匹配注入参数。
+# 依据：阿里云百炼（enable_thinking）、DeepSeek 官方（模型名即开关）、OpenAI（reasoning_effort=none）、
+# Qwen 自托管（chat_template_kwargs.enable_thinking）、Kimi（thinking.type=disabled）、
+# GLM 智谱（thinking.type=disabled / reasoning_effort=none）、豆包火山（thinking.type=disabled）、
+# 火山方舟（thinking={type:disabled}）、MiniMax（reasoning_split=true 分离思考）、Gemini/Grok（reasoning_effort=none）。
 _MODEL_PRESETS: list[dict[str, Any]] = [
-    # OpenAI 推理系列：reasoning_effort=none 关闭思考（o1/o3/GPT-5 支持，OpenAI 官方）
-    {"match": lambda m, b: any(k in m.lower() for k in ("o1", "o3", "o3-mini", "gpt-5")),
+    # ── OpenAI 推理系列：reasoning_effort=none（o1/o3/GPT-5 官方支持）──
+    {"match": lambda m, b: any(k in m.lower() for k in ("o1", "o3", "gpt-5")),
      "body": {"reasoning_effort": "none"}},
-    # 阿里云百炼 DeepSeek/Qwen：enable_thinking（顶层参数，非流式必须 false）
+    # ── 阿里云百炼（maas.aliyuncs.com）：DeepSeek/Qwen/Kimi 均 enable_thinking（非流式必须 false）──
     {"match": lambda m, b: "maas.aliyuncs.com" in b.lower()
-                           and ("deepseek" in m.lower() or "qwen" in m.lower()),
+                           and any(k in m.lower() for k in ("deepseek", "qwen", "kimi")),
      "body": {"enable_thinking": False}},
-    # Qwen 自托管/vLLM：chat_template_kwargs.enable_thinking
+    # ── Kimi 官方（moonshot.ai/cn）：k2.5/k2.6 用 thinking.type=disabled（官方 thinking 参数）──
+    {"match": lambda m, b: "kimi" in m.lower() and "moonshot" in b.lower(),
+     "body": {"thinking": {"type": "disabled"}}},
+    # ── GLM 智谱（open.bigmodel.cn / bigmodel.cn / z.ai）：GLM-4.5+ 用 thinking.type=disabled；
+    #    GLM-5.2+ 也可 reasoning_effort=none（官方文档：传入 none 模型放弃思考）──
+    {"match": lambda m, b: ("glm" in m.lower() or "chatglm" in m.lower())
+                           and any(k in b.lower() for k in ("bigmodel", "z.ai", "zhipu")),
+     "body": {"thinking": {"type": "disabled"}}},
+    # ── 豆包/火山方舟（volces.com 或 doubao）：thinking.type=disabled（官方额外 body 参数）──
+    {"match": lambda m, b: ("doubao" in m.lower() or "seed" in m.lower())
+                           and "volces.com" in b.lower(),
+     "body": {"thinking": {"type": "disabled"}}},
+    # ── 腾讯混元（hunyuan）：OpenAI 兼容层习惯 thinking=disabled（官方未强制，保守注入）──
+    {"match": lambda m, b: "hunyuan" in m.lower() or "hunyuan" in b.lower(),
+     "body": {"thinking": {"type": "disabled"}}},
+    # ── Gemini（Google 官方 OpenAI 兼容层）：reasoning_effort=none（Gemini 3.x thinking_level 映射）──
+    {"match": lambda m, b: "gemini" in m.lower()
+                           and "generativelanguage.googleapis.com" in b.lower(),
+     "body": {"reasoning_effort": "none"}},
+    # ── Grok（xAI）：OpenAI 兼容层认 reasoning_effort=none（官方兼容）──
+    {"match": lambda m, b: "grok" in m.lower(),
+     "body": {"reasoning_effort": "none"}},
+    # ── MiniMax：M2+ 恒思考无法关闭 → reasoning_split=true 分离思考 token 以规避干扰──
+    {"match": lambda m, b: "minimax" in (m + " " + b).lower()
+                           or "minimax" in b.lower() or "minimax" in m.lower(),
+     "body": {"reasoning_split": True}},
+    # ── Qwen 自托管/vLLM：chat_template_kwargs.enable_thinking=false──
     {"match": lambda m, b: "qwen" in m.lower() and "maas.aliyuncs.com" not in b.lower(),
      "body": {"chat_template_kwargs": {"enable_thinking": False}}},
-    # 兜底：DeepSeek 官方（api.deepseek.com）用 deepseek-chat 已是非思考模型，无需参数；
-    # 其余模型族（Ollama/Gemini/Claude 等）不注入，避免未知参数 400。
+    # ── DeepSeek 官方（api.deepseek.com）：deepseek-chat 即非思考模型，无需参数──
+    # ── 兜底：Claude（原生参数不适用兼容层，不传即不思考）、Llama、Ollama 不注入 ──
 ]
 
 

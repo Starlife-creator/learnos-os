@@ -279,6 +279,51 @@ class TestEnableThinking(unittest.TestCase):
         self.assertIsNone(body.get("reasoning_effort"))
         self.assertIsNone(body.get("chat_template_kwargs"))
 
+    def test_kimi_moonshot_thinking_disabled(self):
+        # Kimi 官方（moonshot）：k2.6 用 thinking.type=disabled 关思考
+        body = self._prepare(model="kimi-k2.6", api_base="https://api.moonshot.cn/v1")
+        self.assertEqual(body.get("thinking", {}).get("type"), "disabled")
+
+    def test_kimi_bailian_enable_thinking(self):
+        # Kimi 走阿里云百炼：顶层 enable_thinking=false
+        body = self._prepare(model="kimi-k2.6", api_base="https://xxx.maas.aliyuncs.com/compatible-mode/v1")
+        self.assertFalse(body.get("enable_thinking"))
+
+    def test_gemini_reasoning_effort_none(self):
+        # Gemini OpenAI 兼容层：reasoning_effort=none
+        body = self._prepare(model="gemini-2.5-pro", api_base="https://generativelanguage.googleapis.com/v1beta/openai/")
+        self.assertEqual(body.get("reasoning_effort"), "none")
+
+    def test_grok_reasoning_effort_none(self):
+        body = self._prepare(model="grok-4", api_base="https://api.x.ai/v1")
+        self.assertEqual(body.get("reasoning_effort"), "none")
+
+    def test_claude_no_param(self):
+        # Claude（OpenAI 兼容网关）：不注入（原生 thinking 参数不适用于兼容层）
+        body = self._prepare(model="claude-opus-4-6", api_base="https://api.anthropic.com/v1")
+        self.assertIsNone(body.get("thinking"))
+        self.assertIsNone(body.get("reasoning_effort"))
+        self.assertIsNone(body.get("enable_thinking"))
+
+    def test_glm_zhipu_thinking_disabled(self):
+        # GLM 智谱：thinking.type=disabled（GLM-4.5+ 官方）
+        body = self._prepare(model="glm-4.5", api_base="https://open.bigmodel.cn/api/paas/v4")
+        self.assertEqual(body.get("thinking", {}).get("type"), "disabled")
+
+    def test_doubao_volces_thinking_disabled(self):
+        # 豆包/火山方舟：thinking.type=disabled
+        body = self._prepare(model="doubao-seed-1-6", api_base="https://ark.cn-beijing.volces.com/api/v3")
+        self.assertEqual(body.get("thinking", {}).get("type"), "disabled")
+
+    def test_hunyuan_thinking_disabled(self):
+        body = self._prepare(model="hunyuan-turbo", api_base="https://api.hunyuan.cloud.tencent.com/v1")
+        self.assertEqual(body.get("thinking", {}).get("type"), "disabled")
+
+    def test_minimax_reasoning_split(self):
+        # MiniMax M2+ 恒思考不能关 → reasoning_split=true 分离思考 token
+        body = self._prepare(model="MiniMax-M2", api_base="https://api.minimaxi.com/v1")
+        self.assertTrue(body.get("reasoning_split"))
+
 
 if __name__ == "__main__":
     unittest.main()
