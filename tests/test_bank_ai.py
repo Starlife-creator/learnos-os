@@ -319,10 +319,27 @@ class TestEnableThinking(unittest.TestCase):
         body = self._prepare(model="hunyuan-turbo", api_base="https://api.hunyuan.cloud.tencent.com/v1")
         self.assertEqual(body.get("thinking", {}).get("type"), "disabled")
 
-    def test_minimax_reasoning_split(self):
-        # MiniMax M2+ 恒思考不能关 → reasoning_split=true 分离思考 token
+    def test_minimax_thinking_disabled(self):
+        # MiniMax（llm-rosetta 校准）：thinking.type=disabled
         body = self._prepare(model="MiniMax-M2", api_base="https://api.minimaxi.com/v1")
-        self.assertTrue(body.get("reasoning_split"))
+        self.assertEqual(body.get("thinking", {}).get("type"), "disabled")
+
+    def test_stepfun_reasoning_effort_low(self):
+        # 阶跃星辰 Step：reasoning_effort=low（三档最低，近似关思考）
+        body = self._prepare(model="step-3.5-flash", api_base="https://api.stepfun.com/v1")
+        self.assertEqual(body.get("reasoning_effort"), "low")
+
+    def test_openrouter_no_param(self):
+        # OpenRouter 聚合层：省略 thinking 即关闭，勿下推 provider 参数
+        body = self._prepare(model="openai/o3-mini", api_base="https://openrouter.ai/api/v1")
+        self.assertIsNone(body.get("reasoning_effort"))
+        self.assertIsNone(body.get("thinking"))
+
+    def test_deepseek_official_thinking_disabled(self):
+        # DeepSeek 官方 reasoner：thinking.type=disabled（拒绝 reasoning_effort=none）
+        body = self._prepare(model="deepseek-reasoner", api_base="https://api.deepseek.com")
+        self.assertEqual(body.get("thinking", {}).get("type"), "disabled")
+        self.assertIsNone(body.get("reasoning_effort"))
 
 
 if __name__ == "__main__":

@@ -188,35 +188,44 @@ def _safe_temperature(config: dict[str, str]) -> float:
     return max(0.0, min(2.0, value))
 
 
-# ── 模型预设库（全网调研 2026-08，提供商×模型名双重映射）──
+# ── 模型预设库（全网调研 2026-08，提供商×模型名双重映射，llm-rosetta 推理行为表校准）──
 # 各模型族关闭思考方式差异巨大，按"提供商默认端点 + 模型名"双重匹配注入参数。
-# 依据：阿里云百炼（enable_thinking）、DeepSeek 官方（模型名即开关）、OpenAI（reasoning_effort=none）、
-# Qwen 自托管（chat_template_kwargs.enable_thinking）、Kimi（thinking.type=disabled）、
-# GLM 智谱（thinking.type=disabled / reasoning_effort=none）、豆包火山（thinking.type=disabled）、
-# 火山方舟（thinking={type:disabled}）、MiniMax（reasoning_split=true 分离思考）、Gemini/Grok（reasoning_effort=none）。
+# 要点：DeepSeek/Volcengine 拒绝 reasoning_effort=none（400），须用 thinking.type=disabled；
+# OpenRouter 聚合层省略 thinking 对象即关闭（勿下推 provider 参数）；MiniMax/豆包/混元/GLM 均认 thinking.type=disabled。
 _MODEL_PRESETS: list[dict[str, Any]] = [
-    # ── OpenAI 推理系列：reasoning_effort=none（o1/o3/GPT-5 官方支持）──
-    {"match": lambda m, b: any(k in m.lower() for k in ("o1", "o3", "gpt-5")),
+    # ── OpenAI 推理系列：reasoning_effort=none（o1/o3/GPT-5 官方支持；经 OpenRouter 时不注入）──
+    {"match": lambda m, b: any(k in m.lower() for k in ("o1", "o3", "gpt-5"))
+                           and "openrouter" not in b.lower(),
      "body": {"reasoning_effort": "none"}},
     # ── 阿里云百炼（maas.aliyuncs.com）：DeepSeek/Qwen/Kimi 均 enable_thinking（非流式必须 false）──
     {"match": lambda m, b: "maas.aliyuncs.com" in b.lower()
                            and any(k in m.lower() for k in ("deepseek", "qwen", "kimi")),
      "body": {"enable_thinking": False}},
+    # ── DeepSeek 官方（api.deepseek.com）：deepseek-chat 即非思考；若配 deepseek-reasoner，
+    #    thinking.type=disabled 显式关思考（DeepSeek 拒绝 reasoning_effort=none）──
+    {"match": lambda m, b: "deepseek" in m.lower() and "deepseek.com" in b.lower(),
+     "body": {"thinking": {"type": "disabled"}}},
     # ── Kimi 官方（moonshot.ai/cn）：k2.5/k2.6 用 thinking.type=disabled（官方 thinking 参数）──
     {"match": lambda m, b: "kimi" in m.lower() and "moonshot" in b.lower(),
      "body": {"thinking": {"type": "disabled"}}},
     # ── GLM 智谱（open.bigmodel.cn / bigmodel.cn / z.ai）：GLM-4.5+ 用 thinking.type=disabled；
-    #    GLM-5.2+ 也可 reasoning_effort=none（官方文档：传入 none 模型放弃思考）──
+    #    GLM-5.2+ 也可 reasoning_effort=none（官方：none 模型放弃思考）──
     {"match": lambda m, b: ("glm" in m.lower() or "chatglm" in m.lower())
                            and any(k in b.lower() for k in ("bigmodel", "z.ai", "zhipu")),
      "body": {"thinking": {"type": "disabled"}}},
-    # ── 豆包/火山方舟（volces.com 或 doubao）：thinking.type=disabled（官方额外 body 参数）──
+    # ── 豆包/火山方舟（volces.com 或 doubao）：thinking.type=disabled（Volcengine 显式禁用）──
     {"match": lambda m, b: ("doubao" in m.lower() or "seed" in m.lower())
                            and "volces.com" in b.lower(),
      "body": {"thinking": {"type": "disabled"}}},
-    # ── 腾讯混元（hunyuan）：OpenAI 兼容层习惯 thinking=disabled（官方未强制，保守注入）──
+    # ── 腾讯混元（hunyuan）：thinking.type=disabled──
     {"match": lambda m, b: "hunyuan" in m.lower() or "hunyuan" in b.lower(),
      "body": {"thinking": {"type": "disabled"}}},
+    # ── MiniMax（minimaxi / minimax 端点）：M2+/Claude 兼容均支持 thinking.type=disabled（llm-rosetta）──
+    {"match": lambda m, b: "minimax" in (m + " " + b).lower(),
+     "body": {"thinking": {"type": "disabled"}}},
+    # ── 阶跃星辰 Step（api.stepfun.com）：reasoning_effort 三档，最低档近似关思考──
+    {"match": lambda m, b: "stepfun" in b.lower() or m.lower().startswith("step-"),
+     "body": {"reasoning_effort": "low"}},
     # ── Gemini（Google 官方 OpenAI 兼容层）：reasoning_effort=none（Gemini 3.x thinking_level 映射）──
     {"match": lambda m, b: "gemini" in m.lower()
                            and "generativelanguage.googleapis.com" in b.lower(),
@@ -224,15 +233,11 @@ _MODEL_PRESETS: list[dict[str, Any]] = [
     # ── Grok（xAI）：OpenAI 兼容层认 reasoning_effort=none（官方兼容）──
     {"match": lambda m, b: "grok" in m.lower(),
      "body": {"reasoning_effort": "none"}},
-    # ── MiniMax：M2+ 恒思考无法关闭 → reasoning_split=true 分离思考 token 以规避干扰──
-    {"match": lambda m, b: "minimax" in (m + " " + b).lower()
-                           or "minimax" in b.lower() or "minimax" in m.lower(),
-     "body": {"reasoning_split": True}},
     # ── Qwen 自托管/vLLM：chat_template_kwargs.enable_thinking=false──
     {"match": lambda m, b: "qwen" in m.lower() and "maas.aliyuncs.com" not in b.lower(),
      "body": {"chat_template_kwargs": {"enable_thinking": False}}},
-    # ── DeepSeek 官方（api.deepseek.com）：deepseek-chat 即非思考模型，无需参数──
-    # ── 兜底：Claude（原生参数不适用兼容层，不传即不思考）、Llama、Ollama 不注入 ──
+    # ── OpenRouter 聚合层：省略 thinking 对象即关闭（网关自映射），勿下推 provider 参数──
+    # ── 兜底：百川（baichuan-ai.com）/讯飞星火（xf-yun.com）/Claude/Llama/Ollama：不注入 ──
 ]
 
 
