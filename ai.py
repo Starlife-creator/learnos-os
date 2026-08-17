@@ -188,6 +188,38 @@ def _safe_temperature(config: dict[str, str]) -> float:
     return max(0.0, min(2.0, value))
 
 
+# ── 模型预设库（全网调研 2026-08）：按模型名/端点自动注入"关闭思考"参数 ──
+# 各模型族关闭思考方式差异巨大，单一开关无法覆盖。规则按顺序匹配，命中即停。
+# 依据：阿里云百炼（enable_thinking，非流式必须 false）、DeepSeek 官方（模型名即
+# 开关：deepseek-chat=非思考 / deepseek-reasoner=思考）、OpenAI（reasoning_effort=none）、
+# Qwen 自托管（chat_template_kwargs.enable_thinking）。
+_MODEL_PRESETS: list[dict[str, Any]] = [
+    # OpenAI 推理系列：reasoning_effort=none 关闭思考（o1/o3/GPT-5 支持，OpenAI 官方）
+    {"match": lambda m, b: any(k in m.lower() for k in ("o1", "o3", "o3-mini", "gpt-5")),
+     "body": {"reasoning_effort": "none"}},
+    # 阿里云百炼 DeepSeek/Qwen：enable_thinking（顶层参数，非流式必须 false）
+    {"match": lambda m, b: "maas.aliyuncs.com" in b.lower()
+                           and ("deepseek" in m.lower() or "qwen" in m.lower()),
+     "body": {"enable_thinking": False}},
+    # Qwen 自托管/vLLM：chat_template_kwargs.enable_thinking
+    {"match": lambda m, b: "qwen" in m.lower() and "maas.aliyuncs.com" not in b.lower(),
+     "body": {"chat_template_kwargs": {"enable_thinking": False}}},
+    # 兜底：DeepSeek 官方（api.deepseek.com）用 deepseek-chat 已是非思考模型，无需参数；
+    # 其余模型族（Ollama/Gemini/Claude 等）不注入，避免未知参数 400。
+]
+
+
+def _model_preset_body(model: str, base: str) -> dict[str, Any]:
+    """按模型名/端点返回应注入的 body 参数（关闭思考）。未命中返回 {}。"""
+    for preset in _MODEL_PRESETS:
+        try:
+            if preset["match"](model, base):
+                return dict(preset["body"])
+        except Exception:
+            continue
+    return {}
+
+
 def _prepare_ai_request(
     messages: list[dict[str, str]],
     max_tokens: int,
@@ -219,13 +251,14 @@ def _prepare_ai_request(
         "max_tokens": max_tokens,
         "stream": stream,
     }
-    # 阿里云百炼等 DeepSeek 兼容端点：非流式请求必须 enable_thinking=false
-    # （思考模式仅支持流式，非流式默认开启会报错/仅返回推理内容→JSON 解析失败）。
-    # 仅对 DeepSeek 模型加该参数（避免 OpenAI/Ollama 等不认识此参数的端点报错）；
-    # 用户设置 disable_thinking=0 且为流式时保留思考（深度推理场景）。
-    is_deepseek = "deepseek" in model.lower() or "maas.aliyuncs.com" in base.lower()
-    if is_deepseek and (config.get("disable_thinking", "1") != "0" or not stream):
-        body.setdefault("enable_thinking", False)
+    # 模型预设库：按模型名/端点自动注入"关闭思考"参数。
+    # 非流式请求必须关闭思考（reasoner 思考仅支持流式，否则报错/仅返回推理内容→JSON 解析失败）；
+    # 流式 + 用户显式开启思考（disable_thinking=0）时保留，供深度推理场景。
+    preset = _model_preset_body(model, base)
+    if preset:
+        if not stream or config.get("disable_thinking", "1") != "0":
+            for k, v in preset.items():
+                body.setdefault(k, v)
     if stream:
         # 请求最后一块附带 usage（DeepSeek/OpenAI 支持；本地实现不识别则忽略）
         body["stream_options"] = {"include_usage": True}

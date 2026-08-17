@@ -257,6 +257,28 @@ class TestEnableThinking(unittest.TestCase):
                 [{"role": "user", "content": "hi"}], 100, None, "test", stream=True)
         self.assertIsNone(json.loads(payload).get("enable_thinking"))
 
+    def test_openai_reasoning_effort_none(self):
+        # OpenAI o3/GPT-5：用 reasoning_effort=none 关闭思考
+        body = self._prepare(model="o3-mini", api_base="https://api.openai.com/v1")
+        self.assertEqual(body.get("reasoning_effort"), "none")
+
+    def test_qwen_selfhosted_chat_template_kwargs(self):
+        # Qwen 自托管/vLLM：chat_template_kwargs.enable_thinking=false
+        body = self._prepare(model="Qwen/Qwen3.5-9B", api_base="http://127.0.0.1:8000/v1")
+        self.assertEqual(body.get("chat_template_kwargs", {}).get("enable_thinking"), False)
+
+    def test_qwen_bailian_enable_thinking(self):
+        # Qwen 走阿里云百炼：用顶层 enable_thinking=false
+        body = self._prepare(model="qwen-plus", api_base="https://xxx.maas.aliyuncs.com/compatible-mode/v1")
+        self.assertFalse(body.get("enable_thinking"))
+
+    def test_ollama_local_no_param(self):
+        # Ollama 本地模型：不注入未知参数（防 400）
+        body = self._prepare(model="llama3.1", api_base="http://127.0.0.1:11434")
+        self.assertIsNone(body.get("enable_thinking"))
+        self.assertIsNone(body.get("reasoning_effort"))
+        self.assertIsNone(body.get("chat_template_kwargs"))
+
 
 if __name__ == "__main__":
     unittest.main()
