@@ -89,7 +89,30 @@ def _split_batches(text: str, batch_size: int) -> list[str]:
     return batches
 
 
-def _clean_concepts(batch_text: str) -> dict[str, Any] | None:
+# 触发拆半重试的最小批长（低于此直接放弃，避免无限递归）
+_SPLIT_MIN = 600
+
+
+def _split_batch_half(batch_text: str) -> list[str]:
+    """把一批文本按段落边界尽量对半切（找不到分界时按长度中点切）。"""
+    half = len(batch_text) // 2
+    lines = batch_text.split("\n")
+    # 找最接近中点的段落边界
+    best = -1
+    best_d = len(batch_text)
+    acc = 0
+    for idx, ln in enumerate(lines):
+        acc += len(ln) + 1
+        if abs(acc - half) < best_d:
+            best_d = abs(acc - half)
+            best = idx + 1
+    if best > 0 and best < len(lines):
+        return ["\n".join(lines[:best]).strip(), "\n".join(lines[best:]).strip()]
+    # 无段落边界（单大段）→ 按字符中点硬切
+    return [batch_text[:half].strip(), batch_text[half:].strip()]
+
+
+def _clean_concepts(batch_text: str, _depth: int = 0) -> dict[str, Any] | None:
     from ai import call_ai
     from validate import SchemaError as _SchemaError
     prompt = [
@@ -104,12 +127,37 @@ def _clean_concepts(batch_text: str) -> dict[str, Any] | None:
     raw_out = call_ai(prompt, max_tokens=4000, tier="heavy", route="material")
     try:
         data = validate_object(raw_out, _CONCEPT_SCHEMA)
-    except _SchemaError:
+    except _SchemaError as exc:
+        # 解析/校验失败（可能因输出被 max_tokens 截断，含"修复后值缺失"变形）→
+        # 拆半递归重试（内容不丢），深度≤2 防无限递归；拆半后仍失败才放弃该批
+        if len(batch_text) > _SPLIT_MIN and _depth < 2:
+            return _clean_concepts_split(batch_text, _depth)
         LOG.warning("概念提取解析失败，模型原始返回[:300]=%r", str(raw_out)[:300])
         raise
     if not data["chapters"] and not data["concepts"]:
         return None
     return data
+
+
+def _clean_concepts_split(batch_text: str, _depth: int) -> dict[str, Any] | None:
+    """批拆两半递归提取并合并结果（截断自愈：减小单次输出需求）。"""
+    from validate import SchemaError as _SchemaError
+    halves = [h for h in _split_batch_half(batch_text) if h]
+    if not halves:
+        raise ValueError("批次拆分后为空")
+    acc: dict[str, Any] = {"chapters": [], "concepts": []}
+    ok = 0
+    for h in halves:
+        try:
+            part = _clean_concepts(h, _depth + 1)
+            if part:
+                ok += 1
+                _merge_concepts(acc, part)
+        except (ValueError, _SchemaError) as exc_:
+            LOG.warning("概念提取拆半后仍失败（跳过该半批）: %s", exc_)
+    if not ok:
+        raise ValueError("概念提取拆分后全部子批失败")
+    return acc
 
 
 def _clean_questions(batch_text: str) -> list[dict[str, Any]] | None:

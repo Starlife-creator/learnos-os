@@ -132,6 +132,37 @@ class TestMaterialUnit(unittest.TestCase):
         self.assertEqual(result["source"], "heuristic")
         self.assertTrue(result["warnings"])
 
+    def test_clean_concepts_truncated_split_heals(self):
+        # 整批输出被截断（Unterminated string）→ 自动拆半重试，内容不丢
+        good = json.dumps({
+            "chapters": [{"name": "第一章"}],
+            "concepts": [{"name": "概念", "chapter": "第一章", "related": []}],
+        })
+        calls = {"n": 0}
+
+        def flaky(messages, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return '{"chapters": [{"name": "第一章"}], "concepts": [{"name": "概'  # 截断
+            return good
+
+        big = "第一章 内容\n\n" + ("深度学习与神经网络的基础知识，涵盖反向传播、梯度下降、损失函数等核心概念。\n\n" * 30)
+        with mock.patch("ai.call_ai", side_effect=flaky):
+            r = material._clean_concepts(big)
+        # 第 1 次整批截断 → 拆成两半各成功 1 次
+        self.assertEqual(calls["n"], 3)
+        self.assertGreaterEqual(len(r["concepts"]), 1)
+        self.assertEqual(r["chapters"][0]["name"], "第一章")
+
+    def test_split_batch_half_preserves_content(self):
+        big = "第一章 内容\n\n" + ("深度学习核心概念讨论。\n\n" * 40)
+        halves = material._split_batch_half(big)
+        self.assertEqual(len(halves), 2)
+        # 拼接回原内容（忽略拆半处分割）
+        joined = halves[0] + "\n" + halves[1]
+        self.assertIn("第一章 内容", joined)
+        self.assertIn("深度学习核心概念讨论", joined)
+
     def test_analyze_all_batches_fail_falls_back(self):
         # 多批长文 + 全部批返回非 JSON → concepts 目标回退启发式给出产出
         long_text = "\n\n".join(f"# 第{i}章\n\n## 概念{i}\n\n内容" for i in range(3))
@@ -158,9 +189,8 @@ class TestMaterialUnit(unittest.TestCase):
             result = material.analyze(long_text, "physics", ["concepts"], context_tokens=2000)
         self.assertEqual(result["source"], "ai")
         self.assertGreaterEqual(len(result["draft"]["concepts"]["concepts"]), 1)
-        self.assertGreaterEqual(len(result["warnings"]), 1)
-        # 失败批被跳过，但后续批继续调用（不是一失败就中断整体）
-        self.assertGreaterEqual(calls["n"], 3)
+        # 第 3 批空返回 → 拆半自愈成功（calls = 7 批 + 2 拆半 = 9），不中断整体
+        self.assertGreaterEqual(calls["n"], 7)
 
 
 class TestMaterialEndpoints(unittest.TestCase):
