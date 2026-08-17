@@ -168,6 +168,9 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     "daily_review_cap": {"type": "int",   "min": 0,   "max": 500, "default": "0"},
     "ai_context_tokens": {"type": "int",  "min": 4000, "max": 1_000_000, "default": "32000"},
     "allow_local_ai":   {"type": "bool",  "default": "1"},
+    # 关闭 reasoner 思考模式（enable_thinking=false）：阿里云百炼等 DeepSeek 兼容端点，
+    # 非流式请求必须关闭思考，否则报错/仅返回推理内容。默认关闭以适配 JSON 提取等结构化任务。
+    "disable_thinking": {"type": "bool",  "default": "1"},
 }
 
 

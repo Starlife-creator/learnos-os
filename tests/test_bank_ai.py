@@ -222,5 +222,41 @@ class TestAiConfigured(unittest.TestCase):
             keystore.key_file_exists = orig_exists
 
 
+class TestEnableThinking(unittest.TestCase):
+    """非流式/DeepSeek 请求自动带 enable_thinking=false（reasoner 兼容）。"""
+
+    def _prepare(self, **overrides):
+        import json
+        from unittest import mock
+        cfg = {
+            "api_base": "https://xxx.maas.aliyuncs.com/compatible-mode/v1",
+            "api_key": "sk-test", "model": "deepseek-v4-flash-0731",
+            "temperature": "0.3", "disable_thinking": "1",
+        }
+        cfg.update(overrides)
+        with mock.patch.object(ai, "get_cached_settings", return_value=cfg):
+            _, _, payload, _, _ = ai._prepare_ai_request(
+                [{"role": "user", "content": "hi"}], 100, None, "test", stream=False)
+        return json.loads(payload)
+
+    def test_nonstream_deepseek_thinking_off(self):
+        self.assertFalse(self._prepare().get("enable_thinking"))
+
+    def test_nondeepseek_model_no_param(self):
+        body = self._prepare(model="gpt-4o", api_base="https://api.openai.com/v1")
+        self.assertIsNone(body.get("enable_thinking"))
+
+    def test_stream_with_thinking_enabled_keeps(self):
+        import json
+        from unittest import mock
+        cfg = {"api_base": "https://xxx.maas.aliyuncs.com/compatible-mode/v1",
+               "api_key": "sk-test", "model": "deepseek-v4-flash-0731",
+               "temperature": "0.3", "disable_thinking": "0"}
+        with mock.patch.object(ai, "get_cached_settings", return_value=cfg):
+            _, _, payload, _, _ = ai._prepare_ai_request(
+                [{"role": "user", "content": "hi"}], 100, None, "test", stream=True)
+        self.assertIsNone(json.loads(payload).get("enable_thinking"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -125,6 +125,7 @@ def display_settings() -> dict[str, str]:
         "daily_review_cap": int(eff.get("daily_review_cap", "0") or 0),
         "ai_context_tokens": int(eff.get("ai_context_tokens", "32000") or 32000),
         "allow_local_ai": eff.get("allow_local_ai", "1") != "0",
+        "disable_thinking": eff.get("disable_thinking", "1") != "0",
         "has_api_key": has_key,
         "key_source": eff.get("key_source", "none"),
         # 存在 keys.enc 但当前未解锁（key_source 为 none/runtime）时提示可解锁
@@ -218,6 +219,13 @@ def _prepare_ai_request(
         "max_tokens": max_tokens,
         "stream": stream,
     }
+    # 阿里云百炼等 DeepSeek 兼容端点：非流式请求必须 enable_thinking=false
+    # （思考模式仅支持流式，非流式默认开启会报错/仅返回推理内容→JSON 解析失败）。
+    # 仅对 DeepSeek 模型加该参数（避免 OpenAI/Ollama 等不认识此参数的端点报错）；
+    # 用户设置 disable_thinking=0 且为流式时保留思考（深度推理场景）。
+    is_deepseek = "deepseek" in model.lower() or "maas.aliyuncs.com" in base.lower()
+    if is_deepseek and (config.get("disable_thinking", "1") != "0" or not stream):
+        body.setdefault("enable_thinking", False)
     if stream:
         # 请求最后一块附带 usage（DeepSeek/OpenAI 支持；本地实现不识别则忽略）
         body["stream_options"] = {"include_usage": True}

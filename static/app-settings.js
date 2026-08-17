@@ -33,6 +33,8 @@ async function loadSettings() {
     }
     const localSel = document.getElementById('setAllowLocal');
     if (localSel) localSel.value = s.allow_local_ai === false ? '0' : '1';
+    const thinkSel = document.getElementById('setDisableThinking');
+    if (thinkSel) thinkSel.value = String(s.disable_thinking === false ? '0' : '1');
     const defSel = document.getElementById('setDefaultSubject');
     if (defSel) {
       loadSubjectOptions(defSel, s.default_subject || 'physics');
@@ -372,6 +374,8 @@ async function saveSettings() {
   }
   const localSel = document.getElementById('setAllowLocal');
   if (localSel) body.allow_local_ai = localSel.value;
+  const thinkSel = document.getElementById('setDisableThinking');
+  if (thinkSel) body.disable_thinking = thinkSel.value;
   const key = document.getElementById('setApiKey').value;
   if (key) body.api_key = key;
   const master = document.getElementById('setMasterPassword').value;
