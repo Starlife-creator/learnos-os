@@ -588,11 +588,18 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         self.json_response(result)
 
     def _handle_bank_score(self, data: dict[str, Any]) -> None:
-        """POST /api/bank/score：AI 评分（主观题）。body: {qid, answer}。"""
+        """POST /api/bank/score：AI 评分（主观/大小题）。
+
+        body: {qid, answer} → 评分并落库；
+        body: {qid, history: "1"} → 返回该题的历史评分记录（不触发 AI）。
+        """
         import bank
         qid = str(data.get("qid", "")).strip()
         if not qid:
             self.json_response({"error": "缺少 qid"}, 400)
+            return
+        if str(data.get("history", "")).strip() in ("1", "true", "True"):
+            self.json_response({"history": bank.recent_scores(qid)})
             return
         try:
             item = bank.find_question(qid, self._subject_of(data))
@@ -604,6 +611,9 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         except Exception as exc:
             self.json_response({"error": f"评分失败: {exc}"}, 500)
             return
+        # 持久化评分历史（含待评阅记录）；AI 离线（未评分）也记录以便展示
+        bank.save_score_history(qid, self._subject_of(data), result)
+        result["history"] = bank.recent_scores(qid, limit=10)
         self.json_response(result)
 
     def _handle_exam_create(self, data: dict[str, Any]) -> None:

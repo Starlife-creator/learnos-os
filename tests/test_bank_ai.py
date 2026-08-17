@@ -95,5 +95,76 @@ class TestAiScoreItem(unittest.TestCase):
         self.assertTrue(r["needs_review"])
 
 
+class TestScoreHistory(unittest.TestCase):
+    """评分历史落库/查询（需临时 DB，v22 迁移）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory(prefix="bank_score_hist_", dir=_TMP)
+        cls._orig_config = config.DB_PATH
+        cls._orig_db = db.DB_PATH
+        config.DB_PATH = Path(cls._tmp.name) / "test.db"
+        db.DB_PATH = config.DB_PATH
+        from db import init_db
+        init_db()
+
+    @classmethod
+    def tearDownClass(cls):
+        config.DB_PATH = cls._orig_config
+        db.DB_PATH = cls._orig_db
+        cls._tmp.cleanup()
+
+    def test_migration_v22_table_exists(self):
+        from db import rows
+        cols = [r["name"] for r in rows("PRAGMA table_info(bank_scores)")]
+        self.assertIn("qid", cols)
+        self.assertIn("score", cols)
+
+    def test_save_and_query_history(self):
+        _force_offline()
+        res = {"score": None, "ai_available": False, "mode": "unrated", "needs_review": True,
+               "comment": "测试", "against": "要点"}
+        pid = bank.save_score_history("physics-seed-subjective-3", "physics", res)
+        self.assertGreater(pid, 0)
+        hist = bank.recent_scores("physics-seed-subjective-3")
+        self.assertEqual(len(hist), 1)
+        self.assertIsNone(hist[0]["score"])
+        self.assertTrue(hist[0]["needs_review"])
+        self.assertEqual(hist[0]["comment"], "测试")
+
+
+class TestCompositeShortStemImport(unittest.TestCase):
+    """composite 子题短题干（如"（1）"）导入不应报"题干过短"，且不污染真实 custom 文件。"""
+
+    def setUp(self):
+        # 把 custom 题库指向临时文件，避免污染真实 bank_custom.json
+        self._orig_custom = bank._custom_file
+        self._tmpdir = tempfile.TemporaryDirectory(prefix="bank_imp_", dir=_TMP)
+        tmp_path = Path(self._tmpdir.name)
+
+        def _fake_custom(subject: str = "physics") -> Path:
+            return tmp_path / f"custom_{subject}.json"
+
+        bank._custom_file = _fake_custom
+
+    def tearDown(self):
+        bank._custom_file = self._orig_custom
+        self._tmpdir.cleanup()
+        bank._BANK.pop("physics", None)
+
+    def test_import_composite_short_parts(self):
+        items = [{
+            "type": "composite", "stem": "解答下列小题：",
+            "unit": "u", "chapter": "c", "concept": "k",
+            "parts": [
+                {"type": "single", "stem": "（1）", "choices": ["A", "B"], "answer": 1},
+                {"type": "fill", "stem": "（2）", "answer": "0"},
+            ],
+        }]
+        res = bank.import_questions(items, subject="physics")
+        self.assertEqual(res["imported"], 1)
+        self.assertEqual(res["errors"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

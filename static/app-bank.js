@@ -256,7 +256,7 @@ async function scorePractice(qid, prefix) {
   if (btn) { btn.disabled = true; btn.textContent = '🤖 AI 评分中…'; }
   try {
     const r = await api('/api/bank/score', { method: 'POST', body: { qid, answer } });
-    if (!r.ai_available) {
+    if (!r.ai_available && !r.history) {
       toast('未配置 AI，请对照参考答案自评。', 'ok');
       return;
     }
@@ -267,11 +267,25 @@ async function scorePractice(qid, prefix) {
       const pc = p.comment ? `<span class="text-sm">${escapeHtml(p.comment)}</span>` : '';
       return `<div class="text-sm mt-4"><b>${lbl}</b> 得分 <b>${pv}</b> ${pc}</div>`;
     }).join('');
+    // 历史评分记录（最近 5 条）
+    const hist = (r.history || []).slice(0, 5);
+    const histHtml = hist.length
+      ? `<div class="mt-8"><p class="text-sm text-muted" style="font-weight:600">📚 历史评分</p>
+          ${hist.map(h => `<div class="text-sm mt-4" style="display:flex;gap:8px;align-items:baseline">
+            <b>${h.score === null ? '待评阅' : h.score + ' 分'}</b>
+            <span class="text-muted" style="font-size:12px">${escapeHtml(String(h.created_at || '').slice(5, 16))}</span>
+            ${h.comment ? `<span class="text-muted" style="font-size:12px">${escapeHtml(h.comment.slice(0, 40))}</span>` : ''}
+          </div>`).join('')}
+        </div>` : '';
+    const aiNote = !r.ai_available
+      ? `<p class="text-sm mt-8 text-muted">🤖 未配置 AI，本次未评分（已记录提交）。</p>` : '';
     document.getElementById('bankResult').innerHTML = `<div class="card bank-review-card">
       <p class="text-sm" style="font-weight:600">🤖 AI 评分：<b>${total}</b></p>
       ${r.comment ? `<p class="text-sm mt-8">${escapeHtml(r.comment)}</p>` : ''}
       ${r.against ? `<p class="text-sm mt-8" style="color:var(--text-muted)">命中要点：${escapeHtml(r.against)}</p>` : ''}
       ${partsHtml}
+      ${aiNote}
+      ${histHtml}
       <p class="text-sm mt-8 text-muted">✅ 评分完成</p>
       <div class="flex gap-8 mt-12">
         <button class="btn btn-secondary btn-sm" onclick="scoreAgain()">🤖 重新评分</button>

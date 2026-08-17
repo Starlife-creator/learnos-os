@@ -193,10 +193,11 @@ def _normalize_question(raw: Any, idx: int, used_ids: set[str], subject: str,
     if qtype not in QUESTION_TYPES:
         raise ValueError(f"未知题型 type={qtype}")
 
-    # composite 的题干可较短（如引导语），其余题型要求题干 >= 5 字
+    # composite 的题干为引导语，长度不限（可为空）；
+    # 其余题型：顶层题干 >= 5 字，子题（parent_stem 非空）放宽为非空即可
     stem = str(raw.get("stem") or raw.get("question") or "").strip()
-    if qtype != "composite" and len(stem) < 5:
-        raise ValueError("题干过短")
+    if qtype != "composite" and len(stem) < (1 if parent_stem else 5):
+        raise ValueError("题干过短" if not parent_stem else "子题题干不能为空")
     stem = stem or parent_stem
 
     raw_id = str(raw.get("id") or "").strip()
@@ -261,7 +262,8 @@ def _normalize_question(raw: Any, idx: int, used_ids: set[str], subject: str,
         if not isinstance(parts, list) or not parts:
             raise ValueError("大小题 parts 必须为非空数组")
         item["parts"] = [
-            _normalize_question(p, i + 1, used_ids, subject, prefix=raw_id)
+            _normalize_question(p, i + 1, used_ids, subject, prefix=raw_id,
+                                parent_stem=stem)
             for i, p in enumerate(parts)
         ]
     return item
@@ -515,3 +517,48 @@ def judge(qid: str, answer: Any, subject: str = "physics") -> dict[str, Any]:
     else:
         resp["answer"] = item["answer"]
     return resp
+
+
+def save_score_history(qid: str, subject: str, result: dict[str, Any]) -> int:
+    """持久化一次 AI 评分结果（bank_scores）。返回新记录 id（无法落库时 0）。"""
+    try:
+        with DB_LOCK, db() as conn:
+            cur = conn.execute(
+                "INSERT INTO bank_scores(qid, subject, score, comment, against, mode, needs_review, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (str(qid)[:120], str(subject)[:20],
+                 None if result.get("score") is None else int(result["score"]),
+                 str(result.get("comment") or "")[:2000],
+                 str(result.get("against") or "")[:2000],
+                 str(result.get("mode") or "unrated")[:20],
+                 1 if result.get("needs_review") else 0,
+                 now()),
+            )
+            conn.commit()
+            return int(cur.lastrowid or 0)
+    except Exception as exc:
+        LOG.warning("评分历史落库失败: %s", exc)
+        return 0
+
+
+def recent_scores(qid: str, limit: int = 10) -> list[dict[str, Any]]:
+    """按 qid 查询最近评分历史（时间倒序）。"""
+    out: list[dict[str, Any]] = []
+    try:
+        for r in rows(
+            "SELECT id, score, comment, against, mode, needs_review, created_at "
+            "FROM bank_scores WHERE qid = ? ORDER BY id DESC LIMIT ?",
+            (str(qid)[:120], int(limit)),
+        ):
+            out.append({
+                "id": int(r["id"]),
+                "score": r["score"],           # None → 未评分
+                "comment": r["comment"],
+                "against": r["against"],
+                "mode": r["mode"],
+                "needs_review": bool(r["needs_review"]),
+                "created_at": r["created_at"],
+            })
+    except Exception as exc:
+        LOG.warning("评分历史查询失败: %s", exc)
+    return out

@@ -419,6 +419,26 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (21, ?)", (now(),))
         LOG.info("数据库已迁移到 v21 (学习小组打卡 study_checkins)")
 
+    # v22: 题库 AI 评分历史 — bank_scores（主观题/大小题 AI 评分结果持久化）
+    if current < 22:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS bank_scores (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                qid TEXT NOT NULL,
+                subject TEXT NOT NULL DEFAULT '',
+                score INTEGER,
+                comment TEXT NOT NULL DEFAULT '',
+                against TEXT NOT NULL DEFAULT '',
+                mode TEXT NOT NULL DEFAULT 'unrated',
+                needs_review INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_bank_scores_qid ON bank_scores(qid)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_bank_scores_qid_ts ON bank_scores(qid, created_at)")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (22, ?)", (now(),))
+        LOG.info("数据库已迁移到 v22 (题库 AI 评分历史 bank_scores)")
+
 
 def register_builtin_subjects() -> None:
     """启动注册：内置三科 + data/ 下种子文件学科（幂等，已存在不覆盖标题）。"""
