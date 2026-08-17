@@ -1,11 +1,14 @@
-"""测试 AI 相关函数：URL 拼接、降级提示。"""
+"""测试 AI 相关函数：URL 拼接、降级提示、学科感知人格。"""
 import tempfile
 import unittest
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ai import api_endpoint, fallback_hint, problem_prompt, get_cached_settings, invalidate_settings_cache
+from ai import (
+    api_endpoint, fallback_hint, problem_prompt, get_cached_settings, invalidate_settings_cache,
+    _resolve_subject, _subject_profile, extract_tags,
+)
 import config
 import db
 
@@ -69,6 +72,7 @@ class TestFallbackHint(unittest.TestCase):
 class TestProblemPrompt(unittest.TestCase):
     def setUp(self):
         self.problem = {
+            "subject": "physics",
             "course": "电磁学",
             "topic": "高斯定理",
             "content": "求球壳外电场",
@@ -111,6 +115,57 @@ class TestProblemPrompt(unittest.TestCase):
         self.assertNotIn("（该学生标记的错因", msgs[1]["content"])
 
 
+class TestSubjectAwareness(unittest.TestCase):
+    """v1 学科感知人格：physics 默认保留原措辞，chem/math/未知回落中性，不再一律物理化。"""
+
+    def test_resolve_exact_keys(self):
+        self.assertEqual(_resolve_subject("math"), "math")
+        self.assertEqual(_resolve_subject("物理"), "physics")
+        self.assertEqual(_resolve_subject("化学"), "chemistry")
+
+    def test_resolve_from_topic_alias(self):
+        self.assertEqual(_resolve_subject("", "电磁感应"), "physics")
+        self.assertEqual(_resolve_subject("", "线性代数"), "math")
+        self.assertEqual(_resolve_subject("", "有机化学"), "chemistry")
+
+    def test_resolve_unknown_returns_empty(self):
+        self.assertEqual(_resolve_subject("", "完全未知的主题"), "")
+        self.assertEqual(_resolve_subject(""), "")
+
+    def test_profile_physics_default(self):
+        p = _subject_profile("")
+        self.assertIn("物理助教", p["ta_zh"])
+
+    def test_profile_math_not_physics(self):
+        p = _subject_profile("math")
+        self.assertIn("数学助教", p["ta_zh"])
+        self.assertNotIn("物理助教", p["ta_zh"])
+
+    def test_profile_chem_not_physics(self):
+        p = _subject_profile("chemistry")
+        self.assertIn("化学助教", p["ta_zh"])
+        self.assertNotIn("物理助教", p["ta_zh"])
+
+    def test_problem_prompt_math_uses_math_ta(self):
+        prob = {"subject": "math", "course": "高等数学", "topic": "导数",
+                "content": "求导数", "my_attempt": ""}
+        msgs = problem_prompt(prob, 1)
+        self.assertIn("数学助教", msgs[0]["content"])
+        self.assertNotIn("物理助教", msgs[0]["content"])
+
+    def test_problem_prompt_physics_explicit(self):
+        prob = {"subject": "physics", "course": "电磁学", "topic": "高斯定理",
+                "content": "求场", "my_attempt": ""}
+        msgs = problem_prompt(prob, 1)
+        self.assertIn("物理助教", msgs[0]["content"])
+
+    def test_extract_tags_returns_dict_local_fallback(self):
+        # 无 AI 时回落本地规则，仍应返回结构化结果（不依赖网络）
+        res = extract_tags("二次函数", "求二次函数的顶点坐标", subject="math")
+        self.assertIn("tags", res)
+        self.assertIn("source", res)
+
+
 class TestSettingsCache(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -122,7 +177,11 @@ class TestSettingsCache(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        cls._tmp.cleanup()
+        try:
+            cls._tmp.cleanup()
+        except OSError:
+            # 沙箱安全删除机制在无回收站时拒绝 rmtree，忽略（临时文件留在 tests/.tmp）
+            pass
         db.DB_PATH = cls._orig_db
         config.DB_PATH = cls._orig_db
 

@@ -411,6 +411,233 @@ def call_ai_stream(
     return _chunks()
 
 
+# ─────────────────────────────────────────────────────────────
+# 学科感知导师人格（subject-aware tutor personas）  [v1]
+# 原硬编码的"物理"人格改为按 subject 取模板；未知学科回落 generic（中性），
+# 不再一律物理化。physics 档完整保留原始措辞，既有物理流程不变。
+# ─────────────────────────────────────────────────────────────
+
+_SUBJECT_DISPLAY = {
+    "physics": "物理", "chemistry": "化学", "math": "数学", "biology": "生物",
+    "history": "历史", "geography": "地理", "cs": "计算机", "programming": "编程",
+    "english": "英语", "chinese": "语文", "default": "该学科",
+}
+_SUBJECT_ALIASES = {
+    "大学物理": "physics", "物理": "physics", "电磁学": "physics", "力学": "physics",
+    "热学": "physics", "光学": "physics", "原子物理": "physics",
+    "电磁感应": "physics", "电磁场": "physics", "量子力学": "physics", "电动力学": "physics",
+    "化学": "chemistry", "大学化学": "chemistry", "有机化学": "chemistry", "无机化学": "chemistry",
+    "化学反应": "chemistry", "化学平衡": "chemistry",
+    "数学": "math", "高等数学": "math", "线性代数": "math", "微积分": "math",
+    "导数": "math", "概率论": "math", "离散数学": "math", "解析几何": "math",
+    "生物": "biology", "生物学": "biology",
+    "历史": "history", "世界史": "history",
+    "地理": "geography",
+    "计算机": "cs", "编程": "programming", "程序": "programming", "代码": "programming",
+    "英语": "english",
+    "语文": "chinese", "中文": "chinese",
+}
+
+
+def _subject_display(subject: str) -> str:
+    return _SUBJECT_DISPLAY.get((subject or "").strip().lower(), _SUBJECT_DISPLAY["default"])
+
+
+def _resolve_subject(*candidates: str) -> str:
+    """从 subject / course / topic 候选中解析学科键；未知 → ''（回落 generic）。"""
+    known = set(_SUBJECT_DISPLAY) - {"default"}
+    for c in candidates:
+        c = (c or "").strip().lower()
+        if c in known:
+            return c
+        if c in _SUBJECT_ALIASES:
+            return _SUBJECT_ALIASES[c]
+    return ""
+
+
+# 中性通用子组件（非物理学科复用，避免物理化措辞）
+_GENERIC_STAGE_LABELS = {"concept": "核心概念", "premise": "前提条件", "counterexample": "反例辨析",
+                         "extreme": "边界推演", "verify": "检验设计"}
+_GENERIC_STAGE_PROMPTS = {
+    "concept": '请先用直观的方式解释「{topic}」的核心含义，尽量少用术语。',
+    "premise": "这个结论成立需要哪些前提？请至少说出两个。",
+    "counterexample": "请给出一个容易误用该概念的反例，并解释错在哪里。",
+    "extreme": "如果某个关键参数趋近于极端值，结果应该怎样变化？",
+    "verify": "请设计一种方法来检验你刚才的解释。",
+}
+_GENERIC_DEEPER_PROMPTS = {
+    "concept": "你的解释还停在表面。请换一个角度重新描述一次，只说核心过程，不要堆术语。",
+    "premise": "前提说得不完整。请再补一个容易被忽略的适用条件，并说明违反它会出现什么错误结果。",
+    "counterexample": "这个反例说服力不够。请换成「{topic}」最容易误用的一处边界情况，指出误用者错在哪一步。",
+    "extreme": "请具体说明：参数趋于极端时哪个量变化最剧烈、哪个量趋于稳定，各有什么意义。",
+    "verify": "请给出关键的观测/验证量、预期范围，以及怎样排除干扰。",
+}
+_GENERIC_WEAK_PATTERNS = [
+    (re.compile(r"适用条件|前提|假设"), "适用条件/前提交代不全"),
+    (re.compile(r"公式|代入|计算|推导"), "推导与计算不够严谨"),
+    (re.compile(r"反例|误用|边界"), "概念边界与反例辨析不足"),
+    (re.compile(r"极限|边界|趋于|极端"), "边界/极端情形分析不完整"),
+    (re.compile(r"验证|检验|实验|测量"), "检验/验证设计思路不足"),
+]
+_GENERIC_ERR_CHECK = {
+    "概念理解错误": "先帮学生核对核心概念与适用条件，指出概念误区，不直接给答案。",
+    "计算错误": "请复核运算过程，指出第几步可能出错并引导重算。",
+    "粗心笔误": "提示按步骤检查符号、单位和抄写，提醒这类失误最容易在细节处。",
+    "时间压力": "提醒先建立最少必要步骤的解题顺序，并给出抢分优先级建议。",
+    "审题错误": "指出题目中容易被忽略的条件和关键词，引导重新读题。",
+    "公式/事实空白": "给出关键公式或事实的适用边界与推导线索，帮助回忆而非背诵。",
+    "直觉陷阱": "提示先用特例或极限检验直觉，指出反直觉点，不要直接判对错。",
+}
+
+# 物理档（BASE）：完整保留原始措辞，保证既有物理流程不变
+_BASE_PROFILE: dict[str, Any] = {
+    "ta_zh": "你是严格而耐心的大学物理助教。你的任务是促进主动学习，不是替学生交作业。"
+             "优先检查物理模型、适用条件、量纲、边界条件和极限情况。使用中文和清晰的 LaTeX。",
+    "ta_en": "You are a strict but patient university physics TA. Your job is to promote active "
+             "learning, not to do the homework for the student. "
+             "Prioritize checking the physical model, applicable conditions, dimensions, "
+             "boundary conditions and limiting cases. Answer in English with clear LaTeX.",
+    "tag_extractor": "你是物理题标签提取器。根据题目提取 3-6 个标签，每项格式必须是 "
+                     "'知识点:名称'、'题型:名称'、'难度:易|中|难'、'方法:名称'、'错因:名称' 之一。"
+                     "只返回 JSON，不要多余文字。",
+    "variant_author": "你是物理出题助手。基于给定错题生成 3 道变式，三题模式分别为：数值替换、情境替换、反向设问。"
+                      "每题必须包含 mode、title、content、answer 四个字段，只返回 JSON。",
+    "feynman_novice": "向一位完全不懂物理的新手讲解。规则：不许读公式，只讲物理图像与直觉。"
+                      "讲完直接发送，我会帮你对照标准解析找漏点。",
+    "oral_teacher": "你是严格的大学物理口试老师（苏格拉底式）。",
+    "oral_teacher_summary": "你是严格的大学物理口试老师。这是最后一轮总结。",
+    "oral_card_author": "你是物理老师。基于口试记录生成一道复习题的题目正文（一段话），"
+                        "围绕薄弱点设计，要求学生用自己的话重述概念并辨析反例。只输出题目正文，不要其他内容。",
+    "stage_labels": {"concept": "物理图像", "premise": "前提条件", "counterexample": "反例辨析",
+                     "extreme": "极限推演", "verify": "检验设计"},
+    "stage_prompts": {
+        "concept": '请不用公式，先用物理图像解释「{topic}」的核心含义。',
+        "premise": "这个结论成立需要哪些前提？请至少说出两个。",
+        "counterexample": "请给出一个容易误用该概念的反例，并解释错在哪里。",
+        "extreme": "如果某个关键参数趋近于零或无穷大，结果应该怎样变化？",
+        "verify": "请设计一种实验或数值方法来检验你刚才的解释。",
+    },
+    "deeper_prompts": {
+        "concept": "你的解释还停在表面。请从力的来源或能量角度重新描述一次，不许用公式，只说物理过程。",
+        "premise": "前提说得不完整。请再补一个容易被忽略的适用条件，并说明违反它会出现什么错误结果。",
+        "counterexample": "这个反例说服力不够。请换成「{topic}」最容易误用的一处边界情况，指出误用者错在哪一步。",
+        "extreme": "请具体说明：参数趋于极限时哪个量发散、哪个量饱和，各有什么物理意义。",
+        "verify": "请给出实验的关键观测量、预期数值范围，以及怎样排除系统误差。",
+    },
+    "weak_patterns": [
+        (re.compile(r"适用条件|前提|假设"), "适用条件/前提交代不全"),
+        (re.compile(r"公式|代入|计算"), "公式推导与代入计算不够严谨"),
+        (re.compile(r"反例|误用|边界"), "概念边界与反例辨析不足"),
+        (re.compile(r"量纲|极限|趋于"), "量纲/极限分析不完整"),
+        (re.compile(r"实验|验证|测量"), "检验/实验设计思路不足"),
+    ],
+    "err_check": {
+        "概念理解错误": "先帮学生核对物理模型与适用条件，指出概念误区，不直接给公式。",
+        "计算错误": "请复核运算过程与量纲，指出第几步可能出错并引导重算。",
+        "粗心笔误": "提示按步骤检查符号、单位和抄写，提醒这类失误最容易在符号正负号。",
+        "时间压力": "提醒先建立最少必要步骤的解题顺序，并给出抢分优先级建议。",
+        "审题错误": "指出题目中容易被忽略的条件和关键词，引导重新读题。",
+        "公式/事实空白": "给出提示公式的适用边界与推导线索，帮助回忆而非背诵。",
+        "直觉陷阱": "提示先用特例或极限检验直觉，指出反直觉点，不要直接判对错。",
+    },
+    "card_local": "请重新解释该概念的物理图像、适用前提，并给出一个易误用反例。",
+}
+
+# 化学档
+_CHEM_PROFILE: dict[str, Any] = {
+    "ta_zh": "你是严格而耐心的化学助教。你的任务是促进主动学习，不是替学生交作业。"
+             "优先检查反应原理、物质结构与性质、方程式配平、条件控制与定量关系。使用中文，必要时用清晰的公式。",
+    "ta_en": "You are a strict but patient chemistry tutor. Your job is to promote active learning, "
+             "not to do the homework for the student. Prioritize reaction principles, structure and "
+             "properties, equation balancing, conditions and stoichiometry. Answer in English.",
+    "tag_extractor": "你是化学题标签提取器。根据题目提取 3-6 个标签，每项格式必须是 "
+                     "'知识点:名称'、'题型:名称'、'难度:易|中|难'、'方法:名称'、'错因:名称' 之一。"
+                     "只返回 JSON，不要多余文字。",
+    "variant_author": "你是化学出题助手。基于给定错题生成 3 道变式，三题模式分别为：数值替换、情境替换、反向设问。"
+                      "每题必须包含 mode、title、content、answer 四个字段，只返回 JSON。",
+    "feynman_novice": "向一位完全不懂化学的新手讲解。规则：不许堆砌术语，只讲核心直觉与图像。"
+                      "讲完直接发送，我会帮你对照标准解析找漏点。",
+    "oral_teacher": "你是严格的化学口试老师（苏格拉底式）。",
+    "oral_teacher_summary": "你是严格的化学口试老师。这是最后一轮总结。",
+    "oral_card_author": "你是化学老师。基于口试记录生成一道复习题的题目正文（一段话），"
+                        "围绕薄弱点设计，要求学生用自己的话重述概念并辨析反例。只输出题目正文，不要其他内容。",
+    "stage_labels": _GENERIC_STAGE_LABELS,
+    "stage_prompts": _GENERIC_STAGE_PROMPTS,
+    "deeper_prompts": _GENERIC_DEEPER_PROMPTS,
+    "weak_patterns": _GENERIC_WEAK_PATTERNS,
+    "err_check": _GENERIC_ERR_CHECK,
+    "card_local": "请重新解释该概念的核心图像、适用前提，并给出一个易误用反例。",
+}
+
+# 数学档
+_MATH_PROFILE: dict[str, Any] = {
+    "ta_zh": "你是严格而耐心的数学助教。你的任务是促进主动学习，不是替学生交作业。"
+             "优先检查定义、定理适用条件、逻辑推导、计算与边界情况。使用中文和清晰的 LaTeX。",
+    "ta_en": "You are a strict but patient mathematics tutor. Your job is to promote active learning, "
+             "not to do the homework for the student. Prioritize definitions, theorem conditions, "
+             "logical derivation, computation and boundary cases. Answer in English with clear LaTeX.",
+    "tag_extractor": "你是数学题标签提取器。根据题目提取 3-6 个标签，每项格式必须是 "
+                     "'知识点:名称'、'题型:名称'、'难度:易|中|难'、'方法:名称'、'错因:名称' 之一。"
+                     "只返回 JSON，不要多余文字。",
+    "variant_author": "你是数学出题助手。基于给定错题生成 3 道变式，三题模式分别为：数值替换、情境替换、反向设问。"
+                      "每题必须包含 mode、title、content、answer 四个字段，只返回 JSON。",
+    "feynman_novice": "向一位完全不懂数学的新手讲解。规则：不许堆砌术语，只讲核心直觉与图像。"
+                      "讲完直接发送，我会帮你对照标准解析找漏点。",
+    "oral_teacher": "你是严格的数学口试老师（苏格拉底式）。",
+    "oral_teacher_summary": "你是严格的数学口试老师。这是最后一轮总结。",
+    "oral_card_author": "你是数学老师。基于口试记录生成一道复习题的题目正文（一段话），"
+                        "围绕薄弱点设计，要求学生用自己的话重述概念并辨析反例。只输出题目正文，不要其他内容。",
+    "stage_labels": _GENERIC_STAGE_LABELS,
+    "stage_prompts": _GENERIC_STAGE_PROMPTS,
+    "deeper_prompts": _GENERIC_DEEPER_PROMPTS,
+    "weak_patterns": _GENERIC_WEAK_PATTERNS,
+    "err_check": _GENERIC_ERR_CHECK,
+    "card_local": "请重新解释该定义或定理的核心直觉、适用前提，并给出一个易误用反例。",
+}
+
+# 中性通用档（未知学科回落）
+_GENERIC_PROFILE: dict[str, Any] = {
+    "ta_zh": "你是严格而耐心的学科助教。你的任务是促进主动学习，不是替学生交作业。"
+             "优先检查核心概念、适用条件、逻辑与边界情况。使用中文，必要时用清晰的公式或 LaTeX。",
+    "ta_en": "You are a strict but patient subject tutor. Your job is to promote active learning, "
+             "not to do the homework for the student. Prioritize checking core concepts, applicable "
+             "conditions, logic and boundary cases. Answer in English, using clear formulas or LaTeX when needed.",
+    "tag_extractor": "你是题目标签提取器。根据题目提取 3-6 个标签，每项格式必须是 "
+                     "'知识点:名称'、'题型:名称'、'难度:易|中|难'、'方法:名称'、'错因:名称' 之一。"
+                     "只返回 JSON，不要多余文字。",
+    "variant_author": "你是出题助手。基于给定错题生成 3 道变式，三题模式分别为：数值替换、情境替换、反向设问。"
+                      "每题必须包含 mode、title、content、answer 四个字段，只返回 JSON。",
+    "feynman_novice": "向一位完全不懂这个主题的新手讲解。规则：不许堆砌术语，只讲核心直觉与图像。"
+                      "讲完直接发送，我会帮你对照标准解析找漏点。",
+    "oral_teacher": "你是严格的口试老师（苏格拉底式）。",
+    "oral_teacher_summary": "你是严格的口试老师。这是最后一轮总结。",
+    "oral_card_author": "你是老师。基于口试记录生成一道复习题的题目正文（一段话），"
+                        "围绕薄弱点设计，要求学生用自己的话重述概念并辨析反例。只输出题目正文，不要其他内容。",
+    "stage_labels": _GENERIC_STAGE_LABELS,
+    "stage_prompts": _GENERIC_STAGE_PROMPTS,
+    "deeper_prompts": _GENERIC_DEEPER_PROMPTS,
+    "weak_patterns": _GENERIC_WEAK_PATTERNS,
+    "err_check": _GENERIC_ERR_CHECK,
+    "card_local": "请重新解释该概念的核心图像、适用前提，并给出一个易误用反例。",
+}
+
+_SUBJECT_OVERRIDES: dict[str, dict[str, Any]] = {
+    "chemistry": _CHEM_PROFILE,
+    "math": _MATH_PROFILE,
+}
+
+
+def _subject_profile(subject: str = "") -> dict[str, Any]:
+    """返回学科感知导师人格；physics 原样、chem/math 专属、未知回落中性通用。"""
+    key = _resolve_subject(subject)
+    if not key or key == "physics":
+        return _BASE_PROFILE
+    override = _SUBJECT_OVERRIDES.get(key)
+    if not override:
+        return _GENERIC_PROFILE
+    return {**_BASE_PROFILE, **override}
+
+
 def problem_prompt(problem: dict[str, Any], level: int, lang: str = "zh") -> list[dict[str, str]]:
     level_rules = {
         1: "只指出应该检查的概念或最早可能出错的位置，不给公式答案，最多100字。",
@@ -424,22 +651,14 @@ def problem_prompt(problem: dict[str, Any], level: int, lang: str = "zh") -> lis
         3: "Give a fairly complete solving framework, checking methods and next steps, but do not write the final answer for the student, at most 300 words.",
         4: "Give the full solution: list the steps, key formulas and final result, but end with a prompt to redo it yourself, at most 400 words.",
     }
+    p = _subject_profile(problem.get("subject", ""))
     # C6：按错因定向检查（提高提示针对性）
     error_line = ""
     try:
         from errors import ERROR_TYPE_LABELS, normalize_error_type
         et = normalize_error_type(problem.get("error_type"))
         if et in ERROR_TYPE_LABELS:
-            _ERR_CHECK: dict[str, str] = {
-                "概念理解错误": "先帮学生核对物理模型与适用条件，指出概念误区，不直接给公式。",
-                "计算错误": "请复核运算过程与量纲，指出第几步可能出错并引导重算。",
-                "粗心笔误": "提示按步骤检查符号、单位和抄写，提醒这类失误最容易在符号正负号。",
-                "时间压力": "提醒先建立最少必要步骤的解题顺序，并给出抢分优先级建议。",
-                "审题错误": "指出题目中容易被忽略的条件和关键词，引导重新读题。",
-                "公式/事实空白": "给出提示公式的适用边界与推导线索，帮助回忆而非背诵。",
-                "直觉陷阱": "提示先用特例或极限检验直觉，指出反直觉点，不要直接判对错。",
-            }
-            error_line = f"（该学生标记的错因：{ERROR_TYPE_LABELS[et]}。针对性要求：{_ERR_CHECK[ERROR_TYPE_LABELS[et]]}）"
+            error_line = f"（该学生标记的错因：{ERROR_TYPE_LABELS[et]}。针对性要求：{p['err_check'][ERROR_TYPE_LABELS[et]]}）"
     except Exception as exc:
         LOG.debug("错因提示构造失败（可忽略）: %s", exc)
     # C5：AI 请求上下文附加学习者档案（隐私仅本地；失败不影响主流程）
@@ -453,11 +672,7 @@ def problem_prompt(problem: dict[str, Any], level: int, lang: str = "zh") -> lis
         return [
             {
                 "role": "system",
-                "content": "You are a strict but patient university physics TA. Your job is to promote active "
-                           "learning, not to do the homework for the student. "
-                           "Prioritize checking the physical model, applicable conditions, dimensions, "
-                           "boundary conditions and limiting cases. Answer in English with clear LaTeX."
-                           f"{profile_line}",
+                "content": p["ta_en"] + profile_line,
             },
             {
                 "role": "user",
@@ -471,9 +686,7 @@ def problem_prompt(problem: dict[str, Any], level: int, lang: str = "zh") -> lis
     return [
         {
             "role": "system",
-            "content": "你是严格而耐心的大学物理助教。你的任务是促进主动学习，不是替学生交作业。"
-                       "优先检查物理模型、适用条件、量纲、边界条件和极限情况。使用中文和清晰的 LaTeX。"
-                       f"{profile_line}",
+            "content": p["ta_zh"] + profile_line,
         },
         {
             "role": "user",
@@ -488,82 +701,122 @@ def problem_prompt(problem: dict[str, Any], level: int, lang: str = "zh") -> lis
 
 
 def fallback_hint(problem: dict[str, Any], level: int, lang: str = "zh") -> str:
+    """离线兜底提示：AI 不可用时的降级路径（本地无密钥默认模式）。
+
+    按学科取提示：物理或未知学科回落原物理措辞（保持既有测试与物理流程不变）；
+    其他学科用中性通用提示，不再出现「物理模型 / 量纲 / 受力图」等专属词。
+    """
     topic = problem.get("topic") or ("这个问题" if lang == "zh" else "this problem")
     attempt = problem.get("my_attempt", "").strip()
     course = (problem.get("course") or "").strip()
+    sbj = _resolve_subject(problem.get("subject", ""), course, topic)
 
+    # 物理 / 未知学科：保留原措辞（向后兼容既有物理测试与流程）
+    if sbj in ("physics", ""):
+        if lang == "en":
+            extra = ("You have not recorded your attempt yet — first draw a diagram or write the basic equations."
+                     if not attempt else "Start from the first basic equation you wrote and label each term's source and sign.")
+            if level == 1:
+                return (f"Do not calculate yet. Clarify the object of study, the known and unknown quantities, and the "
+                        f"applicable conditions for \"{topic}\"; then check that every equation you wrote is "
+                        f"dimensionally consistent.")
+            if level == 2:
+                return (f"Break the problem into: build a model → choose coordinates / conserved quantities → write the "
+                        f"basic equations → check boundary conditions. {extra}")
+            if level == 3:
+                return ("Write the minimal set of equations, solve symbolically first, then plug in numbers. "
+                        "Do a triple check with dimensions, special limits and orders of magnitude; add the exact step "
+                        "where you get stuck to \"My Attempt\".")
+            return (f"Full solution framework: 1) identify the object and known/unknown quantities; "
+                    f"2) choose the physical model ({topic}) and state its applicable conditions; "
+                    "3) write the basic equations and check signs and dimensions line by line; "
+                    "4) solve symbolically first, then substitute numbers; "
+                    "5) verify with limiting cases (mass→0, force→∞) and orders of magnitude. "
+                    "Compare key formulas and the final result with a standard solution — redo it yourself before checking.")
+
+        _TOPIC_HINTS: dict[str, tuple[str, str, str]] = {
+            "力学": (
+                f"先给「{topic}」中的每个物体画受力图，标出全部受力与正方向，再检查是否遗漏了约束反力或摩擦力。",
+                "从你写出的第一条基本方程开始，逐项标注来源（牛顿第二定律 / 动量守恒 / 动能定理）和正方向。" if attempt else "画完受力图后写出每个物体的运动方程；检查坐标系是否统一、质量是否区分。",
+                "列出牛顿定律或守恒律的最小方程组，先求符号表达式，再代数值。最后检查极限情况（质量→0、外力→∞）和量纲。",
+            ),
+            "电磁学": (
+                f"先明确「{topic}」中的电荷分布 / 电流构型 / 磁场源，画出场线或等效电路图；再检查对称性和适用条件。",
+                "从高斯定理或安培环路定律出发，标注哪个面对称/轴对称；区分电场 E 和磁场 B 的方向。" if attempt else "画出电场线或磁感线分布；如果你在用电路模型，请确认每个元件两端的电压符号和参考方向。",
+                "写出麦克斯韦方程组中对应的积分/微分形式，代入对称条件化简。最后检查边界条件（导体表面/介质界面）和极限情况。",
+            ),
+            "热学": (
+                f"先明确「{topic}」中的系统边界、状态参量(P,V,T)和过程类型（等温/绝热/等压/等容）。",
+                "从状态方程 PV=nRT 或第一定律 dU=δQ-δW 出发，逐项确认符号正负约定。" if attempt else "写出系统初末态的热力学参量，确认过程的可逆性和做功表达式。",
+                "联立状态方程与能量方程，先求符号表达式，再代入数值。最后检查极限情况（体积→∞/→0）和量纲。",
+            ),
+            "光学": (
+                f"先画出「{topic}」中的光路图，标记入射角、折射角、光程差；确认所用原理（几何光学/波动光学）。",
+                "从折射定律或干涉条件出发，确认符号约定（实正虚负）和介质折射率。" if attempt else "画出完整光路图，标注各界面处的入射角和透射角，写下每个界面的折射/反射方程。",
+                "联立光学路径方程组，先求符号表达式，检查薄透镜近似或傍轴条件是否成立。最后验算极限情况（折射率→1 退化为真空）。",
+            ),
+            "振动与波": (
+                f"先明确「{topic}」的振动模型（简谐/阻尼/受迫）和初始条件；画出振动曲线或波的传播示意图。",
+                "从运动方程 x''+ω²x=0 或波动方程出发，确认边界条件和初始相位。" if attempt else "写出系统的运动微分方程，判断是简谐振动还是阻尼振动；检查初始位移和初始速度。",
+                "求解微分方程得通解 + 特解，代初条件定常数。检查极限情况（阻尼→∞ 过阻尼不振荡）和量纲。",
+            ),
+        }
+
+        keywords = _TOPIC_HINTS.get(course.split("（")[0].split("(")[0].strip())
+        if not keywords:
+            for key, vals in _TOPIC_HINTS.items():
+                if key in course or key in topic:
+                    keywords = vals
+                    break
+
+        if keywords and level <= len(keywords):
+            return keywords[level - 1]
+
+        if level == 1:
+            return f'先不要计算。请明确「{topic}」中研究对象、已知量、未知量与成立条件；再检查你的每个等式是否量纲一致。'
+        if level == 2:
+            extra = "你还没有记录自己的尝试，请先画出受力图或基本方程。" if not attempt else "从你写出的第一条基本方程开始，逐项标注来源和正方向。"
+            return f"建议把问题拆成：建立模型 → 选择坐标/守恒量 → 写基本方程 → 检查边界条件。{extra}"
+        if level == 3:
+            return '请写出最小方程组，先求符号表达式，再代入数值。最后用量纲、特殊极限和数量级做三重检查；把仍卡住的具体一步补充到「我的尝试」中。'
+        return (f'完整解析框架：1) 明确研究对象与已知/未知量；2) 选择物理模型（{topic}）并写适用条件；'
+                '3) 列基本方程并逐项检查符号与量纲；4) 解出符号表达式再代数值；'
+                '5) 用极限情况（质量→0、外力→∞）与数量级复核。'
+                '关键公式与最终结果请对照标准解析核对——建议先自己重做一遍再对答案。')
+
+    # 非物理学科：中性通用提示（不出现物理专属词）
     if lang == "en":
-        extra = ("You have not recorded your attempt yet — first draw a diagram or write the basic equations."
-                 if not attempt else "Start from the first basic equation you wrote and label each term's source and sign.")
+        extra = ("You have not recorded your attempt yet — first outline the main steps or write down the key relations."
+                 if not attempt else "Start from the first step you wrote and label each term's source.")
         if level == 1:
             return (f"Do not calculate yet. Clarify the object of study, the known and unknown quantities, and the "
-                    f"applicable conditions for \"{topic}\"; then check that every equation you wrote is "
-                    f"dimensionally consistent.")
+                    f"conditions or assumptions for \"{topic}\"; then check that each step is self-consistent.")
         if level == 2:
-            return (f"Break the problem into: build a model → choose coordinates / conserved quantities → write the "
-                    f"basic equations → check boundary conditions. {extra}")
+            return (f"Break the problem into: understand the statement → list knowns/unknowns → "
+                    f"establish the key relations → check the premises. {extra}")
         if level == 3:
-            return ("Write the minimal set of equations, solve symbolically first, then plug in numbers. "
-                    "Do a triple check with dimensions, special limits and orders of magnitude; add the exact step "
+            return ("Write the minimal set of solution steps, solve symbolically first if possible, then plug in numbers. "
+                    "Do a check with special cases, limits and orders of magnitude; add the exact step "
                     "where you get stuck to \"My Attempt\".")
         return (f"Full solution framework: 1) identify the object and known/unknown quantities; "
-                f"2) choose the physical model ({topic}) and state its applicable conditions; "
-                "3) write the basic equations and check signs and dimensions line by line; "
+                f"2) choose the applicable model or method ({topic}) and state its premises; "
+                "3) write the key relations and check them line by line; "
                 "4) solve symbolically first, then substitute numbers; "
-                "5) verify with limiting cases (mass→0, force→∞) and orders of magnitude. "
-                "Compare key formulas and the final result with a standard solution — redo it yourself before checking.")
+                "5) verify with special cases and orders of magnitude. "
+                "Compare key results with a standard solution — redo it yourself before checking.")
 
-    # 知识点感知模板：根据课程/主题关键词匹配更精准的指导
-    _TOPIC_HINTS: dict[str, tuple[str, str, str]] = {
-        "力学": (
-            f"先给「{topic}」中的每个物体画受力图，标出全部受力与正方向，再检查是否遗漏了约束反力或摩擦力。",
-            "从你写出的第一条基本方程开始，逐项标注来源（牛顿第二定律 / 动量守恒 / 动能定理）和正方向。" if attempt else "画完受力图后写出每个物体的运动方程；检查坐标系是否统一、质量是否区分。",
-            "列出牛顿定律或守恒律的最小方程组，先求符号表达式，再代数值。最后检查极限情况（质量→0、外力→∞）和量纲。",
-        ),
-        "电磁学": (
-            f"先明确「{topic}」中的电荷分布 / 电流构型 / 磁场源，画出场线或等效电路图；再检查对称性和适用条件。",
-            "从高斯定理或安培环路定律出发，标注哪个面对称/轴对称；区分电场 E 和磁场 B 的方向。" if attempt else "画出电场线或磁感线分布；如果你在用电路模型，请确认每个元件两端的电压符号和参考方向。",
-            "写出麦克斯韦方程组中对应的积分/微分形式，代入对称条件化简。最后检查边界条件（导体表面/介质界面）和极限情况。",
-        ),
-        "热学": (
-            f"先明确「{topic}」中的系统边界、状态参量(P,V,T)和过程类型（等温/绝热/等压/等容）。",
-            "从状态方程 PV=nRT 或第一定律 dU=δQ-δW 出发，逐项确认符号正负约定。" if attempt else "写出系统初末态的热力学参量，确认过程的可逆性和做功表达式。",
-            "联立状态方程与能量方程，先求符号表达式，再代入数值。最后检查极限情况（体积→∞/→0）和量纲。",
-        ),
-        "光学": (
-            f"先画出「{topic}」中的光路图，标记入射角、折射角、光程差；确认所用原理（几何光学/波动光学）。",
-            "从折射定律或干涉条件出发，确认符号约定（实正虚负）和介质折射率。" if attempt else "画出完整光路图，标注各界面处的入射角和透射角，写下每个界面的折射/反射方程。",
-            "联立光学路径方程组，先求符号表达式，检查薄透镜近似或傍轴条件是否成立。最后验算极限情况（折射率→1 退化为真空）。",
-        ),
-        "振动与波": (
-            f"先明确「{topic}」的振动模型（简谐/阻尼/受迫）和初始条件；画出振动曲线或波的传播示意图。",
-            "从运动方程 x''+ω²x=0 或波动方程出发，确认边界条件和初始相位。" if attempt else "写出系统的运动微分方程，判断是简谐振动还是阻尼振动；检查初始位移和初始速度。",
-            "求解微分方程得通解 + 特解，代初条件定常数。检查极限情况（阻尼→∞ 过阻尼不振荡）和量纲。",
-        ),
-    }
-
-    keywords = _TOPIC_HINTS.get(course.split("（")[0].split("(")[0].strip())
-    if not keywords:
-        for key, vals in _TOPIC_HINTS.items():
-            if key in course or key in topic:
-                keywords = vals
-                break
-
-    if keywords and level <= len(keywords):
-        return keywords[level - 1]
-
-    # 未匹配时的通用降级
+    # 非物理 · 中文
     if level == 1:
-        return f'先不要计算。请明确「{topic}」中研究对象、已知量、未知量与成立条件；再检查你的每个等式是否量纲一致。'
+        return f'先不要计算。请明确「{topic}」的研究对象、已知量与未知量，以及需要注意的前提或适用条件；再检查每一步推导是否自洽、是否遗漏关键量。'
     if level == 2:
-        extra = "你还没有记录自己的尝试，请先画出受力图或基本方程。" if not attempt else "从你写出的第一条基本方程开始，逐项标注来源和正方向。"
-        return f"建议把问题拆成：建立模型 → 选择坐标/守恒量 → 写基本方程 → 检查边界条件。{extra}"
+        extra = "你还没有记录自己的尝试，请先梳理题意、列出已知与未知。" if not attempt else "从你写出的第一步开始，逐项标注依据与来源。"
+        return f"建议围绕「{topic}」把问题拆成：理解题意 → 列出已知/未知 → 建立关键关系 → 检查前提条件。{extra}"
     if level == 3:
-        return '请写出最小方程组，先求符号表达式，再代入数值。最后用量纲、特殊极限和数量级做三重检查；把仍卡住的具体一步补充到「我的尝试」中。'
-    return (f'完整解析框架：1) 明确研究对象与已知/未知量；2) 选择物理模型（{topic}）并写适用条件；'
-            '3) 列基本方程并逐项检查符号与量纲；4) 解出符号表达式再代数值；'
-            '5) 用极限情况（质量→0、外力→∞）与数量级复核。'
-            '关键公式与最终结果请对照标准解析核对——建议先自己重做一遍再对答案。')
+        return '请写出最精简的求解步骤，先求符号或通式再代入具体值。最后用特例、极限或数量级做检查；把仍卡住的具体一步补充到「我的尝试」中。'
+    return (f'完整求解框架：1) 明确研究对象与已知/未知量；2) 选择适用的模型或方法（{topic}）并写清前提；'
+            '3) 列关键关系并逐项检查；4) 先求符号表达式再代数值；'
+            '5) 用特例或数量级复核。'
+            '关键结果与标准解析对照——建议先自己重做一遍再对答案。')
 
 
 # ── B5 自动标签 + 知识提取 ──────────────────────────────────
@@ -595,8 +848,13 @@ _METHOD_KEYWORDS: dict[str, tuple[str, ...]] = {
 }
 
 
-def local_tags(title: str, content: str, course: str = "", topic: str = "") -> dict[str, Any]:
-    """B5 降级：关键词规则打标签（无 AI 时可用）。置信度按匹配强度估算。"""
+def local_tags(title: str, content: str, course: str = "", topic: str = "", subject: str = "") -> dict[str, Any]:
+    """B5 降级：关键词规则打标签（无 AI 时可用）。置信度按匹配强度估算。
+
+    物理或未知学科沿用原物理分科词库；其他学科仅用通用题型/课程/知识点标签，
+    不再套用物理分科关键词（避免化学/数学/历史题被打上「电磁学」等物理标签）。
+    """
+    sbj = _resolve_subject(subject, course, topic)
     text = f"{title}\n{content}"
     found: list[str] = []
     hits = 0
@@ -606,18 +864,19 @@ def local_tags(title: str, content: str, course: str = "", topic: str = "") -> d
     if topic:
         found.append(f"知识点:{topic}")
         hits += 1
-    for label, words in _KNOWLEDGE_KEYWORDS.items():
-        count = sum(text.count(w) for w in words)
-        if count:
-            found.append(f"知识点:{label}")
-            hits += count
+    if sbj in ("physics", ""):
+        for label, words in _KNOWLEDGE_KEYWORDS.items():
+            count = sum(text.count(w) for w in words)
+            if count:
+                found.append(f"知识点:{label}")
+                hits += count
+        for label, words in _METHOD_KEYWORDS.items():
+            if any(w in text for w in words):
+                found.append(f"方法:{label}")
+                hits += 1
     for label, words in _TYPE_KEYWORDS.items():
         if any(w in text for w in words):
             found.append(f"题型:{label}")
-            hits += 1
-    for label, words in _METHOD_KEYWORDS.items():
-        if any(w in text for w in words):
-            found.append(f"方法:{label}")
             hits += 1
     if not found:
         found.append("知识点:待分类")
@@ -630,22 +889,21 @@ def extract_tags(
     content: str,
     course: str = "",
     topic: str = "",
+    subject: str = "",
 ) -> dict[str, Any]:
     """B5 自动标签：AI 提取（C4 校验）→ 失败自动降级关键词规则。
 
     返回 {"tags": [...], "confidence": float, "source": "ai"|"local"}。
     仅返回建议，不落库（R3 草稿确认由调用方控制）。
     """
+    sbj = _resolve_subject(subject, course, topic)
+    p = _subject_profile(sbj)
     user_text = (
         f"课程：{course or '未知'}\n已有知识点：{topic or '无'}\n"
         f"题目标题：{title}\n题目内容：{content}"
     )
     prompt = [
-        {"role": "system", "content": (
-            "你是物理题标签提取器。根据题目提取 3-6 个标签，每项格式必须是 "
-            "'知识点:名称'、'题型:名称'、'难度:易|中|难'、'方法:名称'、'错因:名称' 之一。"
-            "只返回 JSON，不要多余文字。"
-        )},
+        {"role": "system", "content": p["tag_extractor"]},
         {"role": "user", "content": user_text},
     ]
     try:
@@ -660,10 +918,10 @@ def extract_tags(
         return {"tags": tags, "confidence": round(confidence, 2), "source": "ai"}
     except (SchemaError, ValueError) as exc:
         LOG.warning("AI 标签提取校验失败，降级关键词: %s", exc)
-        return local_tags(title, content, course, topic)
+        return local_tags(title, content, course, topic, subject)
     except Exception as exc:
         LOG.warning("AI 标签提取失败，降级关键词: %s", exc)
-        return local_tags(title, content, course, topic)
+        return local_tags(title, content, course, topic, subject)
 
 
 # ── A4 举一反三变式题引擎 ─────────────────────────────────
@@ -685,12 +943,14 @@ _VARIANT_SCHEMA = {
 }
 
 
-def local_variants(problem: dict[str, Any]) -> list[dict[str, Any]]:
+def local_variants(problem: dict[str, Any], subject: str = "") -> list[dict[str, Any]]:
     """A4 降级：离线参数化变式模板（按错因×题型启发式，零依赖）。"""
     content = problem.get("content", "")
     title = problem.get("title", "")
     topic = problem.get("topic", "")
     error_type = problem.get("error_type", "")
+    sbj = _resolve_subject(subject, problem.get("course", ""), topic)
+    is_physics = sbj == "physics"
     variants: list[dict[str, Any]] = []
     # 数值替换：把常见整数/小数换成更"丑"的数（计算错场景）
     nums = re.findall(r"\d+(?:\.\d+)?", content)
@@ -701,13 +961,14 @@ def local_variants(problem: dict[str, Any]) -> list[dict[str, Any]]:
             if error_type in ("calculation", "careless"):
                 rep = "".join(swap.get(ch, ch) for ch in n)
                 replaced = replaced.replace(n, rep, 1)
+        dim_note = "量纲与数量级" if is_physics else "单位与数量级"
         variants.append({
             "mode": "数值替换",
             "title": f"{title}（数值变式）",
             "content": replaced,
-            "answer": "同原题解法，注意代入新数值后重新检查量纲与数量级。",
+            "answer": f"同原题解法，注意代入新数值后重新检查{dim_note}。",
         })
-    # 情境替换：换一个物理场景（概念/建模错）
+    # 情境替换：换一个相近场景（概念/建模错）
     scene_swap = [
         ("斜面", "水平桌面"), ("小车", "木块"), ("小球", "滑块"),
         ("电梯", "火箭"), ("弹簧", "橡皮绳"), ("磁场", "电场"),
@@ -720,36 +981,40 @@ def local_variants(problem: dict[str, Any]) -> list[dict[str, Any]]:
                 "mode": "情境替换",
                 "title": f"{title}（情境变式）",
                 "content": new_content,
-                "answer": "模型不变，注意新场景下边界条件与受力的差异。",
+                "answer": "模型不变，注意新场景下边界条件与关键量的差异。",
             })
             break
     # 反向设问：把"求 X"改为"给 X 反推条件"（概念错场景）
     m = re.search(r"(?:求|计算|大小为|等于)\s*([^，。；]+)", content)
     if m:
         target = m.group(1).strip()
+        dim_verify = "验证量纲" if is_physics else "验证单位与数量级"
         variants.append({
             "mode": "反向设问",
             "title": f"{title}（反向设问）",
-            "content": f"给定结果 {target} = 已知值，反推题目中某一初始条件；写出推导过程并验证量纲。",
-            "answer": "把原题正向方程反解为初始条件表达式，代入结果校验。",
+            "content": f"给定结果 {target} = 已知值，反推题目中某一初始条件；写出推导过程并{dim_verify}。",
+            "answer": "把原题正向关系反解为初始条件表达式，代入结果校验。",
         })
     if not variants:
         variants.append({
             "mode": "重述练习",
             "title": f"{title}（重述）",
-            "content": f"不看书本，用自己的话重新表述 {topic or title} 的解题思路，并写出关键公式及适用条件。",
-            "answer": "对照标准解析检查：模型选择、公式适用条件、边界条件是否完整。",
+            "content": f"不看书本，用自己的话重新表述 {topic or title} 的解题思路，并写出关键关系及适用条件。",
+            "answer": "对照标准解析检查：模型选择、关系适用条件、边界条件是否完整。",
         })
     return variants
 
 
 def generate_variants(problem: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     """A4 变式生成：AI（C4 校验，不一致不返回）→ 失败降级离线模板。"""
+    sbj = _resolve_subject(
+        problem.get("subject", ""),
+        problem.get("course", ""),
+        problem.get("topic", ""),
+    )
+    p = _subject_profile(sbj)
     prompt = [
-        {"role": "system", "content": (
-            "你是物理出题助手。基于给定错题生成 3 道变式，三题模式分别为：数值替换、情境替换、反向设问。"
-            "每题必须包含 mode、title、content、answer 四个字段，只返回 JSON。"
-        )},
+        {"role": "system", "content": p["variant_author"]},
         {"role": "user", "content": (
             f"原题：{problem.get('content', '')}\n标题：{problem.get('title', '')}\n"
             f"知识点：{problem.get('topic', '')}\n错因：{problem.get('error_type', '')}"
@@ -769,7 +1034,7 @@ def generate_variants(problem: dict[str, Any]) -> tuple[str, list[dict[str, Any]
         } for v in variants]
     except (SchemaError, ValueError) as exc:
         LOG.warning("AI 变式生成校验失败，降级模板: %s", exc)
-        return "local", local_variants(problem)
+        return "local", local_variants(problem, sbj)
     except Exception as exc:
         LOG.warning("AI 变式生成失败，降级模板: %s", exc)
-        return "local", local_variants(problem)
+        return "local", local_variants(problem, sbj)

@@ -285,6 +285,104 @@ def analyze(text: str, subject: str, targets: list[str],
             "warnings": warnings}
 
 
+def _heuristic_atomic_cards(text: str, max_cards: int = 30) -> list[dict[str, Any]]:
+    """§27/§21.2 读书闭环基础版：结构化文本 → 原子卡（Zettelkasten 式单概念问答）。
+
+    零依赖启发式（离线可用）：
+    - Markdown 标题行 → 一个概念卡：提问「用自己的话解释 X」，答案为其后段落；
+    - 无标题段落 → 取首句为概要卡。
+    返回 [{question, answer, concept}]，最多 max_cards 张。
+    """
+    cards: list[dict[str, Any]] = []
+    cur_title = ""
+    cur_body: list[str] = []
+
+    def _flush() -> None:
+        nonlocal cur_title, cur_body
+        body = "\n".join(cur_body).strip()
+        if cur_title and body:
+            cards.append({
+                "question": f"用自己的话解释「{cur_title}」",
+                "answer": body[:600],
+                "concept": cur_title,
+            })
+        elif body and len(body) > 30:
+            first = body.split("。")[0][:30]
+            cards.append({
+                "question": f"概括要点：{first}…",
+                "answer": body[:600],
+                "concept": "",
+            })
+        cur_title, cur_body = "", []
+
+    for line in text.splitlines():
+        m = re.match(r"^(#{1,3})\s+(.+)$", line.strip())
+        if m:
+            _flush()
+            cur_title = re.sub(r"[#*`]", "", m.group(2)).strip()[:40]
+        elif line.strip():
+            cur_body.append(line.strip())
+    _flush()
+    return cards[:max_cards]
+
+
+def extract_atomic_cards(text: str, subject: str = "",
+                         use_ai: bool = True, max_cards: int = 30) -> list[dict[str, Any]]:
+    """§27 读书闭环（基础版）：文本 → 原子卡草稿（不落库）。
+
+    AI 可用（已配置密钥）时优先走 AI 生成更自然的 Q/A；任何异常或离线均降级为
+    标题启发式，保证离线可用、零额外依赖。
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    if use_ai:
+        try:
+            from ai import call_ai, get_cached_settings
+            if get_cached_settings().get("api_key"):
+                from validate import validate_object
+                data = validate_object(call_ai([
+                    {"role": "system", "content": (
+                        "你是学习卡片编辑。从给定文本提取原子知识卡，每张卡只考一个概念，"
+                        '只返回 JSON：{"cards": [{"question": "问题", "answer": "答案", '
+                        '"concept": "概念名"}]}。答案来自原文，不要编造。'
+                    )},
+                    {"role": "user", "content": text[:12000]},
+                ], max_tokens=1500, tier="heavy", route="material"), {"cards": {"type": "array", "items": {"type": "object", "properties": {
+                    "question": {"type": "string", "min_length": 3, "required": True},
+                    "answer": {"type": "string", "min_length": 1, "required": True},
+                    "concept": {"type": "string"},
+                }}}})
+                out = [{"question": str(c["question"])[:300], "answer": str(c["answer"])[:600],
+                        "concept": str(c.get("concept", ""))[:40]} for c in (data.get("cards") or [])]
+                if out:
+                    return out[:max_cards]
+        except Exception as exc:
+            LOG.debug("原子卡 AI 生成降级为启发式: %s", exc)
+    return _heuristic_atomic_cards(text, max_cards)
+
+
+def apply_cards(cards: list[dict[str, Any]], subject: str) -> int:
+    """§27：将确认的原子卡落库为错题（进入 FSRS 复习循环）。返回新增张数。"""
+    if not cards:
+        return 0
+    subject = str(subject or "physics").strip() or "physics"
+    count = 0
+    with DB_LOCK, db() as conn:
+        for c in cards:
+            q = str(c.get("question", "")).strip()
+            a = str(c.get("answer", "")).strip()
+            if not q or not a:
+                continue
+            conn.execute(
+                "INSERT INTO problems(title, course, topic, content, my_attempt, "
+                "created_at, updated_at, subject, mastery) VALUES (?, '', ?, ?, '', ?, ?, ?, 1)",
+                (q[:200], c.get("concept", "") or "", a[:2000], now(), now(), subject),
+            )
+            count += 1
+    return count
+
+
 def save_upload(name: str, stream, content_length: int = 0,
                 max_bytes: int = 100 * 1024 * 1024) -> str:
     """上传文件落盘到 uploads/（分块写入，100MB 上限）。返回相对路径。

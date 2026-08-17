@@ -231,7 +231,7 @@ class TestEndpoints(unittest.TestCase):
     def test_export_roundtrip_preserves_tags(self):
         pid = self._create_problem()
         self._request("PUT", f"/api/problems/{pid}", {"tags": ["知识点:力学"]})
-        status, exported = self._request("GET", "/api/export")
+        status, exported = self._request("GET", f"/api/export?token={config.EXPORT_TOKEN}")
         self.assertEqual(status, 200)
         src = next(p for p in exported["problems"] if p["id"] == pid)
         self.assertEqual(src["tags"], ["知识点:力学"])
@@ -473,7 +473,7 @@ class TestEndpoints(unittest.TestCase):
 
     def test_export_import_roundtrip(self):
         self._create_problem()
-        status, exported = self._request("GET", "/api/export")
+        status, exported = self._request("GET", f"/api/export?token={config.EXPORT_TOKEN}")
         self.assertEqual(status, 200)
         self.assertIn("problems", exported)
         # 导入导出数据
@@ -493,9 +493,14 @@ class TestEndpoints(unittest.TestCase):
         conn.close()
         return resp.status, resp.getheader("Content-Type", ""), body
 
+    def _export_get(self, path, accept=None):
+        """导出端点需携带一次性导出令牌（§16.6）；同进程共享 config.EXPORT_TOKEN。"""
+        sep = "&" if "?" in path else "?"
+        return self._raw_get(f"{path}{sep}token={config.EXPORT_TOKEN}", accept=accept)
+
     def test_export_anki_csv(self):
         self._create_problem(title="CSV导出题")
-        status, ctype, body = self._raw_get("/api/export?format=anki-csv")
+        status, ctype, body = self._export_get("/api/export?format=anki-csv")
         self.assertEqual(status, 200)
         self.assertIn("text/csv", ctype)
         text = body.decode("utf-8")
@@ -504,7 +509,7 @@ class TestEndpoints(unittest.TestCase):
 
     def test_export_ics(self):
         self._create_problem(title="ICS导出题")
-        status, ctype, body = self._raw_get("/api/export?format=ics")
+        status, ctype, body = self._export_get("/api/export?format=ics")
         self.assertEqual(status, 200)
         self.assertIn("text/calendar", ctype)
         text = body.decode("utf-8")

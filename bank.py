@@ -287,6 +287,25 @@ def _ensure_problem(conn: Any, item: dict[str, Any]) -> int:
     return pid
 
 
+def _grade_answer(user_raw: Any, correct_raw: Any) -> bool:
+    """判分核心：数值学科按数值比较（容忍浮点/千分位/负号），否则归一化字符串比较。
+    修复原 int() 强转对非数值学科（语言/历史/编程/化学符号/生物）一律判错或崩溃的缺陷。"""
+    def _to_num(s: Any):
+        try:
+            return float(str(s).strip().replace(",", "").replace("，", "").replace(" ", ""))
+        except (TypeError, ValueError):
+            return None
+
+    cu, cc = _to_num(user_raw), _to_num(correct_raw)
+    if cu is not None and cc is not None:
+        return abs(cu - cc) < 1e-6
+
+    def _norm(s: Any) -> str:
+        return re.sub(r"[\s\.。，,、；;:：]+$", "", str(s).strip().lower())
+
+    return _norm(user_raw) == _norm(correct_raw)
+
+
 def judge(qid: str, answer: Any, subject: str = "physics") -> dict[str, Any]:
     """判分。答错时自动建档入错题库。answer 越界视为错误。"""
     bank = load_bank(subject)
@@ -299,11 +318,7 @@ def judge(qid: str, answer: Any, subject: str = "physics") -> dict[str, Any]:
                 break
     if not item:
         raise ValueError("题目不存在")
-    try:
-        user_ans = int(answer)
-    except (TypeError, ValueError):
-        user_ans = -1
-    correct = user_ans == int(item["answer"])
+    correct = _grade_answer(answer, item["answer"])
     problem_id = 0
     with DB_LOCK, db() as conn:
         conn.execute(

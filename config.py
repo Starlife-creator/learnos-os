@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import secrets
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -23,6 +24,11 @@ try:
 except ValueError:
     LOG.warning("LEARNOS_PORT 值无效，使用默认端口 8765")
     PORT = 8765
+
+# 一次性本地导出令牌（§1.1/§16.6）：导出整库/错题库必须携带，
+# 防止同机恶意网页跨源 fetch 整库。启动即生成，不落盘、不进日志。
+EXPORT_TOKEN = os.environ.get("LEARNOS_EXPORT_TOKEN", "") or secrets.token_hex(16)
+ALLOW_LAN = os.environ.get("LEARNOS_ALLOW_LAN", "") == "1"
 
 # ── AI 配置（支持环境变量，优先级高于本地数据库）──
 API_KEY_ENV = os.environ.get("LEARNOS_API_KEY", "").strip()
@@ -145,11 +151,60 @@ CREATE TABLE IF NOT EXISTS settings (
 """
 
 # D1（R4 合规）：密钥一律不落库。仅保存非敏感配置。
-DEFAULT_SETTINGS = {
-    "api_base": "https://api.openai.com/v1",
-    "model": "",
-    "temperature": "0.3",
-    "fast_model": "",
-    "heavy_model": "",
-    "vision_model": "",
+#
+# 配置单一真相源（§16.3）：SETTINGS_SCHEMA 同时驱动默认值与写白名单，
+# 消除 handler.py 中手写 allowed 集合与重复 coercion 逻辑。
+# type 支持：str / int / float / bool / subject。
+# subject 类型需要注册表校验（避免 config 反向依赖 db），由调用方传入 valid_subject_fn。
+SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
+    "api_base":         {"type": "str",   "default": "https://api.openai.com/v1"},
+    "model":            {"type": "str",   "default": ""},
+    "temperature":      {"type": "float", "min": 0.0, "max": 2.0, "default": "0.3"},
+    "fast_model":       {"type": "str",   "default": ""},
+    "heavy_model":      {"type": "str",   "default": ""},
+    "vision_model":     {"type": "str",   "default": ""},
+    "default_subject":  {"type": "subject", "default": "physics"},
+    "hint_cache_enabled": {"type": "bool", "default": "1"},
+    "daily_review_cap": {"type": "int",   "min": 0,   "max": 500, "default": "0"},
+    "ai_context_tokens": {"type": "int",  "min": 4000, "max": 1_000_000, "default": "32000"},
+    "allow_local_ai":   {"type": "bool",  "default": "1"},
 }
+
+
+def coerce_setting(key: str, raw_value: Any, valid_subject_fn=None) -> str:
+    """按 SETTINGS_SCHEMA 校验并转换可落库的字符串值。
+
+    - bool：空/0/false/off → "0"，其余 → "1"
+    - int/float：越界 clamp 到 [min, max]；空/非法回退 schema 默认值
+    - subject：传 valid_subject_fn 时经其归一化，否则原样（空回退默认）
+    - str：去空格原样
+    非法/未知 key 抛 ValueError（调用方捕获为 400）。
+    """
+    spec = SETTINGS_SCHEMA.get(key)
+    if spec is None:
+        raise ValueError(f"未知设置项: {key}")
+    raw = "" if raw_value is None else str(raw_value).strip()
+    t = spec["type"]
+    if t == "bool":
+        return "0" if raw in ("", "0", "false", "off", "False") else "1"
+    if t == "int":
+        try:
+            v = int(raw or spec["default"])
+        except (TypeError, ValueError):
+            v = int(spec["default"])
+        return str(max(spec.get("min", v), min(spec.get("max", v), v)))
+    if t == "float":
+        try:
+            v = float(raw or spec["default"])
+        except (TypeError, ValueError):
+            v = float(spec["default"])
+        return str(max(spec.get("min", v), min(spec.get("max", v), v)))
+    if t == "subject":
+        if valid_subject_fn is not None and raw:
+            return valid_subject_fn(raw)
+        return raw or spec["default"]
+    return raw
+
+
+# 由 schema 自动派生默认值（单一真相源）：新增设置项只需改 SETTINGS_SCHEMA。
+DEFAULT_SETTINGS = {k: v["default"] for k, v in SETTINGS_SCHEMA.items()}

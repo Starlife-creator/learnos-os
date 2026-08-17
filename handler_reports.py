@@ -70,12 +70,98 @@ class ReportsMixin:
 
     @staticmethod
     def _telemetry_summary() -> dict[str, Any]:
+        """仪表盘遥测卡片：委托 telemetry.summary()，失败降级为空字典（§1.3 韧性）。"""
         try:
-            from telemetry import summary as telemetry_summary
-            return telemetry_summary()
+            import telemetry
+            return telemetry.summary()
         except Exception as exc:
-            LOG.debug("遥测摘要失败（可忽略）: %s", exc)
+            LOG.debug("遥测汇总失败（可忽略）: %s", exc)
             return {}
+
+    @staticmethod
+    def _activity_days(subject: str) -> set[str]:
+        """§42.2：学习活跃日集合（完成复习或新建错题的日期），用于连续天数。"""
+        days: set[str] = set()
+        for r in rows(
+            "SELECT DATE(created_at) AS d FROM reviews "
+            "WHERE completed = 1 AND problem_id IN (SELECT id FROM problems WHERE subject = ?)", (subject,)
+        ):
+            if r["d"]:
+                days.add(r["d"])
+        for r in rows("SELECT DATE(created_at) AS d FROM problems WHERE subject = ?", (subject,)):
+            if r["d"]:
+                days.add(r["d"])
+        return days
+
+    @staticmethod
+    def _streak(subject: str) -> int:
+        """§42.1：连续学习天数（截至今天，含今天若有活动）。"""
+        days = ReportsMixin._activity_days(subject)
+        if not days:
+            return 0
+        streak = 0
+        cur = date.today()
+        # 今天无活动则从昨天往前数
+        if cur.isoformat() not in days:
+            cur = cur - timedelta(days=1)
+        while cur.isoformat() in days:
+            streak += 1
+            cur = cur - timedelta(days=1)
+        return streak
+
+    def _handle_progress(self) -> None:
+        """§42.1/§42.2 可见进步仪表盘 + 微学习节奏（≤10 分钟单元）。
+
+        对抗 85% 三周流失：让「努力→可见进步→奖励→回返」的循环每会话可呈现。
+        """
+        subj = self.subject
+        today = date.today().isoformat()
+        stats = row("""
+            SELECT COUNT(*) AS total,
+                   COALESCE(AVG(mastery), 0) AS avg_mastery,
+                   SUM(CASE WHEN mastery >= 4 THEN 1 ELSE 0 END) AS mastered
+            FROM problems WHERE subject = ?
+        """, (subj,)) or {}
+        total = int(stats.get("total") or 0)
+        avg_mastery = float(stats.get("avg_mastery") or 0)
+        mastered = int(stats.get("mastered") or 0)
+        due = row(
+            "SELECT COUNT(*) AS count FROM reviews "
+            "WHERE completed = 0 AND due_date <= ? AND problem_id IN (SELECT id FROM problems WHERE subject = ?)",
+            (today, subj),
+        ) or {}
+        due_today = int(due.get("count") or 0)
+        weak = rows("""
+            SELECT topic, ROUND(AVG(mastery), 1) AS mastery, COUNT(*) AS count
+            FROM problems WHERE subject = ? AND topic <> ''
+            GROUP BY topic ORDER BY mastery ASC, count DESC LIMIT 3
+        """, (subj,))
+        # §42.2 微学习单元（≤10 分钟）：到期卡优先，薄弱主题补 1 题费曼/重做
+        review_target = min(due_today, 10)
+        micro_steps = []
+        if review_target > 0:
+            micro_steps.append(f"复习 {review_target} 张到期卡")
+        if weak:
+            micro_steps.append(f"重做 1 道薄弱主题「{weak[0]['topic']}」错题")
+        if micro_steps:
+            micro_steps.append("用费曼口述 1 个概念（≤3 分钟）")
+        else:
+            micro_steps.append("录入 1 道新错题或读 1 节材料（≤10 分钟）")
+        plan_minutes = max(5, len(micro_steps) * 3)
+        self.json_response({
+            "subject": subj,
+            "mastery_pct": round(avg_mastery / 5 * 100, 1),
+            "mastered": mastered,
+            "total": total,
+            "due_today": due_today,
+            "streak_days": self._streak(subj),
+            "weak_topics": weak,
+            "micro_unit": {
+                "steps": micro_steps,
+                "est_minutes": min(plan_minutes, 10),
+                "fits_under_10min": plan_minutes <= 10,
+            },
+        })
 
     @staticmethod
     def _weekly_report(subject: str = "physics") -> dict[str, Any]:
