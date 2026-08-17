@@ -22,6 +22,7 @@ from ai import (
     call_ai, call_ai_stream, fallback_hint, problem_prompt, extract_tags, generate_variants,
     invalidate_settings_cache, set_runtime_key, set_master_password,
     display_settings, get_cached_settings,
+    generate_bank_question, review_bank_question, ai_score_item,
 )
 from review import compute_review, clamp_mastery
 from oral import (
@@ -134,6 +135,9 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         (r"/api/keystore/clear", "_handle_keystore_clear", True),
         (r"/api/bank/attempt", "_handle_bank_attempt", True),
         (r"/api/bank/import", "_handle_bank_import", True),
+        (r"/api/bank/generate", "_handle_bank_generate", True),
+        (r"/api/bank/review", "_handle_bank_review", True),
+        (r"/api/bank/score", "_handle_bank_score", True),
         (r"/api/subjects", "_handle_add_subject", True),
         (r"/api/material/analyze", "_handle_material_analyze", True),
         (r"/api/material/cards", "_handle_material_cards", True),
@@ -552,6 +556,53 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
                                            subject=self._subject_of(data))
         except ValueError as exc:
             self.json_response({"error": str(exc)}, 400)
+            return
+        self.json_response(result)
+
+    def _handle_bank_generate(self, data: dict[str, Any]) -> None:
+        """POST /api/bank/generate：按题型 AI 出题，返回与 bank 模型一致的题目 dict。"""
+        try:
+            import ai
+            q = ai.generate_bank_question(
+                self._subject_of(data),
+                str(data.get("topic", "")).strip(),
+                str(data.get("type", "single")).strip() or "single",
+                str(data.get("context", "")).strip(),
+            )
+        except ValueError as exc:
+            self.json_response({"error": str(exc)}, 400)
+            return
+        self.json_response({"question": q})
+
+    def _handle_bank_review(self, data: dict[str, Any]) -> None:
+        """POST /api/bank/review：AI 审题。body: {question, subject}。"""
+        q = data.get("question")
+        if not isinstance(q, dict) or not q:
+            self.json_response({"error": "question 需为题目对象"}, 400)
+            return
+        try:
+            result = review_bank_question(q, subject=self._subject_of(data))
+        except Exception as exc:
+            self.json_response({"error": f"审题失败: {exc}", "ai_available": False}, 500)
+            return
+        self.json_response(result)
+
+    def _handle_bank_score(self, data: dict[str, Any]) -> None:
+        """POST /api/bank/score：AI 评分（主观题）。body: {qid, answer}。"""
+        import bank
+        qid = str(data.get("qid", "")).strip()
+        if not qid:
+            self.json_response({"error": "缺少 qid"}, 400)
+            return
+        try:
+            item = bank.find_question(qid, self._subject_of(data))
+        except ValueError as exc:
+            self.json_response({"error": str(exc)}, 400)
+            return
+        try:
+            result = ai_score_item(item, data.get("answer"), subject=self._subject_of(data))
+        except Exception as exc:
+            self.json_response({"error": f"评分失败: {exc}"}, 500)
             return
         self.json_response(result)
 

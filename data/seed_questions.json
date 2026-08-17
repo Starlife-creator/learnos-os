@@ -463,5 +463,80 @@
       "answer": 1,
       "explain": "中等质量核比结合能大，裂变使核更稳定，质量亏损 Δm 释放 ΔE=Δmc²。"
     }
+  ,
+    {
+      "type": "multiple",
+      "unit": "力学",
+      "chapter": "运动学",
+      "concept": "矢量与标量",
+      "difficulty": 2,
+      "stem": "下列哪些物理量是标量？（多选）",
+      "choices": [
+        "质量",
+        "速度",
+        "时间",
+        "加速度"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explain": "质量与时间只有大小无方向，是标量；速度与加速度是矢量。",
+      "id": "physics-seed-multiple-1"
+    },
+    {
+      "type": "fill",
+      "unit": "力学",
+      "chapter": "平抛运动",
+      "concept": "平抛运动",
+      "difficulty": 2,
+      "stem": "平抛运动可分解为水平方向的___运动与竖直方向的___运动。",
+      "answer": [
+        "匀速直线",
+        "自由落体"
+      ],
+      "explain": "水平方向不受力→匀速直线；竖直方向只受重力→自由落体。",
+      "id": "physics-seed-fill-2"
+    },
+    {
+      "type": "subjective",
+      "unit": "力学",
+      "chapter": "机械能",
+      "concept": "机械能守恒",
+      "difficulty": 3,
+      "stem": "请说明机械能守恒的条件，并分别举一个守恒与一个不守恒的例子。",
+      "answer": "条件：只有重力或弹力做功（其他力不做功或做功代数和为零）。守恒例子：自由落体；不守恒例子：物体沿粗糙斜面下滑（摩擦力做负功）。",
+      "explain": "关键看非保守力是否做功。",
+      "id": "physics-seed-subjective-3"
+    },
+    {
+      "type": "composite",
+      "unit": "力学",
+      "chapter": "牛顿定律综合",
+      "concept": "牛顿定律",
+      "difficulty": 3,
+      "stem": "解答下列小题：",
+      "parts": [
+        {
+          "type": "single",
+          "stem": "（1）牛顿第一定律表明：",
+          "choices": [
+            "力是维持运动的原因",
+            "力是改变运动状态的原因",
+            "物体不受力时必静止",
+            "惯性大小与速度有关"
+          ],
+          "answer": 1,
+          "explain": "力是改变物体运动状态的原因。"
+        },
+        {
+          "type": "fill",
+          "stem": "（2）质量是___大小的量度。",
+          "answer": "惯性",
+          "explain": "质量越大惯性越大。"
+        }
+      ],
+      "id": "physics-seed-composite-4"
+    }
   ]
 }

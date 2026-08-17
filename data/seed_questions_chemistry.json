@@ -386,5 +386,40 @@
    "answer": 1,
    "explain": "酯化反应：CH3COOH + C2H5OH ⇌ CH3COOC2H5 + H2O"
   }
- ]
+ ,
+  {
+   "type": "multiple",
+   "unit": "电解质",
+   "chapter": "离子反应",
+   "concept": "电解质",
+   "difficulty": 2,
+   "stem": "下列属于电解质的是？（多选）",
+   "choices": [
+    "NaCl",
+    "葡萄糖",
+    "HCl",
+    "乙醇"
+   ],
+   "answer": [
+    0,
+    2
+   ],
+   "explain": "NaCl、HCl 在水溶液中或熔融态能电离，是电解质；葡萄糖、乙醇不电离。",
+   "id": "chemistry-seed-multiple-1"
+  },
+  {
+   "type": "fill",
+   "unit": "水溶液",
+   "chapter": "酸碱",
+   "concept": "pH",
+   "difficulty": 2,
+   "stem": "常温下 pH=7 的溶液呈___性；pH<7 呈___性。",
+   "answer": [
+    "中",
+    "酸"
+   ],
+   "explain": "pH=7 中性，pH<7 酸性。",
+   "id": "chemistry-seed-fill-2"
+  }
+  ]
 }

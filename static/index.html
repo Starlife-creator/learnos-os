@@ -752,7 +752,21 @@
       <button class="modal-close" data-action="close-modal" data-modal-id="bankImportModal" data-i18n-aria="common.closeAria">&times;</button>
     </div>
     <div class="modal-body" style="padding:16px">
-      <p class="text-sm text-muted" data-i18n="bank.importHint">支持粘贴 JSON 数组（可一次多题）。字段：id(可选)、unit、chapter、concept、difficulty、stem、choices、answer、title(可选)、explain(可选)。answer 为正确选项下标（从 0 起）。</p>
+      <p class="text-sm text-muted" data-i18n="bank.importHint">支持粘贴 JSON 数组（可一次多题）。题型由 type 字段决定：single 单选 / multiple 多选 / fill 填空 / subjective 主观 / composite 大小题（含 parts 子题）。单选 answer 为正确选项下标(从0)；多选 answer 为下标数组；填空 answer 为答案字符串或数组(多空)；主观 answer 为参考答案文本；大小题无 answer，需 parts 数组。</p>
+      <div class="bank-gen-row">
+        <span class="text-sm text-muted">AI 出题：</span>
+        <select id="bankGenType" class="input-sm">
+          <option value="single">单选</option>
+          <option value="multiple">多选</option>
+          <option value="fill">填空</option>
+          <option value="subjective">主观题</option>
+          <option value="composite">大小题</option>
+        </select>
+        <input id="bankGenTopic" class="input-sm" placeholder="知识点（可选）" style="flex:1;min-width:120px">
+        <button class="btn btn-secondary btn-sm" onclick="generateBankQuestion()">生成并填入</button>
+        <button class="btn btn-secondary btn-sm" onclick="reviewBankQuestions()">🤖 AI 审题</button>
+      </div>
+      <div id="bankReviewResult" class="mt-8"></div>
       <textarea id="bankImportText" rows="12" spellcheck="false" style="width:100%;font-family:Consolas,monospace;font-size:13px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);padding:10px"></textarea>
       <div class="flex gap-12 mt-12" style="align-items:center">
         <button class="btn btn-primary" onclick="submitBankImport()" data-i18n="bank.importDo">开始导入</button>

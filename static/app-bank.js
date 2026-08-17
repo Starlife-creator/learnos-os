@@ -57,6 +57,9 @@ async function loadBank() {
 // ── 错题重练：把状态为 wrong 的题组成顺序重练卷 ──
 let _drillQueue = [];
 let _drillIdx = 0;
+let _practiceMode = 'practice';
+// AI 评分重评用：记录当前正在练习的题目
+let _activePractice = null;
 
 function startWrongDrill() {
   _drillQueue = (_bankItems || []).filter(x => x.status === 'wrong');
@@ -64,6 +67,8 @@ function startWrongDrill() {
   _drillIdx = 0;
   openDrillNext();
 }
+
+const _TYPE_BADGE = { single: '单选', multiple: '多选', fill: '填空', subjective: '主观题', composite: '大小题' };
 
 function openDrillNext() {
   if (_drillIdx >= _drillQueue.length) {
@@ -75,50 +80,163 @@ function openDrillNext() {
     return;
   }
   const item = _drillQueue[_drillIdx];
+  _practiceMode = 'drill';
   openModal('bankModal');
+  renderPractice(item, 'dq');
+}
+
+function openBankPractice(qid) {
+  const item = (_bankItems || []).find(x => x.id === qid);
+  if (!item) return;
+  _practiceMode = 'practice';
+  openModal('bankModal');
+  renderPractice(item, 'q');
+}
+
+// 题型作答区渲染（递归支持大小题嵌套）
+function buildQuestionBody(item, prefix, depth = 0) {
+  const t = item.type || 'single';
+  if (t === 'single' || t === 'multiple') {
+    const inputType = t === 'single' ? 'radio' : 'checkbox';
+    return `<div class="bank-choices">` + (item.choices || []).map((c, i) => `
+      <label class="bank-choice" id="${prefix}_c${i}">
+        <input type="${inputType}" name="${prefix}_ans" value="${i}">
+        <span class="bank-choice-key">${String.fromCharCode(65 + i)}</span>
+        <span class="bank-choice-text">${escapeHtml(c)}</span>
+      </label>`).join('') + `</div>`;
+  }
+  if (t === 'fill') {
+    const blanks = Array.isArray(item.answer) ? item.answer.length : 1;
+    let h = '';
+    for (let i = 0; i < blanks; i++) h += `<input type="text" class="bank-fill" id="${prefix}_f${i}" placeholder="第 ${i+1} 空"> `;
+    return `<div class="bank-fill-wrap">${h}</div>`;
+  }
+  if (t === 'subjective') {
+    return `<textarea class="bank-subj" id="${prefix}_s" rows="4" placeholder="在此作答…"></textarea>
+      <p class="text-xs text-muted mt-8">主观题提交后标记「待评阅」，可对照参考答案自评。</p>`;
+  }
+  if (t === 'composite') {
+    return (item.parts || []).map((p, i) => {
+      const lbl = depth === 0 ? `${i+1}.` : `(${i+1})`;
+      return `<div class="bank-part">
+        <div class="bank-part-title">${lbl} ${escapeHtml(p.stem || '')}</div>
+        ${buildQuestionBody(p, `${prefix}_p${i}`, depth + 1)}
+      </div>`;
+    }).join('');
+  }
+  return '';
+}
+
+function collectAnswer(item, prefix) {
+  const t = item.type || 'single';
+  if (t === 'single') {
+    const sel = document.querySelector(`input[name="${prefix}_ans"]:checked`);
+    return sel ? parseInt(sel.value, 10) : null;
+  }
+  if (t === 'multiple') {
+    return Array.from(document.querySelectorAll(`input[name="${prefix}_ans"]:checked`)).map(r => parseInt(r.value, 10));
+  }
+  if (t === 'fill') {
+    if (Array.isArray(item.answer)) {
+      return item.answer.map((_, i) => { const el = document.getElementById(`${prefix}_f${i}`); return el ? el.value : ''; });
+    }
+    const el = document.getElementById(`${prefix}_f0`); return el ? el.value : '';
+  }
+  if (t === 'subjective') { const el = document.getElementById(`${prefix}_s`); return el ? el.value : ''; }
+  if (t === 'composite') { return (item.parts || []).map((p, i) => collectAnswer(p, `${prefix}_p${i}`)); }
+  return null;
+}
+
+function renderResultBlock(item, res, prefix, depth = 0) {
+  const t = item.type || 'single';
+  if (t === 'single' || t === 'multiple') {
+    const correct = res.answer;
+    const corrSet = Array.isArray(correct) ? correct : [correct];
+    (item.choices || []).forEach((c, i) => {
+      const el = document.getElementById(`${prefix}_c${i}`);
+      if (!el) return;
+      if (corrSet.includes(i)) el.classList.add('bank-correct');
+      const input = el.querySelector('input');
+      if (input && input.checked && !corrSet.includes(i)) el.classList.add('bank-incorrect');
+    });
+    const verdict = res.correct === null ? '📝 待评阅' : (res.correct ? '✅ 正确' : '❌ 错误');
+    return `<div class="card ${res.correct === false ? 'bank-bad-card' : 'bank-ok-card'}">
+      <p class="text-sm" style="font-weight:600">${verdict}</p>
+      ${res.explain ? `<p class="text-sm mt-8">解析：${escapeHtml(res.explain)}</p>` : ''}
+    </div>`;
+  }
+  if (t === 'fill') {
+    const verdict = res.correct === null ? '📝 待评阅' : (res.correct ? '✅ 正确' : '❌ 错误');
+    const ans = Array.isArray(res.answer) ? res.answer.join(' / ') : res.answer;
+    return `<div class="card ${res.correct === false ? 'bank-bad-card' : 'bank-ok-card'}">
+      <p class="text-sm" style="font-weight:600">${verdict}</p>
+      <p class="text-sm mt-8">参考答案：${escapeHtml(ans)}</p>
+      ${res.explain ? `<p class="text-sm mt-8">解析：${escapeHtml(res.explain)}</p>` : ''}
+    </div>`;
+  }
+  if (t === 'subjective') {
+    return `<div class="card bank-review-card">
+      <p class="text-sm" style="font-weight:600">📝 待评阅（请对照参考答案自评）</p>
+      <p class="text-sm mt-8">参考答案：${escapeHtml(res.answer)}</p>
+      ${res.explain ? `<p class="text-sm mt-8">解析：${escapeHtml(res.explain)}</p>` : ''}
+    </div>`;
+  }
+  if (t === 'composite') {
+    let html = `<div class="card ${res.correct === false ? 'bank-bad-card' : 'bank-ok-card'}">
+      <p class="text-sm" style="font-weight:600">${res.correct === null ? '含待评阅' : (res.correct ? '✅ 全部正确' : '❌ 有错误')}</p>
+    </div>`;
+    (item.parts || []).forEach((p, i) => {
+      const pr = (res.parts && res.parts[i]) || {};
+      const lbl = depth === 0 ? `${i+1}.` : `(${i+1})`;
+      html += `<div class="bank-part-result"><b>${lbl}</b> ${renderResultBlock(p, pr, `${prefix}_p${i}`, depth + 1)}</div>`;
+    });
+    return html;
+  }
+  return '';
+}
+
+function renderPractice(item, prefix) {
+  const badge = _TYPE_BADGE[item.type || 'single'] || '单选';
+  const progress = _practiceMode === 'drill'
+    ? `<p class="text-sm text-muted mb-8">${t('bank.drillProgress').replace('{n}', _drillIdx + 1).replace('{m}', _drillQueue.length)} · ${escapeHtml(item.concept || '')}</p>`
+    : `<p class="text-sm text-muted mb-8">${escapeHtml(item.unit || '')} · ${escapeHtml(item.chapter || '')} · <b>${escapeHtml(item.concept || '')}</b></p>`;
   document.getElementById('bankModalBody').innerHTML = `
-    <p class="text-sm text-muted mb-8">${t('bank.drillProgress').replace('{n}', _drillIdx + 1).replace('{m}', _drillQueue.length)} · ${escapeHtml(item.concept)}</p>
-    <p class="text-sm mb-12" style="white-space:pre-wrap;line-height:1.6">${escapeHtml(item.stem)}</p>
-    <div class="bank-choices">
-      ${item.choices.map((c, i) => `
-        <label class="bank-choice" id="bc${i}">
-          <input type="radio" name="bankAnswer" value="${i}">
-          <span class="bank-choice-key">${String.fromCharCode(65 + i)}</span>
-          <span class="bank-choice-text">${escapeHtml(c)}</span>
-        </label>`).join('')}
-    </div>
+    ${progress}
+    <p class="text-sm mb-4"><span class="tag tag-gray">${badge}</span></p>
+    <p class="text-sm mb-12" style="white-space:pre-wrap;line-height:1.6">${escapeHtml(item.stem || '')}</p>
+    ${buildQuestionBody(item, prefix)}
     <div class="flex gap-12 mt-12">
-      <button class="btn btn-primary" id="bankSubmit" onclick="submitDrillAnswer('${item.id}')">${t('bank.submit')}</button>
+      <button class="btn btn-primary" id="bankSubmit" onclick="submitPractice('${item.id}', '${prefix}')">${t('bank.submit')}</button>
     </div>
     <div id="bankResult" class="mt-12"></div>`;
 }
 
-async function submitDrillAnswer(qid) {
-  const sel = document.querySelector('input[name="bankAnswer"]:checked');
-  if (!sel) { toast(t('bank.needAnswer'), 'error'); return; }
+async function submitPractice(qid, prefix) {
+  const item = (_bankItems || []).find(x => x.id === qid)
+            || (_drillQueue || []).find(x => x.id === qid);
+  if (!item) { toast(t('bank.needAnswer'), 'error'); return; }
+  _activePractice = { qid, prefix };
+  const qtype = item.type || 'single';
+  const answer = collectAnswer(item, prefix);
+  if (qtype !== 'composite' && (answer === null || answer === '' || (Array.isArray(answer) && !answer.length))) {
+    toast(t('bank.needAnswer'), 'error'); return;
+  }
   const btn = document.getElementById('bankSubmit');
   if (btn) btn.disabled = true;
   try {
-    const res = await api('/api/bank/attempt', {
-      method: 'POST',
-      body: { qid, answer: parseInt(sel.value, 10) },
-    });
-    document.querySelectorAll('input[name="bankAnswer"]').forEach(r => {
-      const i = parseInt(r.value, 10);
-      const label = document.getElementById('bc' + i);
-      if (label) {
-        if (i === res.answer) label.classList.add('bank-correct');
-        else if (r.checked) label.classList.add('bank-incorrect');
-      }
-    });
-    document.getElementById('bankResult').innerHTML = `
-      <div class="card ${res.correct ? 'bank-ok-card' : 'bank-bad-card'}">
-        <p class="text-sm" style="font-weight:600">${res.correct ? t('bank.correct') : t('bank.wrong')}</p>
-        <p class="text-sm mt-8">${t('bank.answerIs')} <b>${String.fromCharCode(65 + res.answer)}</b> · ${escapeHtml(res.explain)}</p>
-      </div>
-      <div class="flex gap-8 mt-12">
-        <button class="btn btn-primary btn-sm" onclick="_drillIdx++;openDrillNext()">${t('bank.drillNext')}</button>
-      </div>`;
+    const res = await api('/api/bank/attempt', { method: 'POST', body: { qid, answer } });
+    const nextBtn = _practiceMode === 'drill'
+      ? `<button class="btn btn-primary btn-sm" onclick="_drillIdx++;openDrillNext()">${t('bank.drillNext')}</button>` : '';
+    const hasSubj = (qtype === 'subjective') || (qtype === 'composite' && (item.parts || []).some(p => p.type === 'subjective'));
+    const scoreBtn = hasSubj
+      ? `<button class="btn btn-secondary btn-sm" id="bankAiScore" onclick="scorePractice('${qid}', '${prefix}')">🤖 AI 评分</button>` : '';
+    document.getElementById('bankResult').innerHTML = renderResultBlock(item, res, prefix)
+      + (res.correct === false ? `<p class="text-sm text-muted mt-8">${t('bank.addedToProblems')}</p>` : '')
+      + `<div class="flex gap-8 mt-12">
+           ${scoreBtn}
+           ${nextBtn}
+           <button class="btn btn-sm" onclick="closeModal('bankModal');loadBankUnits();loadBank()">${t('bank.close')}</button>
+         </div>`;
     loadBankUnits();
   } catch (e) {
     toast(e.message, 'error');
@@ -127,65 +245,60 @@ async function submitDrillAnswer(qid) {
   }
 }
 
-function openBankPractice(qid) {
-  const item = (_bankItems || []).find(x => x.id === qid);
-  if (!item) return;
-  openModal('bankModal');
-  document.getElementById('bankModalBody').innerHTML = `
-    <p class="text-sm text-muted mb-8">${escapeHtml(item.unit)} · ${escapeHtml(item.chapter)} · <b>${escapeHtml(item.concept)}</b></p>
-    <p class="text-sm mb-12" style="white-space:pre-wrap;line-height:1.6">${escapeHtml(item.stem)}</p>
-    <div class="bank-choices">
-      ${item.choices.map((c, i) => `
-        <label class="bank-choice" id="bc${i}">
-          <input type="radio" name="bankAnswer" value="${i}">
-          <span class="bank-choice-key">${String.fromCharCode(65 + i)}</span>
-          <span class="bank-choice-text">${escapeHtml(c)}</span>
-        </label>`).join('')}
-    </div>
-    <div class="flex gap-12 mt-12">
-      <button class="btn btn-primary" id="bankSubmit" onclick="submitBankAnswer('${item.id}')">${t('bank.submit')}</button>
-    </div>
-    <div id="bankResult" class="mt-12"></div>`;
-}
-
-async function submitBankAnswer(qid) {
-  const sel = document.querySelector('input[name="bankAnswer"]:checked');
-  if (!sel) { toast(t('bank.needAnswer'), 'error'); return; }
-  const btn = document.getElementById('bankSubmit');
-  if (btn) btn.disabled = true;
+// AI 评分：主观题/含主观 composite 提交后调用
+async function scorePractice(qid, prefix) {
+  const item = (_bankItems || []).find(x => x.id === qid)
+            || (_drillQueue || []).find(x => x.id === qid);
+  if (!item) { toast(t('bank.needAnswer'), 'error'); return; }
+  _activePractice = { qid, prefix };
+  const answer = collectAnswer(item, prefix);
+  const btn = document.getElementById('bankAiScore');
+  if (btn) { btn.disabled = true; btn.textContent = '🤖 AI 评分中…'; }
   try {
-    const res = await api('/api/bank/attempt', {
-      method: 'POST',
-      body: { qid, answer: parseInt(sel.value, 10) },
-    });
-    document.querySelectorAll('input[name="bankAnswer"]').forEach(r => {
-      const i = parseInt(r.value, 10);
-      const label = document.getElementById('bc' + i);
-      if (label) {
-        if (i === res.answer) label.classList.add('bank-correct');
-        else if (r.checked) label.classList.add('bank-incorrect');
-      }
-    });
-    document.getElementById('bankResult').innerHTML = `
-      <div class="card ${res.correct ? 'bank-ok-card' : 'bank-bad-card'}">
-        <p class="text-sm" style="font-weight:600">${res.correct ? t('bank.correct') : t('bank.wrong')}</p>
-        <p class="text-sm mt-8">${t('bank.answerIs')} <b>${String.fromCharCode(65 + res.answer)}</b> · ${escapeHtml(res.explain)}</p>
-        ${!res.correct ? '<p class="text-sm text-muted mt-8">' + t('bank.addedToProblems') + '</p>' : ''}
-      </div>
+    const r = await api('/api/bank/score', { method: 'POST', body: { qid, answer } });
+    if (!r.ai_available) {
+      toast('未配置 AI，请对照参考答案自评。', 'ok');
+      return;
+    }
+    const total = r.score === null ? '—' : r.score + ' 分';
+    const partsHtml = (r.parts || []).map((p, i) => {
+      const lbl = `${i+1}.`;
+      const pv = p.score === null ? '待评阅' : p.score + ' 分';
+      const pc = p.comment ? `<span class="text-sm">${escapeHtml(p.comment)}</span>` : '';
+      return `<div class="text-sm mt-4"><b>${lbl}</b> 得分 <b>${pv}</b> ${pc}</div>`;
+    }).join('');
+    document.getElementById('bankResult').innerHTML = `<div class="card bank-review-card">
+      <p class="text-sm" style="font-weight:600">🤖 AI 评分：<b>${total}</b></p>
+      ${r.comment ? `<p class="text-sm mt-8">${escapeHtml(r.comment)}</p>` : ''}
+      ${r.against ? `<p class="text-sm mt-8" style="color:var(--text-muted)">命中要点：${escapeHtml(r.against)}</p>` : ''}
+      ${partsHtml}
+      <p class="text-sm mt-8 text-muted">✅ 评分完成</p>
       <div class="flex gap-8 mt-12">
-        <button class="btn btn-primary btn-sm" onclick="closeModal('bankModal');loadBankUnits();loadBank()">${t('bank.close')}</button>
-      </div>`;
+        <button class="btn btn-secondary btn-sm" onclick="scoreAgain()">🤖 重新评分</button>
+        <button class="btn btn-sm" onclick="closeModal('bankModal');loadBankUnits();loadBank()">${t('bank.close')}</button>
+      </div>
+    </div>`;
   } catch (e) {
     toast(e.message, 'error');
   } finally {
-    if (btn) btn.disabled = false;
+    if (btn) { btn.disabled = false; btn.textContent = '🤖 AI 评分'; }
   }
+}
+
+function scoreAgain() {
+  // 结果区按钮已被覆盖，从 _activePractice 重新评分
+  const cur = _activePractice || {};
+  if (!cur.qid) { location.reload(); return; }
+  const btn = document.getElementById('bankAiScore');
+  if (btn) { btn.disabled = false; btn.textContent = '🤖 AI 评分'; }
+  scorePractice(cur.qid, cur.prefix || '');
 }
 
 // ── 题库导入 ──
 const BANK_TEMPLATE = [
   {
     "id": "custom-demo-1",
+    "type": "single",
     "unit": "力学",
     "chapter": "运动学",
     "concept": "匀变速直线运动",
@@ -197,14 +310,58 @@ const BANK_TEMPLATE = [
     "explain": "v = v0 - at = 10 - 2×3 = 4 m/s"
   },
   {
-    "stem": "光在真空中的速度约为多少？",
-    "choices": ["3×10⁸ m/s", "3×10⁶ m/s", "3×10⁴ m/s", "300 m/s"],
-    "answer": 0,
-    "unit": "光学",
-    "chapter": "光的传播",
-    "concept": "光速",
-    "difficulty": 1,
-    "explain": "真空中光速 c ≈ 3×10⁸ m/s。"
+    "type": "multiple",
+    "stem": "以下哪些量是矢量？（多选）",
+    "choices": ["位移", "速率", "加速度", "路程"],
+    "answer": [0, 2],
+    "unit": "力学",
+    "chapter": "运动学",
+    "concept": "矢量与标量",
+    "difficulty": 2,
+    "explain": "位移与加速度是矢量；速率与路程是标量。"
+  },
+  {
+    "type": "fill",
+    "stem": "自由落体第 1 s 内的位移约为 ___ m（g≈10 m/s²），第 2 s 内的位移约为 ___ m。",
+    "answer": ["5", "15"],
+    "unit": "力学",
+    "chapter": "自由落体",
+    "concept": "自由落体",
+    "difficulty": 2,
+    "explain": "第1s: ½·10·1²=5m；前2s: ½·10·4=20m，第2s内=20-5=15m。"
+  },
+  {
+    "type": "subjective",
+    "stem": "请简述牛顿第二定律的物理意义，并说明质量与惯性的关系。",
+    "answer": "牛顿第二定律 F=ma 表明物体加速度与合外力成正比、与质量成反比，方向同合外力。质量是惯性大小的量度，质量越大惯性越大，运动状态越难改变。",
+    "unit": "力学",
+    "chapter": "牛顿定律",
+    "concept": "牛顿第二定律",
+    "difficulty": 3,
+    "explain": "要点：比例关系、方向、质量=惯性量度。"
+  },
+  {
+    "type": "composite",
+    "stem": "解答下列小题：",
+    "unit": "力学",
+    "chapter": "运动学综合",
+    "concept": "运动学综合",
+    "difficulty": 3,
+    "parts": [
+      {
+        "type": "single",
+        "stem": "（1）物体做匀速直线运动的依据是？",
+        "choices": ["合力为零", "合力恒定", "加速度为零或合力为零", "速度为零"],
+        "answer": 2,
+        "explain": "匀速直线运动要求加速度为零，即合力为零。"
+      },
+      {
+        "type": "fill",
+        "stem": "（2）若 v-t 图线为水平直线，则加速度为 ___ 。",
+        "answer": "0",
+        "explain": "水平 v-t 线斜率（加速度）为零。"
+      }
+    ]
   }
 ];
 
@@ -241,6 +398,71 @@ async function submitBankImport() {
     loadBankUnits(); loadBank();
   } catch (e) {
     resultEl.textContent = e.message; resultEl.style.color = 'var(--danger)';
+  }
+}
+
+// ── AI 按题型出题：生成后填入导入框，自动 AI 审题供复查 ──
+async function generateBankQuestion() {
+  const typeEl = document.getElementById('bankGenType');
+  const topicEl = document.getElementById('bankGenTopic');
+  const type = typeEl ? typeEl.value : 'single';
+  const topic = topicEl ? (topicEl.value || '').trim() : '';
+  const genBtn = document.querySelector('.bank-gen-row .btn');
+  if (genBtn) genBtn.disabled = true;
+  try {
+    const res = await api('/api/bank/generate', { method: 'POST', body: { type, topic, subject: '' } });
+    const q = res.question || {};
+    openBankImport();
+    const ta = document.getElementById('bankImportText');
+    if (ta) ta.value = JSON.stringify([q], null, 2);
+    toast('已生成题目，请复查后导入', 'ok');
+    await autoReview(q);
+  } catch (e) {
+    toast(e.message, 'error');
+  } finally {
+    if (genBtn) genBtn.disabled = false;
+  }
+}
+
+// 对题目对象做 AI 审题，结果展示在导入弹窗内
+async function autoReview(q) {
+  const box = document.getElementById('bankReviewResult');
+  if (!box) return;
+  box.innerHTML = '<p class="text-sm text-muted">🤖 正在审题…</p>';
+  try {
+    const r = await api('/api/bank/review', { method: 'POST', body: { question: q, subject: '' } });
+    if (!r.ai_available) {
+      box.innerHTML = '<p class="text-sm text-muted">🤖 未配置 AI，跳过自动审题（可对照模板复查）。</p>';
+      return;
+    }
+    const badge = r.verdict === 'pass' ? '✅ 通过' : (r.verdict === 'warn' ? '⚠️ 建议修改' : '❌ 需重出');
+    const color = r.verdict === 'pass' ? 'var(--text)' : (r.verdict === 'warn' ? 'var(--warning)' : 'var(--danger)');
+    box.innerHTML = `<div class="bank-review-card" style="border-left:3px solid ${color}">
+      <p class="text-sm" style="font-weight:600;color:${color}">AI 审题：${badge}</p>
+      ${r.comment ? `<p class="text-sm mt-4">${escapeHtml(r.comment)}</p>` : ''}
+      ${(r.issues && r.issues.length) ? `<ul class="text-sm mt-4" style="margin:4px 0 0 18px">${r.issues.map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul>` : ''}
+      ${r.revised ? `<p class="text-sm mt-4">💡 修订建议：<pre class="text-xs" style="background:var(--bg);padding:8px;border-radius:6px;white-space:pre-wrap">${escapeHtml(r.revised)}</pre></p>` : ''}
+    </div>`;
+  } catch (e) {
+    box.innerHTML = `<p class="text-sm" style="color:var(--danger)">🤖 审题失败：${escapeHtml(e.message)}</p>`;
+  }
+}
+
+// 审题按钮：解析导入框 JSON 数组并逐题审题
+async function reviewBankQuestions() {
+  const text = document.getElementById('bankImportText').value.trim();
+  const box = document.getElementById('bankReviewResult');
+  if (!text) { if (box) box.innerHTML = '<p class="text-sm text-muted">导入框为空，无法审题。</p>'; return; }
+  let arr;
+  try { arr = JSON.parse(text); } catch (e) {
+    if (box) box.innerHTML = '<p class="text-sm" style="color:var(--danger)">JSON 解析失败，无法审题。</p>';
+    return;
+  }
+  if (!Array.isArray(arr)) arr = [arr];
+  if (!arr.length) return;
+  for (const q of arr) {
+    await autoReview(q);
+    if (arr.indexOf(q) < arr.length - 1) box.innerHTML += '<hr class="my-8">';
   }
 }
 

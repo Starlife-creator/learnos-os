@@ -386,5 +386,48 @@
    "answer": 2,
    "explain": "偶数点 {2,4,6} 共 3 个，概率 3/6=1/2"
   }
- ]
+ ,
+  {
+   "type": "multiple",
+   "unit": "函数",
+   "chapter": "函数性质",
+   "concept": "奇偶性",
+   "difficulty": 2,
+   "stem": "下列函数中是偶函数的是？（多选）",
+   "choices": [
+    "y=x²",
+    "y=x³",
+    "y=|x|",
+    "y=sinx"
+   ],
+   "answer": [
+    0,
+    2
+   ],
+   "explain": "x² 与 |x| 满足 f(-x)=f(x)，是偶函数。",
+   "id": "math-seed-multiple-1"
+  },
+  {
+   "type": "fill",
+   "unit": "微积分",
+   "chapter": "导数",
+   "concept": "导数",
+   "difficulty": 2,
+   "stem": "函数 f(x)=x² 在 x=2 处的导数值为___。",
+   "answer": "4",
+   "explain": "f'(x)=2x，f'(2)=4。",
+   "id": "math-seed-fill-2"
+  },
+  {
+   "type": "subjective",
+   "unit": "微积分",
+   "chapter": "导数应用",
+   "concept": "导数意义",
+   "difficulty": 3,
+   "stem": "简述导数在物理中的意义（如瞬时速度），并给出一个实际应用例子。",
+   "answer": "导数表示函数在某点的瞬时变化率；物理中位移对时间的导数是瞬时速度。应用：由速度-时间曲线求瞬时加速度，或根据边际成本分析生产决策。",
+   "explain": "核心是“变化率”。",
+   "id": "math-seed-subjective-3"
+  }
+  ]
 }

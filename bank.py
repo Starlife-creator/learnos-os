@@ -32,6 +32,16 @@ SUBJECT_BANKS: dict[str, str] = {
 # 非公开字段（列表展示时不下发给前端，避免答案提前泄露）
 _PRIVATE_FIELDS = ("answer", "explain")
 
+# 题型：single 单选 / multiple 多选 / fill 填空 / subjective 主观 / composite 大小题（含子题）
+QUESTION_TYPES = ("single", "multiple", "fill", "subjective", "composite")
+_TYPE_LABEL_ZH = {
+    "single": "单选",
+    "multiple": "多选",
+    "fill": "填空",
+    "subjective": "主观题",
+    "composite": "大小题",
+}
+
 
 def _bank_file(subject: str) -> Path:
     fname = SUBJECT_BANKS.get(subject, f"seed_questions_{subject}.json")
@@ -70,6 +80,22 @@ def load_bank(subject: str = "physics") -> dict[str, Any]:
         merged["questions"] = list(by_id.values())
         _BANK[subject] = merged
     return _BANK[subject]
+
+
+def find_question(qid: str, subject: str = "physics") -> dict[str, Any]:
+    """按 qid 查题（含跨学科回退，qid 应全局唯一）。找不到抛 ValueError。"""
+    bank = load_bank(subject)
+    item = next((q for q in bank["questions"] if str(q.get("id")) == str(qid)), None)
+    if not item:
+        for s, bk in _BANK.items():
+            if s == subject:
+                continue
+            item = next((q for q in bk["questions"] if str(q.get("id")) == str(qid)), None)
+            if item:
+                break
+    if not item:
+        raise ValueError("题目不存在")
+    return item
 
 
 def _load_custom_questions(subject: str = "physics") -> list[dict[str, Any]]:
@@ -116,44 +142,133 @@ def import_questions(items: Any, subject: str = "physics") -> dict[str, Any]:
     return {"imported": imported, "errors": errors}
 
 
-def _normalize_item(raw: Any, idx: int, used_ids: set[str], subject: str = "physics") -> dict[str, Any]:
-    if not isinstance(raw, dict):
-        raise ValueError("必须为对象")
-    stem = str(raw.get("stem") or raw.get("question") or "").strip()
-    if len(stem) < 5:
-        raise ValueError("题干过短")
+def _parse_choices(raw: Any) -> list[str]:
     choices = raw.get("choices")
     if not isinstance(choices, list) or len(choices) < 2 or any(str(c).strip() == "" for c in choices):
         raise ValueError("choices 至少 2 个且非空")
-    choices = [str(c).strip() for c in choices]
-    try:
-        answer = int(raw.get("answer"))
-    except (TypeError, ValueError):
-        raise ValueError("answer 必须是选项下标")
-    if not (0 <= answer < len(choices)):
-        raise ValueError("answer 下标越界")
+    return [str(c).strip() for c in choices]
+
+
+def _parse_indices(raw: Any, n: int) -> list[int]:
+    """把 answer 解析为选项下标列表（支持 int / [int] / '0,2' / 'A,C'）。"""
+    if isinstance(raw, int):
+        return [raw]
+    if isinstance(raw, list):
+        out = []
+        for x in raw:
+            try:
+                out.append(int(x))
+            except (TypeError, ValueError):
+                raise ValueError("answer 下标必须为整数")
+        return out
+    if isinstance(raw, str):
+        out = []
+        for part in re.split(r"[,，;；\s]+", raw.strip()):
+            part = part.strip()
+            if not part:
+                continue
+            if part.isalpha() and len(part) == 1:
+                out.append(ord(part.upper()) - 65)
+            else:
+                try:
+                    out.append(int(part))
+                except ValueError:
+                    raise ValueError("answer 下标非法")
+        return out
+    raise ValueError("answer 格式非法")
+
+
+def _normalize_question(raw: Any, idx: int, used_ids: set[str], subject: str,
+                        prefix: str = "", parent_stem: str = "") -> dict[str, Any]:
+    """归一化单题（含 composite 递归子题）。prefix 用于复合题内部 id 命名空间。"""
+    if not isinstance(raw, dict):
+        raise ValueError("必须为对象")
+    qtype = str(raw.get("type") or "").strip().lower()
+    if not qtype:
+        # 向后兼容：有 choices 且无 parts → 视为单选
+        if isinstance(raw.get("choices"), list) and "parts" not in raw:
+            qtype = "single"
+        else:
+            raise ValueError("缺少 type 字段")
+    if qtype not in QUESTION_TYPES:
+        raise ValueError(f"未知题型 type={qtype}")
+
+    # composite 的题干可较短（如引导语），其余题型要求题干 >= 5 字
+    stem = str(raw.get("stem") or raw.get("question") or "").strip()
+    if qtype != "composite" and len(stem) < 5:
+        raise ValueError("题干过短")
+    stem = stem or parent_stem
+
     raw_id = str(raw.get("id") or "").strip()
     if not raw_id:
         raw_id = f"custom-{idx}"
     raw_id = re.sub(r"[^0-9A-Za-z_\-]", "-", raw_id)[:60]
+    if prefix:
+        raw_id = f"{prefix}__{raw_id}"
     if raw_id in used_ids and raw_id.startswith("custom-"):
         raw_id = f"custom-{idx}-{raw_id}"
-    item = {
+
+    item: dict[str, Any] = {
         "id": raw_id,
+        "type": qtype,
         "subject": str(raw.get("subject") or subject).strip()[:20] or subject,
         "unit": str(raw.get("unit") or "未分类").strip()[:20] or "未分类",
         "chapter": str(raw.get("chapter") or "自选题").strip()[:30] or "自选题",
         "concept": str(raw.get("concept") or "其他").strip()[:40] or "其他",
         "difficulty": int(raw.get("difficulty") or 2),
         "stem": stem,
-        "choices": choices,
-        "answer": answer,
         "title": str(raw.get("title") or "").strip(),
         "explain": str(raw.get("explain") or "").strip(),
     }
     if not (1 <= item["difficulty"] <= 5):
         item["difficulty"] = 2
+
+    if qtype == "single":
+        choices = _parse_choices(raw)
+        ans = _parse_indices(raw.get("answer"), len(choices))
+        if len(ans) != 1:
+            raise ValueError("单选 answer 必须为单个下标")
+        if not (0 <= ans[0] < len(choices)):
+            raise ValueError("answer 下标越界")
+        item["choices"], item["answer"] = choices, ans[0]
+    elif qtype == "multiple":
+        choices = _parse_choices(raw)
+        ans = _parse_indices(raw.get("answer"), len(choices))
+        if not ans or any(not (0 <= a < len(choices)) for a in ans):
+            raise ValueError("多选 answer 必须为合法下标列表（≥1）")
+        item["choices"], item["answer"] = choices, sorted(set(ans))
+    elif qtype == "fill":
+        ans = raw.get("answer")
+        if isinstance(ans, list):
+            if not ans or any(str(a).strip() == "" for a in ans):
+                raise ValueError("填空 answer 不可为空")
+            item["answer"] = [str(a).strip() for a in ans]
+        elif isinstance(ans, str) and ans.strip():
+            item["answer"] = ans.strip()
+        else:
+            raise ValueError("填空 answer 必填（字符串或数组）")
+        if isinstance(raw.get("choices"), list):
+            item["choices"] = [str(c).strip() for c in raw["choices"]]
+    elif qtype == "subjective":
+        ans = str(raw.get("answer") or "").strip()
+        if not ans:
+            raise ValueError("主观题 answer 为参考答案，必填")
+        item["answer"] = ans
+        if isinstance(raw.get("choices"), list):
+            item["choices"] = [str(c).strip() for c in raw["choices"]]
+    elif qtype == "composite":
+        parts = raw.get("parts")
+        if not isinstance(parts, list) or not parts:
+            raise ValueError("大小题 parts 必须为非空数组")
+        item["parts"] = [
+            _normalize_question(p, i + 1, used_ids, subject, prefix=raw_id)
+            for i, p in enumerate(parts)
+        ]
     return item
+
+
+def _normalize_item(raw: Any, idx: int, used_ids: set[str], subject: str = "physics") -> dict[str, Any]:
+    return _normalize_question(raw, idx, used_ids, subject)
 
 
 def _attempt_stats() -> dict[str, list[tuple[int, str]]]:
@@ -224,10 +339,18 @@ def list_questions(unit: str = "", status: str = "all", q: str = "",
             hay = (item.get("stem", "") + item.get("chapter", "") + item.get("concept", "")).lower()
             if kw not in hay:
                 continue
-        pub = {k: v for k, v in item.items() if k not in _PRIVATE_FIELDS}
+        pub = _pub_item(item)
         pub["status"] = s
         out.append(pub)
     return out
+
+
+def _pub_item(item: dict[str, Any]) -> dict[str, Any]:
+    """对外题目（剥离 answer/explain，避免答案提前泄露）；复合题递归剥离子题。"""
+    pub = {k: v for k, v in item.items() if k not in _PRIVATE_FIELDS}
+    if item.get("type") == "composite":
+        pub["parts"] = [_pub_item(p) for p in item.get("parts", [])]
+    return pub
 
 
 def _ensure_problem(conn: Any, item: dict[str, Any]) -> int:
@@ -306,8 +429,59 @@ def _grade_answer(user_raw: Any, correct_raw: Any) -> bool:
     return _norm(user_raw) == _norm(correct_raw)
 
 
+def _grade_fill(user_raw: Any, correct_raw: Any) -> bool:
+    """填空判分：逐空归一化（去首尾空白/标点、转小写）后按序比较。"""
+    def _to_list(x: Any) -> list[str]:
+        if isinstance(x, list):
+            return [str(v) for v in x]
+        return [str(x)]
+
+    u, c = _to_list(user_raw), _to_list(correct_raw)
+    if len(u) != len(c):
+        return False
+    return all(_norm_fill(a) == _norm_fill(b) for a, b in zip(u, c))
+
+
+def _norm_fill(s: Any) -> str:
+    return re.sub(r"[\s\.。，,、；;:：]+$", "", str(s).strip().lower())
+
+
+def grade_item(item: dict[str, Any], user_raw: Any) -> dict[str, Any]:
+    """递归判分。返回 {type, correct(bool|None), needs_review, answer, explain, parts?}。
+    correct=None 表示主观待评阅（不参与对错、不自动入错题库）。"""
+    t = item.get("type", "single")
+    if t == "single":
+        return {"type": t, "correct": _grade_answer(user_raw, item["answer"]),
+                "answer": item["answer"], "explain": item.get("explain", "")}
+    if t == "multiple":
+        try:
+            user_idx = set(_parse_indices(user_raw, len(item["choices"])))
+        except ValueError:
+            user_idx = set()
+        return {"type": t, "correct": user_idx == set(item["answer"]),
+                "answer": item["answer"], "explain": item.get("explain", "")}
+    if t == "fill":
+        return {"type": t, "correct": _grade_fill(user_raw, item["answer"]),
+                "answer": item["answer"], "explain": item.get("explain", "")}
+    if t == "subjective":
+        return {"type": t, "correct": None, "needs_review": True,
+                "answer": item["answer"], "explain": item.get("explain", "")}
+    if t == "composite":
+        parts_in = user_raw if isinstance(user_raw, list) else []
+        results = [grade_item(p, parts_in[i] if i < len(parts_in) else None)
+                   for i, p in enumerate(item.get("parts", []))]
+        needs_review = any(r.get("needs_review") for r in results)
+        auto = [r["correct"] for r in results if r["correct"] is not None]
+        correct = None if needs_review else (all(auto) if auto else None)
+        return {"type": t, "correct": correct, "needs_review": needs_review,
+                "explain": item.get("explain", ""), "parts": results}
+    # 兜底：无 type 当单选
+    return {"type": "single", "correct": _grade_answer(user_raw, item.get("answer")),
+            "answer": item.get("answer"), "explain": item.get("explain", "")}
+
+
 def judge(qid: str, answer: Any, subject: str = "physics") -> dict[str, Any]:
-    """判分。答错时自动建档入错题库。answer 越界视为错误。"""
+    """判分。答错时自动建档入错题库。主观题标记待评阅（correct=None），不自动入错题库。"""
     bank = load_bank(subject)
     item = next((q for q in bank["questions"] if q["id"] == qid), None)
     if not item:
@@ -318,18 +492,26 @@ def judge(qid: str, answer: Any, subject: str = "physics") -> dict[str, Any]:
                 break
     if not item:
         raise ValueError("题目不存在")
-    correct = _grade_answer(answer, item["answer"])
+    result = grade_item(item, answer)
+    correct = result["correct"]
+    # correct=None（主观待评阅）视为已作答，不计入错题
+    cval = 1 if correct is None else (1 if correct else 0)
     problem_id = 0
     with DB_LOCK, db() as conn:
         conn.execute(
             "INSERT INTO bank_attempts(qid, correct, attempted_at) VALUES (?, ?, ?)",
-            (qid, 1 if correct else 0, now()),
+            (qid, cval, now()),
         )
-        if not correct:
+        if correct is False:
             problem_id = _ensure_problem(conn, item)
-    return {
+    resp = {
         "correct": correct,
-        "answer": item["answer"],
-        "explain": item["explain"],
+        "needs_review": result.get("needs_review", False),
+        "explain": result.get("explain", ""),
         "problem_id": problem_id,
     }
+    if item.get("type") == "composite":
+        resp["parts"] = result["parts"]
+    else:
+        resp["answer"] = item["answer"]
+    return resp

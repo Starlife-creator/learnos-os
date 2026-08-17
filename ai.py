@@ -501,7 +501,7 @@ _BASE_PROFILE: dict[str, Any] = {
                      "'知识点:名称'、'题型:名称'、'难度:易|中|难'、'方法:名称'、'错因:名称' 之一。"
                      "只返回 JSON，不要多余文字。",
     "variant_author": "你是物理出题助手。基于给定错题生成 3 道变式，三题模式分别为：数值替换、情境替换、反向设问。"
-                      "每题必须包含 mode、title、content、answer 四个字段，只返回 JSON。",
+                      "每题必须包含 mode、title、content、answer 四个字段，只返回 JSON。可选补充 type（single/multiple/fill/subjective/composite，缺省开放式 subjective）与 choices（选择题选项数组）；选择题 answer 填正确选项字母。",
     "feynman_novice": "向一位完全不懂物理的新手讲解。规则：不许读公式，只讲物理图像与直觉。"
                       "讲完直接发送，我会帮你对照标准解析找漏点。",
     "oral_teacher": "你是严格的大学物理口试老师（苏格拉底式）。",
@@ -554,7 +554,7 @@ _CHEM_PROFILE: dict[str, Any] = {
                      "'知识点:名称'、'题型:名称'、'难度:易|中|难'、'方法:名称'、'错因:名称' 之一。"
                      "只返回 JSON，不要多余文字。",
     "variant_author": "你是化学出题助手。基于给定错题生成 3 道变式，三题模式分别为：数值替换、情境替换、反向设问。"
-                      "每题必须包含 mode、title、content、answer 四个字段，只返回 JSON。",
+                      "每题必须包含 mode、title、content、answer 四个字段，只返回 JSON。可选补充 type（single/multiple/fill/subjective/composite，缺省开放式 subjective）与 choices（选择题选项数组）；选择题 answer 填正确选项字母。",
     "feynman_novice": "向一位完全不懂化学的新手讲解。规则：不许堆砌术语，只讲核心直觉与图像。"
                       "讲完直接发送，我会帮你对照标准解析找漏点。",
     "oral_teacher": "你是严格的化学口试老师（苏格拉底式）。",
@@ -580,7 +580,7 @@ _MATH_PROFILE: dict[str, Any] = {
                      "'知识点:名称'、'题型:名称'、'难度:易|中|难'、'方法:名称'、'错因:名称' 之一。"
                      "只返回 JSON，不要多余文字。",
     "variant_author": "你是数学出题助手。基于给定错题生成 3 道变式，三题模式分别为：数值替换、情境替换、反向设问。"
-                      "每题必须包含 mode、title、content、answer 四个字段，只返回 JSON。",
+                      "每题必须包含 mode、title、content、answer 四个字段，只返回 JSON。可选补充 type（single/multiple/fill/subjective/composite，缺省开放式 subjective）与 choices（选择题选项数组）；选择题 answer 填正确选项字母。",
     "feynman_novice": "向一位完全不懂数学的新手讲解。规则：不许堆砌术语，只讲核心直觉与图像。"
                       "讲完直接发送，我会帮你对照标准解析找漏点。",
     "oral_teacher": "你是严格的数学口试老师（苏格拉底式）。",
@@ -606,7 +606,7 @@ _GENERIC_PROFILE: dict[str, Any] = {
                      "'知识点:名称'、'题型:名称'、'难度:易|中|难'、'方法:名称'、'错因:名称' 之一。"
                      "只返回 JSON，不要多余文字。",
     "variant_author": "你是出题助手。基于给定错题生成 3 道变式，三题模式分别为：数值替换、情境替换、反向设问。"
-                      "每题必须包含 mode、title、content、answer 四个字段，只返回 JSON。",
+                      "每题必须包含 mode、title、content、answer 四个字段，只返回 JSON。可选补充 type（single/multiple/fill/subjective/composite，缺省开放式 subjective）与 choices（选择题选项数组）；选择题 answer 填正确选项字母。",
     "feynman_novice": "向一位完全不懂这个主题的新手讲解。规则：不许堆砌术语，只讲核心直觉与图像。"
                       "讲完直接发送，我会帮你对照标准解析找漏点。",
     "oral_teacher": "你是严格的口试老师（苏格拉底式）。",
@@ -936,6 +936,8 @@ _VARIANT_SCHEMA = {
                 "title": {"type": "string", "min_length": 1, "required": True},
                 "content": {"type": "string", "min_length": 1, "required": True},
                 "answer": {"type": "string", "min_length": 1, "required": True},
+                "type": {"type": "string", "enum": ["single", "multiple", "fill", "subjective", "composite"]},
+                "choices": {"type": "array", "items": {"type": "string"}},
             },
         },
         "required": True,
@@ -1031,6 +1033,8 @@ def generate_variants(problem: dict[str, Any]) -> tuple[str, list[dict[str, Any]
             "title": str(v["title"]).strip(),
             "content": str(v["content"]).strip(),
             "answer": str(v["answer"]).strip(),
+            **({"type": str(v["type"]).strip()} if v.get("type") else {}),
+            **({"choices": [str(c).strip() for c in v["choices"]]} if v.get("choices") else {}),
         } for v in variants]
     except (SchemaError, ValueError) as exc:
         LOG.warning("AI 变式生成校验失败，降级模板: %s", exc)
@@ -1038,3 +1042,330 @@ def generate_variants(problem: dict[str, Any]) -> tuple[str, list[dict[str, Any]
     except Exception as exc:
         LOG.warning("AI 变式生成失败，降级模板: %s", exc)
         return "local", local_variants(problem, sbj)
+
+
+# ── A5 按题型出题（题库多题型增强）───────────────────────────
+
+_BANK_Q_TYPES = ("single", "multiple", "fill", "subjective", "composite")
+
+_BANK_Q_SCHEMA = {
+    "question": {
+        "type": "object",
+        "properties": {
+            "type": {"type": "string", "enum": list(_BANK_Q_TYPES), "required": True},
+            "stem": {"type": "string", "min_length": 5, "required": True},
+            "choices": {"type": "array", "items": {"type": "string"}},
+            "answer": {"type": "any"},
+            "explain": {"type": "string"},
+            "parts": {"type": "array", "items": {"type": "object"}},
+        },
+        "required": True,
+    },
+}
+
+_BANK_Q_PROMPT = (
+    "你是学科题库出题助手。根据用户给的学科、知识点与题型，出 1 道高质量练习题，"
+    "严格返回 JSON，结构为 {question: {...}}。字段：\n"
+    "- type: 必填，单选=single / 多选=multiple / 填空=fill / 主观=subjective / 大小题=composite\n"
+    "- stem: 题干（≥5 字）\n"
+    "- choices: 仅 single/multiple 必填，选项数组（≥2 项）\n"
+    "- answer: single=正确选项下标(从0)；multiple=正确下标数组；fill=答案字符串或数组(多空)；"
+    "subjective=参考答案文本；composite 省略\n"
+    "- explain: 解析\n"
+    "- parts: 仅 composite 必填，子题数组，每个子题结构同 question（可递归嵌套）\n"
+    "只返回 JSON，不要多余文字。"
+)
+
+
+def local_bank_question(subject: str, topic: str, qtype: str) -> dict[str, Any]:
+    """离线降级：产出一道开放式自评占位题（零依赖）。"""
+    return {
+        "type": "single",
+        "stem": f"【{topic or '知识点'}】请用自己的话简述其核心要点并举例说明。",
+        "choices": ["能正确表述并举例", "部分正确", "概念混淆", "完全错误"],
+        "answer": 0,
+        "explain": "离线模式仅提供开放式自评占位，建议联网后重新生成。",
+    }
+
+
+def generate_bank_question(subject: str, topic: str, qtype: str = "single",
+                           context: str = "") -> dict[str, Any]:
+    """AI 按题型出题，返回与 bank 模型一致的题目 dict；失败降级 local。"""
+    if qtype not in _BANK_Q_TYPES:
+        qtype = "single"
+    p = _subject_profile(subject)
+    user_text = (
+        f"学科：{subject}\n知识点：{topic or '自选'}\n题型：{qtype}\n"
+        f"背景材料：{context or '无'}"
+    )
+    prompt = [
+        {"role": "system", "content": _BANK_Q_PROMPT},
+        {"role": "user", "content": user_text},
+    ]
+    try:
+        raw = call_ai(prompt, max_tokens=900, tier="heavy", retries=1)
+        data = validate_object(raw, _BANK_Q_SCHEMA)
+        q = data["question"]
+        qtype_r = q.get("type")
+        if qtype_r not in _BANK_Q_TYPES:
+            qtype_r = "single"
+        item: dict[str, Any] = {
+            "type": qtype_r,
+            "stem": str(q.get("stem", "")).strip(),
+            "explain": str(q.get("explain", "")).strip(),
+        }
+        if qtype_r in ("single", "multiple"):
+            item["choices"] = [str(c).strip() for c in (q.get("choices") or [])]
+            item["answer"] = q.get("answer")
+        elif qtype_r in ("fill", "subjective"):
+            item["answer"] = q.get("answer")
+        elif qtype_r == "composite":
+            parts = q.get("parts") or []
+            if not parts:
+                raise SchemaError("composite 缺少 parts")
+            item["parts"] = parts
+        return item
+    except (SchemaError, ValueError) as exc:
+        LOG.warning("AI 出题校验失败，降级: %s", exc)
+        return local_bank_question(subject, topic, qtype)
+    except Exception as exc:
+        LOG.warning("AI 出题失败，降级: %s", exc)
+        return local_bank_question(subject, topic, qtype)
+
+
+# ── A6 AI 审题 ─────────────────────────────────────────────
+
+_REVIEW_SCHEMA = {
+    "review": {
+        "type": "object",
+        "properties": {
+            "verdict": {"type": "string", "enum": ["pass", "warn", "reject"], "required": True},
+            "issues": {"type": "array", "items": {"type": "string"}},
+            "comment": {"type": "string"},
+            "revised": {"type": "string"},
+        },
+        "required": True,
+    },
+}
+
+_REVIEW_PROMPT = (
+    "你是严格的教学审题专家。对用户给出的 1 道题做质量审查，出具结论。\n"
+    "审题维度（逐项检查后汇总）：\n"
+    "1. 题干：是否清晰、无歧义、条件齐全、是否有遗漏或天生无法作答；\n"
+    "2. 选择题：答案是否唯一/确定，错误项是否合理、是否有明显凑数；\n"
+    "3. 填空/主观题：参考答案是否准确、表述是否严谨；\n"
+    "4. 大小题(composite)：各子题是否相互独立、总分与问题是否匹配。\n"
+    "只返回 JSON，结构为 {review: {...}}，字段：\n"
+    "- verdict: pass(没问题) / warn(有小问题可改进) / reject(有硬伤必须改)\n"
+    "- issues: 发现的问题数组（没问题也可给 1-2 条优化建议）\n"
+    "- comment: 一句话总评\n"
+    "- revised: 若 verdict=reject 给出建议修订后的完整题目 JSON 文本；否则可省略"
+)
+
+_ai_available: bool | None = None
+
+
+def ai_configured() -> bool:
+    """AI 是否可用（有 key 或密钥文件）。结果缓存，可被 invalidate_settings_cache 重置。"""
+    try:
+        from keystore import key_file_exists
+    except Exception:
+        key_file_exists = lambda: False  # type: ignore[assignment]
+    return bool(_runtime_key or key_file_exists())
+
+
+def review_bank_question(question: dict[str, Any], subject: str = "") -> dict[str, Any]:
+    """A6 AI 审题：校验出一题质量。
+
+    返回 {verdict, issues, comment, revised?, ai_available}。
+    AI 不可用/异常时降级为 {verdict: "pass", ai_available: False}，不阻断出题流程。
+    """
+    global _ai_available
+    try:
+        q = dict(question or {})
+        q.setdefault("type", q.get("type") or "single")
+        if not ai_configured():
+            _ai_available = False
+            return {"verdict": "pass", "issues": [], "comment": "", "ai_available": False}
+    except Exception:
+        _ai_available = False
+        return {"verdict": "pass", "issues": [], "comment": "", "ai_available": False}
+    payload = json.dumps(q, ensure_ascii=False)
+    prompt = [
+        {"role": "system", "content": _REVIEW_PROMPT},
+        {"role": "user", "content": f"学科：{subject or '未知'}\n待审题目：\n{payload}"},
+    ]
+    try:
+        raw = call_ai(prompt, max_tokens=700, tier="heavy", retries=1)
+        data = validate_object(raw, _REVIEW_SCHEMA)
+        rv = data["review"]
+        verdict = rv.get("verdict", "warn")
+        if verdict not in ("pass", "warn", "reject"):
+            verdict = "warn"
+        return {
+            "verdict": verdict,
+            "issues": [str(x) for x in (rv.get("issues") or [])][:8],
+            "comment": str(rv.get("comment") or "").strip(),
+            "revised": str(rv.get("revised") or "").strip() or None,
+            "ai_available": True,
+        }
+    except (SchemaError, ValueError) as exc:
+        LOG.warning("AI 审题校验失败，降级: %s", exc)
+    except Exception as exc:
+        LOG.warning("AI 审题失败，降级: %s", exc)
+    _ai_available = False
+    return {"verdict": "pass", "issues": [], "comment": "", "ai_available": False}
+
+
+# ── A7 AI 评分（主观题）────────────────────────────────────
+
+_SCORE_SCHEMA = {
+    "score": {
+        "type": "object",
+        "properties": {
+            "score": {"type": "integer", "min": 0, "max": 100, "required": True},
+            "comment": {"type": "string"},
+            "against": {"type": "string"},
+        },
+        "required": True,
+    },
+}
+
+_SCORE_PROMPT = (
+    "你是严格、友好的学科阅卷老师。针对用户提供的【题目】【参考答案】【学生作答】，"
+    "按 0-100 分给分并点评。\n"
+    "评分要求：\n"
+    "- 对照参考答案逐要点判分，不苛求措辞一致，抓关键点是否到位；\n"
+    "- 明显跑题/空白给低分并提供改进建议；表述混乱但要点齐全可给高分；\n"
+    "- comment 给出 1-3 句点评（中文）：先总评，再指出失分点与改进建议，最后给分。\n"
+    "只返回 JSON，结构为 {score: {score: 0-100 整数, comment: 点评, against: 命中要点简述}}"
+)
+
+
+def ai_score_item(item: dict[str, Any], user_raw: Any, subject: str = "") -> dict[str, Any]:
+    """A7 AI 评分（递归）。
+
+    - 客观题叶（single/multiple/fill）：复用 grade_item 确定性判分，score=100 或 0；
+    - 主观题叶（subjective）：AI 可用则调 AI 给 0-100 分＋点评；否则 score=None, needs_review=True；
+    - composite：递归聚合，按权重（客观=选项数/空数，主观=100）加权平均；
+    - AI 不可用/失败：对应主观标记 needs_review，不拉低总分分母。
+    返回 {score(0-100 或 None), ai_available, mode, needs_review, comment?, against?, parts?}。
+    """
+    from bank import grade_item
+
+    def _res(t: str, score: int | None, mode: str, *, avail: bool = False,
+             need: bool = False, weight: int = 1, **extra: Any) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "type": t, "score": score, "mode": mode,
+            "ai_available": avail, "needs_review": need, "weight": weight,
+        }
+        d.update(extra)
+        return d
+
+    def rec(it: dict[str, Any], ans: Any) -> dict[str, Any]:
+        t = it.get("type", "single")
+        if t == "composite":
+            parts = it.get("parts") or []
+            in_ans = ans if isinstance(ans, list) else []
+            subs = [rec(p, in_ans[i] if i < len(in_ans) else None)
+                    for i, p in enumerate(parts)]
+            scored = [s for s in subs if s["score"] is not None]
+            if not scored:
+                score: int | None = None
+            else:
+                wsum = sum(s["weight"] for s in scored)
+                score = int(round(sum(s["score"] * s["weight"] for s in scored) / (wsum or 1)))
+            return _res(
+                t, score, _agg_mode([s["mode"] for s in subs]),
+                avail=any(s["ai_available"] for s in subs),
+                need=any(s["needs_review"] for s in subs),
+                weight=1, parts=subs,
+            )
+        if t == "multiple":
+            g = grade_item(it, ans)
+            w = max(len(it.get("choices") or []), 1)
+            return _res(t, 100 if g["correct"] else 0, "deterministic", weight=w)
+        if t == "fill":
+            raw_ans = it.get("answer")
+            w = len(raw_ans) if isinstance(raw_ans, list) else 1
+            g = grade_item(it, ans)
+            return _res(t, 100 if g["correct"] else 0, "deterministic", weight=max(w, 1))
+        if t == "subjective":
+            g = grade_item(it, ans)
+            if g["correct"] is not None:  # 理论上有兜底，安全处理
+                return _res(t, 100 if g["correct"] else 0, "deterministic")
+            out = _ai_subjective(it, ans, subject)
+            if out["score"] is None:
+                return _res(t, None, "unrated", need=True)
+            return _res(t, out["score"], "ai", avail=True, weight=100,
+                        comment=out["comment"], against=out.get("against") or "")
+        # single / 兜底
+        g = grade_item(it, ans)
+        return _res(t, 100 if g["correct"] else 0, "deterministic")
+
+    top = rec(item, user_raw)
+    out: dict[str, Any] = {
+        "score": top["score"],
+        "ai_available": top["ai_available"],
+        "mode": top["mode"],
+        "needs_review": top["needs_review"],
+    }
+    if item.get("type") == "composite":
+        out["parts"] = top["parts"]
+    if top.get("comment"):
+        out["comment"] = top["comment"]
+    if top.get("against"):
+        out["against"] = top["against"]
+    return out
+
+
+def _agg_mode(modes: list[str]) -> str:
+    if "ai" in modes:
+        return "ai" if not any(m != "ai" for m in modes) else "mixed"
+    if "unrated" in modes:
+        return "unrated"
+    return "deterministic"
+
+
+def _ai_ready() -> bool:
+    """AI 是否可用。仅记录观察结果，不缓存 False 以免新录入 key 后无法恢复。"""
+    return ai_configured()
+
+
+def _ai_subjective(item: dict[str, Any], user_raw: Any, subject: str) -> dict[str, Any]:
+    """单道主观题 AI 评分。返回 {score(int|None), comment, against}；失败 score=None。"""
+    try:
+        if not _ai_ready():
+            return {"score": None, "comment": "", "against": ""}
+    except Exception:
+        return {"score": None, "comment": "", "against": ""}
+    user_text = str(user_raw or "").strip()
+    ref = str(item.get("answer") or "").strip()
+    if not user_text:
+        # 未作答：保持待评阅语义，不自动给 0 分（避免误把“没写”当“判过”）
+        return {"score": None, "comment": "", "against": ""}
+    payload = json.dumps({
+        "stem": str(item.get("stem") or ""),
+        "answer": ref,
+        "student": user_text[:2000],
+        "subject": subject,
+    }, ensure_ascii=False)
+    prompt = [
+        {"role": "system", "content": _SCORE_PROMPT},
+        {"role": "user", "content": f"题目与参考答案与学生作答：\n{payload}"},
+    ]
+    try:
+        raw = call_ai(prompt, max_tokens=500, tier="heavy", retries=1)
+        data = validate_object(raw, _SCORE_SCHEMA)
+        sc = data["score"]
+        s = int(sc.get("score") or 0)
+        return {
+            "score": max(0, min(100, s)),
+            "comment": str(sc.get("comment") or "").strip(),
+            "against": str(sc.get("against") or "").strip(),
+        }
+    except (SchemaError, ValueError) as exc:
+        LOG.warning("AI 评分校验失败，降级自评: %s", exc)
+    except Exception as exc:
+        LOG.warning("AI 评分失败，降级自评: %s", exc)
+    return {"score": None, "comment": "", "against": ""}

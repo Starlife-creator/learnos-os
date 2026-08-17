@@ -351,3 +351,34 @@ a { color: var(--accent); text-decoration: none; }
   .page.active, .modal { animation: none; }
   .card, .stat-card { transition: none; }
 }
+
+/* ── 题库多题型（填空/主观/大小题/AI 出题）── */
+.bank-fill-wrap { display: flex; flex-wrap: wrap; gap: 8px; }
+.bank-fill {
+  padding: 9px 12px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg); color: var(--text); font-size: 14px; min-width: 160px;
+}
+.bank-fill:focus { outline: none; border-color: var(--accent); }
+.bank-subj {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg); color: var(--text); font-size: 14px; resize: vertical; font-family: inherit;
+}
+.bank-subj:focus { outline: none; border-color: var(--accent); }
+.bank-part {
+  margin: 12px 0 12px 0; padding: 12px 14px; border: 1px dashed var(--border);
+  border-radius: var(--radius); background: rgba(127,127,127,.04);
+}
+.bank-part-title { font-size: 13px; font-weight: 600; color: var(--text-2); margin-bottom: 8px; }
+.bank-part-result { margin: 10px 0 0 14px; }
+.bank-part-result .bank-part-result { margin-left: 24px; }
+.bank-review-card { border-color: var(--accent); background: var(--accent-light); }
+.bank-gen-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 10px 0; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--bg);
+}
+.input-sm {
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--text); font-size: 13px;
+}
+.input-sm:focus { outline: none; border-color: var(--accent); }
