@@ -41,10 +41,11 @@ D. 牛顿第二定律只适用于低速宏观
 
 class TestMaterialUnit(unittest.TestCase):
     def test_batch_chars_adaptive(self):
-        # 8k 上下文 → 4k 字符/批（下限）；32k → ~15k；128k → 24k（上限）
+        # 8k 上下文 → 4k 字符/批（下限）；32k+ → 12k（上限，防单批过大致输出截断）
         self.assertEqual(material.batch_chars(8000), 4000)
-        self.assertEqual(material.batch_chars(32000), 15840)
-        self.assertEqual(material.batch_chars(128000), 24000)
+        self.assertEqual(material.batch_chars(32000), 12000)
+        self.assertEqual(material.batch_chars(128000), 12000)
+        self.assertEqual(material.batch_chars(1000000), 12000)
 
     def test_split_batches_full_coverage(self):
         size = 5000

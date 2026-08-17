@@ -76,6 +76,24 @@ class TestValidate(unittest.TestCase):
         with self.assertRaises(SchemaError):
             validate_object("这道题考查受力分析，建议多练习", SCHEMA)
 
+    def test_truncated_string_repaired(self):
+        # max_tokens 截断（字符串未闭合）→ 自动修复：丢弃截断残余并补闭合
+        data = validate_object(
+            '{"error_type": "calculation", "tags": ["代"',
+            SCHEMA,
+        )
+        self.assertEqual(data["error_type"], "calculation")
+        self.assertTrue(data["tags"] == ["代"] or data["tags"] == [])
+
+    def test_truncated_bracket_closed(self):
+        # 数组截断（元素写到一半）→ 补空值+闭合括号
+        data = validate_object(
+            '{"error_type": "careless", "tags": ["力学", "',
+            SCHEMA,
+        )
+        self.assertEqual(data["error_type"], "careless")
+        self.assertEqual(data["tags"], ["力学", ""])
+
 
 if __name__ == "__main__":
     unittest.main()

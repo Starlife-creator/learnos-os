@@ -26,7 +26,7 @@ def batch_chars(context_tokens: int) -> int:
     例：8k 上下文 → 4k 字符/批；32k → 15k；128k → 24k（顶格）。
     """
     budget_tokens = max(2000, int(int(context_tokens) * 0.45))
-    return max(4000, min(24000, int(budget_tokens * 1.1)))
+    return max(4000, min(12000, int(budget_tokens * 1.1)))
 
 _CONCEPT_SCHEMA = {
     "chapters": {"type": "array", "items": {"type": "object", "properties": {
@@ -101,7 +101,7 @@ def _clean_concepts(batch_text: str) -> dict[str, Any] | None:
         )},
         {"role": "user", "content": batch_text},
     ]
-    raw_out = call_ai(prompt, max_tokens=2000, tier="heavy", route="material")
+    raw_out = call_ai(prompt, max_tokens=4000, tier="heavy", route="material")
     try:
         data = validate_object(raw_out, _CONCEPT_SCHEMA)
     except _SchemaError:
@@ -124,7 +124,7 @@ def _clean_questions(batch_text: str) -> list[dict[str, Any]] | None:
         )},
         {"role": "user", "content": batch_text},
     ]
-    data = validate_object(call_ai(prompt, max_tokens=2000, tier="heavy", route="material"),
+    data = validate_object(call_ai(prompt, max_tokens=4000, tier="heavy", route="material"),
                            _QUESTION_SCHEMA)
     return data["questions"] or None
 
@@ -141,7 +141,7 @@ def _clean_paper(batch_text: str, first: bool) -> dict[str, Any] | None:
         )},
         {"role": "user", "content": batch_text},
     ]
-    data = validate_object(call_ai(prompt, max_tokens=2000, tier="heavy", route="material"),
+    data = validate_object(call_ai(prompt, max_tokens=4000, tier="heavy", route="material"),
                            _PAPER_SCHEMA)
     if not data["questions"]:
         return None

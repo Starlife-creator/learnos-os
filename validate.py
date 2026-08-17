@@ -66,13 +66,120 @@ def _extract_json(raw: str) -> str:
     return s
 
 
+def _repair_truncated(s: str) -> str:
+    """修复 max_tokens 截断导致的"字符串未闭合"：删掉末尾不完整的字符串片段。
+
+    模型输出到达 max_tokens 上限时 JSON 会在字符串中间被切断，形如
+    {"concepts": [{"name": "惯性", "chapter": "力 —— 末尾引号缺失。
+    策略：找到最后一个引号（属于未闭合字符串的起始引号），截掉其残余部分，
+    若截断处缺值则补 ""，按括号配平补上缺失的 ] } 闭合符，然后尝试解析。
+    修复失败返回原串。
+    """
+    if '"' not in s:
+        # 无引号：只补括号闭合
+        stripped = s.rstrip()
+        stack: list[str] = []
+        for ch in stripped:
+            if ch in "[{":
+                stack.append(ch)
+            elif ch in "]}":
+                if stack:
+                    stack.pop()
+        pairs = {"{": "}", "[": "]"}
+        final = (stripped + "".join(pairs[c] for c in reversed(stack))).rstrip()
+        try:
+            json.loads(final)
+            return final
+        except (json.JSONDecodeError, TypeError):
+            return s
+    stripped = s.rstrip()
+    # 判断是否有"未闭合字符串"：解析到末尾时字符串计数是否非零（用简易扫描）
+    # 若末尾落在字符串内部（引号后无匹配闭合），则属于字符串截断 → 定位最后一个开引号
+    has_unclosed_str = False
+    in_str = False
+    esc = False
+    for ch in stripped:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+    if in_str:
+        has_unclosed_str = True
+    # 从右往左找最后一个 '"'（属于未闭合字符串的起始引号），跳过转义
+    cut = -1
+    i = len(stripped) - 1
+    while i >= 0:
+        if stripped[i] == '"':
+            j = i
+            backslashes = 0
+            while j > 0 and stripped[j - 1] == "\\":
+                backslashes += 1
+                j -= 1
+            if backslashes % 2 == 0:
+                cut = i
+                break
+        i -= 1
+    if has_unclosed_str and cut >= 0:
+        base = stripped[:cut].rstrip()
+    else:
+        # 无未闭合字符串：内容完整只缺括号 → 直接补括号
+        base = stripped
+    # 缺值场景：base 以 ':' 或 ',' 或 '[' 结尾 → 该处值/元素被截断，补一个空字符串
+    # （注意：必须在这里补，否则 json.loads 在","后缺值报错）
+    if base.rstrip().endswith((":", ",")):
+        base = base.rstrip() + '""'
+    elif base.rstrip().endswith("["):
+        base = base.rstrip() + '""'
+    # 括号配平补 ] }
+    stack: list[str] = []
+    in_str = False
+    esc = False
+    for ch in base:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "[{":
+            stack.append(ch)
+        elif ch in "]}":
+            if stack:
+                stack.pop()
+    pairs = {"{": "}", "[": "]"}
+    final = (base + "".join(pairs[c] for c in reversed(stack))).rstrip()
+    try:
+        json.loads(final)
+        return final
+    except (json.JSONDecodeError, TypeError):
+        return s
+
+
 def validate_object(raw: str, schema: dict[str, Any]) -> dict[str, Any]:
     """解析并校验 JSON 字符串。失败抛 SchemaError（不落库）。"""
     cleaned = _extract_json(raw)
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError as exc:
-        raise SchemaError(f"JSON 解析失败: {exc}") from exc
+        # max_tokens 截断（字符串未闭合）→ 尝试修复后重解析
+        repaired = _repair_truncated(cleaned)
+        if repaired != cleaned:
+            try:
+                data = json.loads(repaired)
+            except json.JSONDecodeError:
+                raise SchemaError(f"JSON 解析失败: {exc}") from exc
+        else:
+            raise SchemaError(f"JSON 解析失败: {exc}") from exc
     if not isinstance(data, dict):
         raise SchemaError(f"期望 JSON 对象，得到 {type(data).__name__}")
     _check(data, schema, "$")
