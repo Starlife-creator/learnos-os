@@ -49,6 +49,33 @@ class TestValidate(unittest.TestCase):
         with self.assertRaises(SchemaError):
             validate_object('{"error_type": "calculation", "tags": [], "meta": {"source": 42}}', SCHEMA)
 
+    def test_fence_codeblock_stripped(self):
+        data = validate_object(
+            '```json\n{"error_type": "careless", "tags": ["力学"]}\n```',
+            SCHEMA,
+        )
+        self.assertEqual(data["error_type"], "careless")
+
+    def test_prefix_prose_stripped(self):
+        data = validate_object(
+            '以下是分析结果：\n{"error_type": "calculation", "tags": ["代数"]}\n希望有帮助',
+            SCHEMA,
+        )
+        self.assertEqual(data["error_type"], "calculation")
+        self.assertEqual(data["tags"], ["代数"])
+
+    def test_markdown_fence_plain(self):
+        data = validate_object(
+            '```\n{"error_type": "careless", "confidence": 0.8, "tags": []}\n```',
+            SCHEMA,
+        )
+        self.assertEqual(data["confidence"], 0.8)
+
+    def test_pure_prose_still_fails(self):
+        # 无任何 JSON 结构的纯文本仍应报错（不误吞）
+        with self.assertRaises(SchemaError):
+            validate_object("这道题考查受力分析，建议多练习", SCHEMA)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,7 +2,13 @@
 
 支持：必填字段、类型、枚举约束、数值区间、嵌套 dict/list。
 AI 返回的 JSON 必须先过此校验才能落库（R3）。
+
+解析时对 AI 常见不洁输出做容错：
+- Markdown 代码块包裹（```json ... ```）→ 剥离
+- 前置说明文字（"以下是结果："）→ 从首个 {/[ 处截取
+- 后置多余文字 → 截断到 JSON 结束
 """
+
 from __future__ import annotations
 
 import json
@@ -14,10 +20,57 @@ class SchemaError(ValueError):
     """校验失败，携带可读的字段路径信息。"""
 
 
+def _extract_json(raw: str) -> str:
+    """从 AI 回复中提取 JSON 主体：剥离代码块、截取首个 {/[ 到末尾对应的 }/]。
+
+    解析失败返回原串（交由 json.loads 给出原始错误）。
+    """
+    s = str(raw).strip()
+    if not s:
+        return s
+    # 剥离 Markdown 代码块围栏（```json ... ``` 或 ``` ... ```）
+    fence = re.search(r"```(?:json)?\s*(.*?)```", s, re.DOTALL)
+    if fence:
+        s = fence.group(1).strip()
+    # 前置说明文字：从首个 { 或 [ 开始
+    start = min([i for i in (s.find("{"), s.find("[")) if i >= 0] or [-1])
+    if start > 0:
+        s = s[start:]
+    # 后置多余文字：从锚点起用括号配平找 JSON 结尾
+    if s:
+        s = s.rstrip()
+        depth = 0
+        in_str = False
+        esc = False
+        end = None
+        for i, ch in enumerate(s):
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch in "[{":
+                depth += 1
+            elif ch in "]}":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        if end is not None:
+            s = s[:end]
+    return s
+
+
 def validate_object(raw: str, schema: dict[str, Any]) -> dict[str, Any]:
     """解析并校验 JSON 字符串。失败抛 SchemaError（不落库）。"""
+    cleaned = _extract_json(raw)
     try:
-        data = json.loads(raw)
+        data = json.loads(cleaned)
     except json.JSONDecodeError as exc:
         raise SchemaError(f"JSON 解析失败: {exc}") from exc
     if not isinstance(data, dict):
