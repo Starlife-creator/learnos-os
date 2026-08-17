@@ -91,17 +91,22 @@ def _split_batches(text: str, batch_size: int) -> list[str]:
 
 def _clean_concepts(batch_text: str) -> dict[str, Any] | None:
     from ai import call_ai
+    from validate import SchemaError as _SchemaError
     prompt = [
         {"role": "system", "content": (
-            "你是知识图谱编辑。从给定教材片段中提取章节与核心概念，只返回 JSON："
+            "你是知识图谱编辑。从给定教材片段中提取章节与核心概念，不要解释，严格只输出 JSON 对象："
             '{"chapters": [{"name": "章节名"}], "concepts": [{"name": "概念名", '
             '"chapter": "所属章节名", "related": ["相关概念名"]}]}。'
             "要求：概念必须是学科概念（不要页码/题号/人名）；related 只填同片段出现过的概念；没有则给空数组。"
         )},
         {"role": "user", "content": batch_text},
     ]
-    data = validate_object(call_ai(prompt, max_tokens=1200, tier="heavy", route="material"),
-                           _CONCEPT_SCHEMA)
+    raw_out = call_ai(prompt, max_tokens=2000, tier="heavy", route="material")
+    try:
+        data = validate_object(raw_out, _CONCEPT_SCHEMA)
+    except _SchemaError:
+        LOG.warning("概念提取解析失败，模型原始返回[:300]=%r", str(raw_out)[:300])
+        raise
     if not data["chapters"] and not data["concepts"]:
         return None
     return data
@@ -111,7 +116,7 @@ def _clean_questions(batch_text: str) -> list[dict[str, Any]] | None:
     from ai import call_ai
     prompt = [
         {"role": "system", "content": (
-            "你是题库编辑。从给定教材/试卷片段中提取选择题，只返回 JSON："
+            "你是题库编辑。从给定教材/试卷片段中提取选择题，不要解释，严格只输出 JSON 对象："
             '{"questions": [{"stem": "题干", "choices": ["A...", "B...", "C...", "D..."], '
             '"answer": 0, "explain": "解析", "concept": "考查概念", "unit": "所属单元", "difficulty": 3}]}。'
             "answer 是正确选项的下标（0 起）。只要客观选择题；片段没有选择题就返回空数组；"
@@ -119,7 +124,7 @@ def _clean_questions(batch_text: str) -> list[dict[str, Any]] | None:
         )},
         {"role": "user", "content": batch_text},
     ]
-    data = validate_object(call_ai(prompt, max_tokens=1800, tier="heavy", route="material"),
+    data = validate_object(call_ai(prompt, max_tokens=2000, tier="heavy", route="material"),
                            _QUESTION_SCHEMA)
     return data["questions"] or None
 
@@ -129,14 +134,14 @@ def _clean_paper(batch_text: str, first: bool) -> dict[str, Any] | None:
     name_rule = '"name": "试卷名称（从卷头识别）", ' if first else '"name": "", '
     prompt = [
         {"role": "system", "content": (
-            "你是试卷录入员。判断给定片段是否为试卷，若是则提取题目清单，只返回 JSON："
+            "你是试卷录入员。判断给定片段是否为试卷，若是则提取题目清单，不要解释，严格只输出 JSON 对象："
             "{" + name_rule + '"questions": [{"qno": "题号", "topic": "考查知识点", '
             '"content": "题干摘要", "weight": 1}]}。'
             "weight 为分值/5（无分值则 1）。topic 必填。不是试卷或没有题目时 questions 给空数组。"
         )},
         {"role": "user", "content": batch_text},
     ]
-    data = validate_object(call_ai(prompt, max_tokens=1200, tier="heavy", route="material"),
+    data = validate_object(call_ai(prompt, max_tokens=2000, tier="heavy", route="material"),
                            _PAPER_SCHEMA)
     if not data["questions"]:
         return None

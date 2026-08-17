@@ -310,9 +310,14 @@ def call_ai(
             message = result["choices"][0]["message"]
             content = str(message.get("content") or "").strip()
             if not content:
-                # DeepSeek reasoner 类模型内容在 reasoning_content；两者皆空 → 接口异常
-                content = str(message.get("reasoning_content") or "").strip()
-            if not content:
+                has_reasoning = bool(str(message.get("reasoning_content") or "").strip())
+                if has_reasoning:
+                    # reasoner 类模型本轮只输出了推理草稿、未给出最终答案（常见于
+                    # 复杂任务 + 小 max_tokens 挤占）。把它当答案返回会让下游
+                    # JSON 解析失败（char 0），故明确报错提示换模型/提额度。
+                    raise RuntimeError(
+                        "AI 仅返回了推理内容、未生成最终答案（reasoning_content 非空而 "
+                        "content 为空）。建议：使用非推理模型，或在配置中提高 max_tokens。")
                 raise RuntimeError(
                     "AI 返回了空内容（HTTP 200 但无文本）。常见原因：模型名不存在/未开通"
                     "（检查设置中的模型名称，DeepSeek 官方用 deepseek-chat）、"
