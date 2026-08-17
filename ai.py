@@ -259,10 +259,12 @@ def _prepare_ai_request(
     route: str,
     stream: bool,
     model_override: str | None = None,
+    skip_preset: bool = False,
 ) -> tuple[str, str, dict[str, str], dict[str, str], float]:
     """call_ai / call_ai_stream 共用的配置校验与请求构造。
 
     返回 (model, url, payload, headers, start)；未配置时记录 telemetry 并抛 ValueError。
+    skip_preset=True 时不注入模型预设参数（用于 400 未知参数后的降级重试）。
     """
     from telemetry import record
     start = time.monotonic()
@@ -286,11 +288,13 @@ def _prepare_ai_request(
     # 模型预设库：按模型名/端点自动注入"关闭思考"参数。
     # 非流式请求必须关闭思考（reasoner 思考仅支持流式，否则报错/仅返回推理内容→JSON 解析失败）；
     # 流式 + 用户显式开启思考（disable_thinking=0）时保留，供深度推理场景。
-    preset = _model_preset_body(model, base)
-    if preset:
-        if not stream or config.get("disable_thinking", "1") != "0":
-            for k, v in preset.items():
-                body.setdefault(k, v)
+    # skip_preset=True 时跳过（400 未知参数降级重试用）。
+    if not skip_preset:
+        preset = _model_preset_body(model, base)
+        if preset:
+            if not stream or config.get("disable_thinking", "1") != "0":
+                for k, v in preset.items():
+                    body.setdefault(k, v)
     if stream:
         # 请求最后一块附带 usage（DeepSeek/OpenAI 支持；本地实现不识别则忽略）
         body["stream_options"] = {"include_usage": True}
@@ -372,6 +376,22 @@ def call_ai(
         messages, max_tokens, tier, route, stream=False, model_override=model_override,
     )
 
+    # 中转站式降级：预设注入的 thinking 参数若被端点 400 拒绝（未知参数），
+    # 自动去除该参数重建请求重试一次（借鉴 LiteLLM/OpenRouter 的参数兼容策略）。
+    _dropped_preset = False
+
+    def _retry_without_preset() -> tuple[str, bytes | None]:
+        nonlocal _dropped_preset
+        try:
+            m2, u2, p2, h2, _ = _prepare_ai_request(
+                messages, max_tokens, tier, route, stream=False,
+                model_override=model_override, skip_preset=True)
+            _dropped_preset = True
+            LOG.warning("AI 请求 400：去掉模型预设 thinking 参数后重试。")
+            return m2, p2
+        except Exception:
+            return "", None
+
     last_error: Exception | None = None
     for attempt in range(retries + 1):
         try:
@@ -398,7 +418,18 @@ def call_ai(
             return content
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:500]
-            last_error = RuntimeError(f"AI 接口返回 {exc.code}：{detail}")
+            err_text = f"{exc.code} {detail}"
+            # 400 且疑似"未知 thinking 参数"→ 去掉预设重试一次
+            if (exc.code == 400 and not _dropped_preset
+                    and any(k in detail.lower() for k in (
+                        "enable_thinking", "thinking", "reasoning_effort",
+                        "reasoning_split", "unknown parameter", "invalid parameter"))):
+                m2, p2 = _retry_without_preset()
+                if p2 is not None:
+                    model, payload = m2, p2
+                    last_error = RuntimeError(err_text)
+                    continue  # 走下一次重试
+            last_error = RuntimeError(err_text)
             if exc.code < 500:
                 break
         except urllib.error.URLError as exc:

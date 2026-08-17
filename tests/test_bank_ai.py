@@ -342,5 +342,70 @@ class TestEnableThinking(unittest.TestCase):
         self.assertIsNone(body.get("reasoning_effort"))
 
 
+class TestPresetDropRetry(unittest.TestCase):
+    """中转站式降级：预设 thinking 参数被 400 拒绝时，去参数重试一次（借鉴 LiteLLM）。"""
+
+    def test_400_drops_preset_and_retries(self):
+        import json
+        import urllib.error
+        from unittest import mock
+
+        class _RespBody:
+            def __init__(self, data: bytes):
+                self._data = data
+
+            def read(self):
+                return self._data
+
+            def close(self):  # HTTPError 响应体接口要求
+                pass
+
+        calls = {"n": 0}
+
+        def fake_post(url, payload, headers, timeout=45):
+            calls["n"] += 1
+            body = json.loads(payload)
+            if calls["n"] == 1:
+                # 首次带 enable_thinking（DeepSeek 预设）→ 400 未知参数
+                self.assertFalse(body.get("enable_thinking"))
+                raise urllib.error.HTTPError(
+                    "url", 400, "Bad Request", None,
+                    _RespBody(b'{"error": "parameter enable_thinking not supported"}'))
+            # 第二次去参数重试成功
+            self.assertNotIn("enable_thinking", body)
+            return {"choices": [{"message": {"content": "ok"}}], "usage": {}}
+
+        cfg = {"api_base": "https://x.maas.aliyuncs.com/compatible-mode/v1",
+               "api_key": "sk", "model": "deepseek-v4-flash-0731",
+               "temperature": "0.3", "disable_thinking": "1"}
+        with mock.patch.object(ai, "get_cached_settings", return_value=cfg):
+            with mock.patch.object(ai, "_post_json", side_effect=fake_post):
+                result = ai.call_ai([{"role": "user", "content": "hi"}], route="test")
+        self.assertEqual(result, "ok")
+        self.assertEqual(calls["n"], 2)
+
+    def test_400_unknown_param_not_thinking_keeps(self):
+        # 400 且错误与 thinking 参数无关 → 不降级重试，直接抛错
+        import urllib.error
+        from unittest import mock
+
+        calls = {"n": 0}
+
+        def fake_post(url, payload, headers, timeout=45):
+            calls["n"] += 1
+            raise urllib.error.HTTPError(
+                "url", 400, "Bad Request", None,
+                type("R", (), {"read": lambda s: b'{"error": "rate limited"}', "close": lambda s: None})())
+
+        cfg = {"api_base": "https://x.maas.aliyuncs.com/compatible-mode/v1",
+               "api_key": "sk", "model": "deepseek-v4-flash-0731",
+               "temperature": "0.3", "disable_thinking": "1"}
+        with mock.patch.object(ai, "get_cached_settings", return_value=cfg):
+            with mock.patch.object(ai, "_post_json", side_effect=fake_post):
+                with self.assertRaises(RuntimeError):
+                    ai.call_ai([{"role": "user", "content": "hi"}], retries=0, route="test")
+        self.assertEqual(calls["n"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
