@@ -33,6 +33,20 @@ Thumbs.db
 # WorkBuddy internal state (memory, skills, agents)
 .workbuddy/
 
+# Agent / hook runtime state (finding-ledger, run history, hook-state,
+# reports) — generated at runtime, must NOT be tracked (same class as .workbuddy/)
+.mimosa/
+
+# Runtime-generated encryption keystore (per-environment, sensitive).
+# Recreated on first key save; do not commit.
+data/keys.enc
+
+# User-created custom question bank (runtime data, not source)
+data/bank_custom.json
+
+# User uploads (runtime content, same class as media/)
+uploads/
+
 # SQLite databases (generated at runtime, NOT committed)
 *.db
 *.db-wal
@@ -64,7 +78,8 @@ htmlcov/
 .pytest_cache/
 .ruff_cache/
 
-# Retired planning/worklog docs (deleted, do not re-track)
+# Planning / worklog docs (authored & iterated locally, NOT source — do not track)
+LearnOS-综合优化方案.md
 OPTIMIZATION_PLAN.md
 OPTIMIZATION_PLAN_V2.md
 WORK_LOG.md
