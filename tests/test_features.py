@@ -210,7 +210,11 @@ class TestBorrowedFeatures(unittest.TestCase):
         fp = _P(__file__).resolve().parent.parent / result["path"]
         self.assertTrue(fp.is_file())
         self.assertEqual(fp.read_bytes(), payload)
-        fp.unlink()  # 测试自清理
+        # 测试自清理；沙箱 safe-delete 钩子可能拦截 unlink，忽略
+        try:
+            fp.unlink()
+        except OSError:
+            pass
 
     def test_material_upload_rejects_bad_name(self):
         from http.client import HTTPConnection as _HC

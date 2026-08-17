@@ -34,7 +34,12 @@ import plugins  # noqa: E402
 def _tmp_db() -> str:
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
-    os.unlink(path)
+    # Sandbox safe-delete hook may block unlink; an empty file is still a valid
+    # brand-new SQLite db, so tolerating the failure is safe.
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
     return path
 
 
