@@ -2,10 +2,12 @@
 
 就绪度 = Σ(真题考点权重 × 该考点错题平均掌握度/5) / Σ权重。
 真题命中度 = 考点 topic 在错题本中出现过的比例（衡量「刷到的题是否覆盖考点」）。
+分数预测（§33.2）= 就绪度 × 考试日可提取率折扣，附带置信区间。
 """
 from __future__ import annotations
 
 import json
+from datetime import date, timedelta
 from typing import Any
 
 from db import DB_LOCK, db, now, row, rows
@@ -110,3 +112,85 @@ def delete_paper(paper_id: int) -> bool:
     with DB_LOCK, db() as conn:
         cur = conn.execute("DELETE FROM exam_papers WHERE id = ?", (paper_id,))
         return cur.rowcount > 0
+
+
+def _exam_day(exam_date: str | None) -> date:
+    """解析考试日；非法或空则回退为今天 + 7 天（典型模考窗口）。"""
+    if exam_date:
+        try:
+            return date.fromisoformat(exam_date[:10])
+        except ValueError:
+            pass
+    return date.today() + timedelta(days=7)
+
+
+def predict_score(paper_id: int, exam_date: str | None = None) -> dict[str, Any]:
+    """§33.2 分数预测：就绪度 × 考试日可提取率折扣，输出点位预测与置信区间。
+
+    模型（透明可解释，无外部依赖）：
+      retro = 试卷覆盖题目的平均可提取概率（FSRS 在考试日的 R；不可用时取 1.0 并标注 proxy）
+      predicted = readiness × (0.6 + 0.4 × retro)   # 就绪度已含掌握度，retro 仅做遗忘折扣
+    置信区间宽度随 FSRS 训练样本量收缩（confidence_for）。
+    """
+    from fsrs_bridge import retrievability, fsrs_status, confidence_for
+
+    paper = row("SELECT * FROM exam_papers WHERE id = ?", (paper_id,))
+    if not paper:
+        return {}
+    base = paper_readiness(paper_id)
+    if not base:
+        return {}
+    readiness = float(base["readiness"])
+    eday = _exam_day(exam_date or paper.get("exam_date") or None)
+    days_ahead = max(0, (eday - date.today()).days)
+
+    # 试卷覆盖的 topic 集合 → 取这些题目计算考试日平均可提取率
+    topics = {q["topic"] for q in base["questions"] if q["topic"]}
+    retro = 1.0
+    method = "proxy"  # 无 FSRS 时仅按就绪度乐观估计
+    if topics:
+        placeholders = ",".join("?" for _ in topics)
+        probs = rows(
+            f"SELECT id, state, stability, difficulty, updated_at FROM problems "
+            f"WHERE topic IN ({placeholders}) AND mastery >= 1",
+            tuple(topics),
+        )
+        if probs:
+            total = 0.0
+            n = 0
+            for p in probs:
+                r = retrievability(
+                    prev_interval=max(1, int(p["stability"]) if p["stability"] else 1),
+                    state=int(p["state"] or 0),
+                    stability=float(p["stability"] or 0.0),
+                    difficulty=float(p["difficulty"] or 0.0),
+                    last_review=str(p["updated_at"] or ""),
+                    current=eday,
+                )
+                total += r
+                n += 1
+            if n:
+                retro = round(total / n, 4)
+                method = "fsrs" if fsrs_status()["available"] else "proxy"
+
+    predicted = round(readiness * (0.6 + 0.4 * retro), 1)
+
+    # 置信区间：训练样本越少区间越宽
+    sample_count = int(fsrs_status().get("sample_count", 0))
+    band = {"insufficient": 18.0, "low": 12.0, "medium": 7.0, "high": 4.0}[confidence_for(sample_count)]
+    lo = max(0.0, predicted - band)
+    hi = min(100.0, predicted + band)
+    return {
+        "paper_id": paper_id,
+        "exam_date": eday.isoformat(),
+        "days_ahead": days_ahead,
+        "readiness": readiness,
+        "retrievability": retro,
+        "method": method,
+        "predicted": predicted,
+        "lower": round(lo, 1),
+        "upper": round(hi, 1),
+        "target": float(base["target"]),
+        "gap_to_target": round(max(0.0, base["target"] - predicted), 1),
+        "confidence": confidence_for(sample_count),
+    }

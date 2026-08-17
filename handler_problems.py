@@ -14,8 +14,9 @@ from typing import Any
 from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 
-from config import LOG, DB_PATH, MEDIA_DIR
+from config import LOG, MEDIA_DIR, EXPORT_TOKEN
 from db import DB_LOCK, db, now, row, rows
+import db as db_module  # 模块引用：上方 `db` 已被函数遮蔽，需用模块访问实时 DB_PATH
 from ai import (call_ai, call_ai_stream, fallback_hint, problem_prompt, extract_tags,
                 generate_variants, invalidate_settings_cache, get_cached_settings)
 from errors import normalize_error_type
@@ -23,6 +24,7 @@ from review import clamp_mastery
 from handler_base import (X_HEADER, X_VALUE, _IDEMPOTENCY, _IDEMPOTENCY_TTL,
                           _as_str_list, _interleave, _prune_idempotency)
 import graph
+import interop
 
 # 拍照/截图录题（B1）魔数（模块级，mixin 内 _image_ext 引用）
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -37,6 +39,16 @@ def _media_dir():
 
 
 class ProblemsMixin:
+    def _export_token_ok(self) -> bool:
+        """§1.1/§16.6：导出整库/错题库必须携带一次性本地令牌。
+
+        令牌通过 query `?token=` 或头 `X-Export-Token` 传递；同源应用从
+        /api/bootstrap 取得后注入下载链接，跨源网页无法读取故无法导出。
+        """
+        qs = parse_qs(urlparse(self.path).query)
+        provided = qs.get("token", [""])[0] or self.headers.get("X-Export-Token", "")
+        return bool(provided) and provided == EXPORT_TOKEN
+
     def _handle_list_problems(self) -> None:
         """支持分页与搜索: ?page=1&limit=50&q=关键词&sort=time|mastery (limit 上限 200)"""
         qs = parse_qs(urlparse(self.path).query)
@@ -323,7 +335,7 @@ class ProblemsMixin:
         backup_dir.mkdir(parents=True, exist_ok=True)
         backup = backup_dir / f"import_{now().replace(':', '').replace('-', '')}.db"
         try:
-            shutil.copy(DB_PATH, backup)
+            shutil.copy(db_module.DB_PATH, backup)
         except OSError as exc:
             self.json_response({"error": f"备份失败: {exc}"}, 500)
             return
@@ -688,7 +700,10 @@ class ProblemsMixin:
         return fp if fp.is_file() else None
 
     def _handle_export(self) -> None:
-        """只读导出。?format=json|anki-csv|ics（默认 json）。"""
+        """只读导出。?format=json|anki-csv|ics|csv|md（默认 json）。需导出令牌（§16.6）。"""
+        if not self._export_token_ok():
+            self.json_response({"error": "缺少有效的导出令牌（?token= 或 X-Export-Token）"}, 401)
+            return
         qs = parse_qs(urlparse(self.path).query)
         fmt = (qs.get("format", ["json"])[0] or "json").strip()
         if fmt == "anki-csv":
@@ -696,6 +711,17 @@ class ProblemsMixin:
             return
         if fmt == "ics":
             self._export_ics()
+            return
+        if fmt in ("csv", "md"):
+            include_answers = (qs.get("answers", ["1"])[0] or "1") not in ("0", "false", "off")
+            if fmt == "csv":
+                body = interop.export_csv(self.subject, include_answers)
+                self._text_response(body, "text/csv; charset=utf-8",
+                                    f"learnos-{self.subject}.csv")
+            else:
+                body = interop.export_md(self.subject, include_answers)
+                self._text_response(body, "text/markdown; charset=utf-8",
+                                    f"learnos-{self.subject}.md")
             return
         problems = rows("SELECT id, title, course, topic, content, my_attempt, error_type, error_path, trap_note, shortcut, fix_action, tags, tags_status, mastery, created_at, updated_at, subject FROM problems WHERE subject = ? ORDER BY id", (self.subject,))
         for p in problems:
@@ -713,7 +739,10 @@ class ProblemsMixin:
         self.json_response(data)
 
     def _handle_backup_export(self) -> None:
-        """一键备份：全库 JSON 下载。"""
+        """一键备份：全库 JSON 下载。需导出令牌（§16.6）。"""
+        if not self._export_token_ok():
+            self.json_response({"error": "缺少有效的导出令牌（?token= 或 X-Export-Token）"}, 401)
+            return
         import backup as backup_mod
         data = backup_mod.export_backup()
         body = json.dumps(data, ensure_ascii=False, indent=1)

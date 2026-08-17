@@ -43,10 +43,15 @@ class TestMultiSubject(unittest.TestCase):
         cls._server.server_close()
         db.DB_PATH = cls._orig_db
         config.DB_PATH = cls._orig_db
-        cls._tmp.cleanup()
+        try:
+            cls._tmp.cleanup()
+        except OSError:
+            # 沙箱安全删除机制在无回收站时拒绝 rmtree，忽略（临时文件留在 tests/.tmp）
+            pass
 
     def _request(self, method, path, body=None):
-        conn = HTTPConnection("127.0.0.1", self._port, timeout=10)
+        # 沙箱 I/O 较慢：physics 种子(312 节点)首加载在沙箱约 18s，放宽超时避免误判
+        conn = HTTPConnection("127.0.0.1", self._port, timeout=40)
         headers = {"X-Requested-With": "LearnOS"}
         data = None
         if body is not None:
@@ -154,7 +159,11 @@ class TestGraphMultiSubjectCore(unittest.TestCase):
     def tearDownClass(cls):
         db.DB_PATH = cls._orig_db
         config.DB_PATH = cls._orig_db
-        cls._tmp.cleanup()
+        try:
+            cls._tmp.cleanup()
+        except OSError:
+            # 沙箱安全删除机制在无回收站时拒绝 rmtree，忽略（临时文件留在 tests/.tmp）
+            pass
 
     def test_subject_seed_paths(self):
         self.assertEqual(graph.subject_seed_path("physics").name, "seed_concepts.json")

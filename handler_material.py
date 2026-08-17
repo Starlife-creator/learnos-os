@@ -55,6 +55,38 @@ class MaterialMixin:
             return
         self.json_response(result)
 
+    def _handle_material_cards(self, data: dict[str, Any]) -> None:
+        """§27 读书闭环基础版：粘贴文本 → 原子卡草稿；apply=true 则落库进 FSRS。
+
+        来源同 analyze：text / doc_id / path。零依赖启发式始终可用，AI 可用时增强。
+        """
+        import material
+        text = str(data.get("text", "")).strip()
+        doc_id = data.get("doc_id")
+        path = str(data.get("path", "")).strip()
+        try:
+            if text:
+                if len(text) > 6_000_000:
+                    raise ValueError("文本过长（>600 万字符），请拆分文件")
+            elif doc_id is not None:
+                text = material.doc_text(int(doc_id))
+            elif path:
+                text = material.path_text(path)
+            else:
+                raise ValueError("请提供文本、RAG 文档或工作区文件路径")
+            use_ai = bool(data.get("use_ai", True))
+            cards = material.extract_atomic_cards(text, self.subject, use_ai=use_ai)
+            if data.get("apply"):
+                added = material.apply_cards(cards, self.subject)
+                self.json_response({"added": added, "cards": cards})
+                return
+            self.json_response({"cards": cards, "count": len(cards)})
+        except (ValueError, SchemaError) as exc:
+            self.json_response({"error": str(exc)}, 400)
+        except Exception as exc:  # AI 网络/接口异常 → 502
+            LOG.warning("原子卡生成失败: %s", exc)
+            self.json_response({"error": f"生成失败：{exc}"}, 502)
+
     def _stream_material_analyze(self, text: str, targets: list[str], from_batch: int,
                                  max_batches: int | None, context_tokens: int) -> None:
         """SSE 分析流：start → progress* → done | error。每批 AI 调用完成即推送进度。"""

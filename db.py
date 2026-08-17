@@ -18,11 +18,34 @@ def now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+# 生产级 PRAGMA（§1.3/§16.1）：在 journal_mode=WAL 之后统一追加。
+# mmap_size 在某些沙箱/文件系统中不可用，单独 try 避免连接失败。
+_PROD_PRAGMAS = [
+    "PRAGMA busy_timeout = 5000",          # 写竞争时等待而非立即报错
+    "PRAGMA synchronous = NORMAL",         # WAL 下安全且显著降低 fsync 开销
+    "PRAGMA cache_size = -64000",          # 64MB 页缓存（负值为 KB）
+    "PRAGMA temp_store = MEMORY",          # 临时表/索引常驻内存
+    "PRAGMA wal_autocheckpoint = 1000",    # 每 1000 页自动 checkpoint
+    "PRAGMA secure_delete = OFF",          # 非隐私删除场景，关掉安全擦除提性能
+]
+
+
 def connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    for stmt in _PROD_PRAGMAS:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            # 个别 PRAGMA（如 mmap_size 受限）在特殊文件系统下不可设，忽略不影响正确性
+            LOG.warning("PRAGMA 未生效（忽略）: %s", stmt)
+    try:
+        # 256MB 内存映射：大幅提升大库读取吞吐；受限环境静默跳过
+        conn.execute("PRAGMA mmap_size = 268435456")
+    except sqlite3.OperationalError:
+        LOG.debug("PRAGMA mmap_size 不可用，跳过")
     return conn
 
 
@@ -378,6 +401,23 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE ai_telemetry ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0")
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (20, ?)", (now(),))
         LOG.info("数据库已迁移到 v20 (ai_telemetry.cached_tokens)")
+
+    # v21: 学习小组本地优先打卡（§34.2/§42.3）— 问责/连续天数，不暴露任何题目或答案。
+    if current < 21:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS study_checkins (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                check_date TEXT NOT NULL,
+                subject TEXT NOT NULL DEFAULT '',
+                minutes INTEGER NOT NULL DEFAULT 0,
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_checkins_date ON study_checkins(check_date)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_checkins_subject ON study_checkins(subject)")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (21, ?)", (now(),))
+        LOG.info("数据库已迁移到 v21 (学习小组打卡 study_checkins)")
 
 
 def register_builtin_subjects() -> None:

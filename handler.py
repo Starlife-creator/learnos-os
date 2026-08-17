@@ -16,7 +16,7 @@ from typing import Any
 from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 
-from config import STATIC_DIR, LOG, DB_PATH, MEDIA_DIR
+from config import STATIC_DIR, LOG, DB_PATH, MEDIA_DIR, SETTINGS_SCHEMA, coerce_setting, EXPORT_TOKEN, HOST
 from db import DB_LOCK, db, now, row, rows, settings_dict, subject_exists, list_subjects
 from ai import (
     call_ai, call_ai_stream, fallback_hint, problem_prompt, extract_tags, generate_variants,
@@ -36,6 +36,7 @@ from handler_problems import ProblemsMixin
 from handler_reviews import ReviewsMixin
 from handler_reports import ReportsMixin
 from handler_oral import OralMixin
+from handler_social import SocialMixin
 import fsrs_bridge
 from fsrs_bridge import next_interval_days
 from handler_base import (X_HEADER, X_VALUE, _IDEMPOTENCY, _IDEMPOTENCY_TTL,
@@ -43,7 +44,7 @@ from handler_base import (X_HEADER, X_VALUE, _IDEMPOTENCY, _IDEMPOTENCY_TTL,
 
 
 class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
-             ReportsMixin, SimpleHTTPRequestHandler):
+             ReportsMixin, SocialMixin, SimpleHTTPRequestHandler):
     server_version = "LearnOS/0.5.0"
 
     # 路由表：(正则模式, 处理方法名, 是否需要请求体)。路径数字组自动转 int 传入。
@@ -52,6 +53,7 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         (r"/api/search", "_handle_global_search"),
         (r"/api/fsrs/optimal", "_handle_fsrs_optimal"),
         (r"/api/dashboard", "_handle_dashboard"),
+        (r"/api/progress", "_handle_progress"),
         (r"/api/problems", "_handle_list_problems"),
         (r"/api/problems/(\d+)/history", "_handle_problem_history"),
         (r"/api/problems/(\d+)/related", "_handle_related_problems"),
@@ -78,16 +80,26 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         (r"/api/export/backup", "_handle_backup_export"),
         (r"/api/ocr/probe", "_handle_ocr_probe"),
         (r"/api/health", "_handle_health"),
+        (r"/api/bootstrap", "_handle_bootstrap"),
         (r"/api/models/probe", "_handle_models_probe"),
         (r"/api/rag/docs", "_handle_rag_docs"),
         (r"/api/rag/search", "_handle_rag_search"),
         (r"/api/rag/open", "_handle_rag_open"),
         (r"/api/exam/papers", "_handle_exam_papers"),
+        (r"/api/exam/papers/(\d+)/predict", "_handle_exam_predict"),
         (r"/api/exam/papers/(\d+)", "_handle_exam_paper"),
         (r"/api/bank", "_handle_bank"),
         (r"/api/bank/units", "_handle_bank_units"),
         (r"/api/bank/stats", "_handle_bank_stats"),
         (r"/api/subjects", "_handle_subjects"),
+        (r"/api/render-configs", "_handle_render_configs"),
+        (r"/api/render-config", "_handle_render_config"),
+        (r"/api/agent/orchestrate", "_handle_agent_orchestrate"),
+        (r"/api/pwa/manifest", "_handle_pwa_manifest"),
+        (r"/api/plugins", "_handle_plugins"),
+        (r"/api/social/checkins", "_handle_social_checkins"),
+        (r"/api/social/streak", "_handle_social_streak"),
+        (r"/api/export/social", "_handle_export_social"),
     ]
 
     POST_ROUTES: list[tuple[str, str, bool]] = [
@@ -124,7 +136,10 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         (r"/api/bank/import", "_handle_bank_import", True),
         (r"/api/subjects", "_handle_add_subject", True),
         (r"/api/material/analyze", "_handle_material_analyze", True),
+        (r"/api/material/cards", "_handle_material_cards", True),
         (r"/api/material/apply", "_handle_material_apply", True),
+        (r"/api/social/checkin", "_handle_social_checkin", True),
+        (r"/api/render-config", "_handle_set_render_config", True),
     ]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -217,6 +232,21 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
     def _subject_of(self, data: dict[str, Any]) -> str:
         return self._valid_subject(str(data.get("subject", "")))
 
+    def _get_or_404(self, table: str, row_id: Any, not_found_msg: str, id_col: str = "id") -> Any | None:
+        """§16.5 收口：消除各 handler 中重复的「按 id 查询 → 404」样板。
+
+        命中返回 dict 行；未命中已写入 404 响应并返回 None（调用方应 `if row is None: return`）。
+        table/id_col 经固定白名单校验，杜绝 SQL 注入。
+        """
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", id_col):
+            self.json_response({"error": "非法查询目标"}, 400)
+            return None
+        item = row(f"SELECT * FROM {table} WHERE {id_col} = ?", (row_id,))
+        if not item:
+            self.json_response({"error": not_found_msg}, 404)
+            return None
+        return item
+
     # ── GET 轻量端点（原内联分支，统一为方法以便路由表分发）──
 
     def _handle_fsrs_reset(self) -> None:
@@ -235,6 +265,10 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
     def _handle_health(self) -> None:
         self.json_response({"ok": True, "version": "0.5.0"})
 
+    def _handle_bootstrap(self) -> None:
+        """同源启动配置：导出令牌等。供应用 JS 拉取后注入导出链接（§16.6）。"""
+        self.json_response({"export_token": EXPORT_TOKEN, "version": "0.5.0", "host": HOST})
+
     def _handle_models_probe(self) -> None:
         from ai import probe_ollama
         self.json_response({"ollama": probe_ollama()})
@@ -246,6 +280,17 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
     def _handle_exam_paper(self, paper_id: int) -> None:
         import exam
         data = exam.paper_readiness(paper_id)
+        if not data:
+            self.json_response({"error": "试卷不存在"}, 404)
+            return
+        self.json_response(data)
+
+    def _handle_exam_predict(self, paper_id: int) -> None:
+        """GET /api/exam/papers/<id>/predict?exam_date=YYYY-MM-DD（§33.2 分数预测）。"""
+        import exam
+        qs = parse_qs(urlparse(self.path).query)
+        edate = qs.get("exam_date", [""])[0] or None
+        data = exam.predict_score(paper_id, edate)
         if not data:
             self.json_response({"error": "试卷不存在"}, 404)
             return
@@ -281,6 +326,80 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
             if not s["title"]:
                 s["title"] = s["id"]
         self.json_response({"subjects": subjects, "current": self.subject})
+
+    # ── 学科渲染配置（§29）──
+    def _handle_render_config(self) -> None:
+        """GET /api/render-config?subject=：合并后的渲染原语。"""
+        import render_config
+        qs = parse_qs(urlparse(self.path).query)
+        subj = qs.get("subject", [""])[0] or self.subject
+        self.json_response(render_config.get_render_config(subj))
+
+    def _handle_render_configs(self) -> None:
+        """GET /api/render-configs：所有学科的渲染配置。"""
+        import render_config
+        subs = [s["id"] for s in list_subjects()]
+        self.json_response({"configs": render_config.all_render_configs(subs)})
+
+    def _handle_set_render_config(self, data: dict[str, Any]) -> None:
+        """POST /api/render-config：增量更新某学科渲染配置。"""
+        import render_config
+        subj = self._subject_of(data)
+        try:
+            merged = render_config.set_render_config(subj, data.get("config", data))
+        except ValueError as exc:
+            self.json_response({"error": str(exc)}, 400)
+            return
+        self.json_response({"ok": True, "subject": subj, "config": merged})
+
+    # ── 智能体规则编排（§32 降级态）──
+    def _handle_agent_orchestrate(self) -> None:
+        """GET /api/agent/orchestrate?subject=&ai=0|1：今日行动清单（离线可用）。"""
+        import agent_rules
+        from urllib.parse import parse_qs, urlparse
+        qs = parse_qs(urlparse(self.path).query)
+        subj = qs.get("subject", [""])[0] or self.subject
+        use_ai = (qs.get("ai", ["0"])[0] or "0") in ("1", "true")
+        plan = agent_rules.synthesize_plan(subj, use_ai=use_ai)
+        self.json_response(plan)
+
+    # ── PWA 清单（§19.4，标准 webmanifest MIME）──
+    def _handle_pwa_manifest(self) -> None:
+        """GET /api/pwa/manifest：以 application/manifest+json 提供 PWA 清单。"""
+        import json as _json
+        from pathlib import Path
+        manifest_path = STATIC_DIR / "manifest.webmanifest"
+        if not manifest_path.is_file():
+            manifest_path = STATIC_DIR / "manifest.json"
+        try:
+            body = manifest_path.read_text(encoding="utf-8")
+            _json.loads(body)  # 校验合法 JSON
+        except (OSError, _json.JSONDecodeError):
+            self.json_response({"error": "manifest 缺失或非法"}, 500)
+            return
+        raw = body.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/manifest+json; charset=utf-8")
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(raw)
+
+    # ── 插件 / MCP 脚手架状态（§30.1 远景）──
+    def _handle_plugins(self) -> None:
+        """GET /api/plugins：已加载插件与已注册 MCP 工具清单。"""
+        import plugins
+        from pathlib import Path
+        try:
+            loaded = plugins.load_plugins()
+        except Exception as exc:
+            loaded = []
+            LOG.warning("插件扫描异常: %s", exc)
+        self.json_response({
+            "loaded": loaded,
+            "mcp_tools": plugins.MCP.list_tools(),
+            "plugin_dir": str(plugins.DEFAULT_PLUGIN_DIR),
+        })
 
     def _handle_add_subject(self, data: dict[str, Any]) -> None:
         """网页端新增学科：合法 id + 可选标题；有种子文件则自动加载图谱。"""
@@ -377,8 +496,8 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         if not fsrs_bridge.fsrs_available():
             self.json_response({"started": False, "error": "FSRS 未启用（vendor 缺失）"}, 409)
             return
-        if len(sample) < 10:
-            self.json_response({"started": False, "error": f"复习记录不足（需 ≥10 条，当前 {len(sample)} 条）"}, 409)
+        if len(sample) < fsrs_bridge.FSRS_TRAIN_MIN_SAMPLES:
+            self.json_response({"started": False, "error": f"复习记录不足（需 ≥{fsrs_bridge.FSRS_TRAIN_MIN_SAMPLES} 条，当前 {len(sample)} 条）"}, 409)
             return
         started = fsrs_bridge.train_async(sample)
         self.json_response({"started": started, "sample_count": len(sample)})
@@ -465,12 +584,16 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         """CMRR 式最优保持率估算：基于本学科卡量与平均稳定度的解析模拟。"""
         data = rows("SELECT stability, repetition FROM problems WHERE subject = ?", (self.subject,))
         stabilities = [float(r["stability"] or 0) for r in data if int(r["repetition"] or 0) > 0]
-        result = fsrs_bridge.optimal_retention(stabilities, len(data))
-        result["current"] = fsrs_bridge._desired_retention()
+        result = fsrs_bridge.optimal_retention(stabilities, len(data), subject=self.subject)
+        result["current"] = fsrs_bridge._desired_retention(self.subject)
         self.json_response(result)
 
     def _handle_fsrs_retention(self, data: dict[str, Any]) -> None:
-        ok = fsrs_bridge.set_desired_retention(data.get("value", 0))
+        """设置目标保持率；可带 subject 做学科分层（§46.5C）。"""
+        subject = str(data.get("subject", "") or "").strip()
+        if subject:
+            subject = self._valid_subject(subject)
+        ok = fsrs_bridge.set_desired_retention(data.get("value", 0), subject=subject)
         self.json_response({"ok": ok})
 
     def _handle_keystore_unlock(self, data: dict[str, Any]) -> None:
@@ -547,28 +670,15 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
             self._safe_error(exc)
 
     def _handle_update_settings(self, data: dict[str, Any]) -> None:
-        allowed = {"api_base", "model", "temperature", "fast_model", "heavy_model", "vision_model",
-                   "default_subject", "hint_cache_enabled", "daily_review_cap",
-                   "ai_context_tokens", "allow_local_ai"}
+        # 配置单一真相源（§16.3）：白名单与 coercion 全部来自 config.SETTINGS_SCHEMA，
+        # 不再手写 allowed 集合，避免两处定义漂移。
         values = []
-        for key in allowed:
+        for key in SETTINGS_SCHEMA:
             if key in data:
-                value = str(data[key]).strip()
-                if key == "default_subject":
-                    value = self._valid_subject(value)
-                if key == "hint_cache_enabled":
-                    value = "0" if value in ("0", "false", "off") else "1"
-                if key == "daily_review_cap":
-                    value = str(max(0, min(500, int(value) or 0)))
-                if key == "temperature":
-                    try:
-                        value = str(max(0.0, min(2.0, float(value))))
-                    except (TypeError, ValueError):
-                        value = "0.3"  # 空串/非法值回退默认，防止后续 float('') 崩溃
-                if key == "ai_context_tokens":
-                    value = str(max(4000, min(1_000_000, int(value) or 32000)))
-                if key == "allow_local_ai":
-                    value = "0" if value in ("0", "false", "off") else "1"
+                try:
+                    value = coerce_setting(key, data[key], valid_subject_fn=self._valid_subject)
+                except ValueError:
+                    continue
                 values.append((key, value))
         with DB_LOCK, db() as conn:
             conn.executemany("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)", values)

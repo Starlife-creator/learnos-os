@@ -1,9 +1,10 @@
 """AI 口试模块：苏格拉底引擎（F1）。
 
-校准级别状态机（level 1-3）× 五阶段引导（物理图像→前提→反例→极限→检验）：
+校准级别状态机（level 1-3）× 五阶段引导（核心概念→前提→反例→边界→检验）：
 - 回答扎实（level 3）→ 推进到下一阶段；
 - 回答薄弱（level 1-2）→ 同阶段加深引导（更具体的追问模板）。
 AI 可用时由模型出问（先内心评估再作答），离线时全本地模板降级。
+提示人格按学科感知（physics 默认保留原措辞，chem/math/未知回落中性），无 schema 变更。
 口试结束自动回写学习者画像（薄弱点），并可生成复习卡草稿（R3 由前端确认后落库）。
 """
 from __future__ import annotations
@@ -14,50 +15,19 @@ from typing import Any
 
 from config import LOG
 from db import db, now, row, DB_LOCK
-from ai import call_ai
+from ai import call_ai, _subject_profile, _resolve_subject
 import profile
 
 _STATE_KEY = "__oral_state__"
 _MAX_TURNS = 5
 
 _GUIDE_STAGES = ["concept", "premise", "counterexample", "extreme", "verify"]
-_STAGE_LABELS = {
-    "concept": "物理图像",
-    "premise": "前提条件",
-    "counterexample": "反例辨析",
-    "extreme": "极限推演",
-    "verify": "检验设计",
-}
-
-STAGE_PROMPTS = {
-    "concept": '请不用公式，先用物理图像解释「{topic}」的核心含义。',
-    "premise": "这个结论成立需要哪些前提？请至少说出两个。",
-    "counterexample": "请给出一个容易误用该概念的反例，并解释错在哪里。",
-    "extreme": "如果某个关键参数趋近于零或无穷大，结果应该怎样变化？",
-    "verify": "请设计一种实验或数值方法来检验你刚才的解释。",
-}
-
-_DEEPER_PROMPTS = {
-    "concept": "你的解释还停在表面。请从力的来源或能量角度重新描述一次，不许用公式，只说物理过程。",
-    "premise": "前提说得不完整。请再补一个容易被忽略的适用条件，并说明违反它会出现什么错误结果。",
-    "counterexample": "这个反例说服力不够。请换成「{topic}」最容易误用的一处边界情况，指出误用者错在哪一步。",
-    "extreme": "请具体说明：参数趋于极限时哪个量发散、哪个量饱和，各有什么物理意义。",
-    "verify": "请给出实验的关键观测量、预期数值范围，以及怎样排除系统误差。",
-}
 
 _CONDITION_WORDS = ("条件", "前提", "假设", "当", "只要", "仅当", "要求", "满足")
 _SYMBOL_RE = re.compile(
     r"[A-Za-z]\w*(?:\s*[=+\-*/^]|\s*[（(]|\s+[\d.]+)|[∑∫∂∇√πλμρθωΩ]|F\s*="
 )
 _END_RE = re.compile(r"^【口试结束】", re.MULTILINE)
-
-_WEAK_PATTERNS = [
-    (re.compile(r"适用条件|前提|假设"), "适用条件/前提交代不全"),
-    (re.compile(r"公式|代入|计算"), "公式推导与代入计算不够严谨"),
-    (re.compile(r"反例|误用|边界"), "概念边界与反例辨析不足"),
-    (re.compile(r"量纲|极限|趋于"), "量纲/极限分析不完整"),
-    (re.compile(r"实验|验证|测量"), "检验/实验设计思路不足"),
-]
 
 # A5 Feynman 口述反转：向新手讲解 → 对照标准解析找漏点 → 自评表
 _FEYNMAN_STEPS = [
@@ -72,10 +42,12 @@ def start_feynman(problem: dict[str, Any]) -> tuple[int, str]:
     title = problem.get("title", "")
     content = problem.get("content", "")
     topic = problem.get("topic", "")
+    sbj = _resolve_subject(problem.get("subject", ""), topic) or problem.get("subject", "")
+    p = _subject_profile(sbj)
     question = (
         f"这是一道错题：{title}。\n题目：{content}\n"
-        "现在请把自己当作老师：用大白话向一位完全不懂物理的新手讲解本题背后的核心概念。"
-        "规则：不许读公式，只讲物理图像与直觉。讲完直接发送，我会帮你对照标准解析找漏点。"
+        f"现在请把自己当作老师：{p['feynman_novice']}"
+        "讲完直接发送，我会帮你对照标准解析找漏点。"
     )
     try:
         question = call_ai([
@@ -211,15 +183,17 @@ def _profile_context() -> str:
             "针对其高频错因设计检查点；回答质量判断参照其历史掌握水平。")
 
 
-def start_oral(topic: str) -> tuple[int, str]:
+def start_oral(topic: str, subject: str = "") -> tuple[int, str]:
+    sbj = _resolve_subject(subject, topic) or subject
+    p = _subject_profile(sbj)
     state = "concept"
-    question = STAGE_PROMPTS[state].format(topic=topic)
+    question = p["stage_prompts"][state].format(topic=topic)
     try:
         question = call_ai([
             {"role": "system", "content": (
-                "你是严格的大学物理口试老师（苏格拉底式）。"
+                p["oral_teacher"]
                 + _profile_context()  # 画像日内稳定，前置以命中前缀缓存
-                + f"学生刚开始学习「{topic}」。一次只问一个简洁的、关于物理图像的问题，不给答案。"
+                + f"学生刚开始学习「{topic}」。一次只问一个简洁的、关于核心概念的问题，不给答案。"
             )},
             {"role": "user", "content": f'围绕「{topic}」提出第一个概念理解问题。'},
         ], max_tokens=180, route="oral")
@@ -236,30 +210,32 @@ def start_oral(topic: str) -> tuple[int, str]:
         return int(cursor.lastrowid), question
 
 
-def continue_oral(session: dict[str, Any], answer: str) -> str:
+def continue_oral(session: dict[str, Any], answer: str, subject: str = "") -> str:
     transcript = json.loads(session["transcript"])
     transcript.append({"role": "user", "content": answer})
     turn = sum(1 for item in transcript if item["role"] == "user")
     if session.get("mode") == "feynman":
-        return _continue_feynman(session, transcript, answer, turn)
+        return _continue_feynman(session, transcript, answer, turn, subject)
     stage_idx, level = _read_state(transcript)
     stage = _GUIDE_STAGES[stage_idx]
     topic = session["topic"]
+    sbj = _resolve_subject(subject, topic) or subject
+    p = _subject_profile(sbj)
 
     if turn >= _MAX_TURNS:
-        reply = _summary(transcript, topic)
+        reply = _summary(transcript, topic, sbj)
     else:
         level = _assess(answer)
         stage_idx, level = _next_stage(stage_idx, level)
         stage = _GUIDE_STAGES[stage_idx]
         try:
-            reply = _ai_followup(transcript, topic, stage, level, turn)
+            reply = _ai_followup(transcript, topic, stage, level, turn, sbj)
         except Exception as exc:
             LOG.warning("口试 AI 追问失败，使用本地模板: %s", exc)
             if level >= 3:
-                reply = STAGE_PROMPTS[stage].format(topic=topic)
+                reply = p["stage_prompts"][stage].format(topic=topic)
             else:
-                reply = _DEEPER_PROMPTS[stage].format(topic=topic)
+                reply = p["deeper_prompts"][stage].format(topic=topic)
 
     transcript.append({"role": "assistant", "content": reply})
     _write_state(transcript, stage_idx, level)
@@ -270,12 +246,12 @@ def continue_oral(session: dict[str, Any], answer: str) -> str:
             (json.dumps(transcript, ensure_ascii=False), status, session["id"]),
         )
     if status == "finished":
-        _write_back_profile(transcript, topic)
+        _write_back_profile(transcript, topic, sbj)
     return reply
 
 
 def _continue_feynman(session: dict[str, Any], transcript: list[dict[str, str]],
-                      answer: str, turn: int) -> str:
+                      answer: str, turn: int, subject: str = "") -> str:
     """A5 Feynman 流程：讲解 → 对照自查 → 结束（自评表草稿经独立端点获取）。"""
     if turn >= 2:
         reply = (
@@ -329,32 +305,34 @@ def save_feynman_self_review(session_id: int, values: dict[str, Any]) -> bool:
         return cur.rowcount > 0
 
 
-def _ai_followup(transcript: list[dict[str, str]], topic: str, stage: str, level: int, turn: int) -> str:
+def _ai_followup(transcript: list[dict[str, str]], topic: str, stage: str, level: int, turn: int, subject: str = "") -> str:
     """AI 引导追问：先内心评估，再输出「一句诊断 + 一个追问」，不给答案。"""
+    p = _subject_profile(subject)
     user_msgs = [m for m in transcript if m["role"] == "user"]
     last_answer = user_msgs[-1]["content"] if user_msgs else ""
     remaining = _MAX_TURNS - turn
     instruction = (
-        f"学生正在学习「{topic}」，当前引导阶段：{_STAGE_LABELS[stage]}，"
+        f"学生正在学习「{topic}」，当前引导阶段：{p['stage_labels'][stage]}，"
         f"本轮回答质量级别：{level}/3（1=薄弱 3=扎实）。"
         "先在内心评估学生回答最大的缺陷，然后只输出两行："
         "① 一句话诊断（指出最需修正或深化之处）；② 一个针对性的追问。不要给出完整答案。"
         f"剩余轮次：{remaining}。"
     )
     messages = [{"role": "system", "content":
-                 "你是严格的大学物理口试老师（苏格拉底式）。"
+                 p["oral_teacher"]
                  + _profile_context()  # 稳定前缀更长，命中缓存
                  + instruction}]
     messages.extend(transcript[-6:])
     return call_ai(messages, max_tokens=300, tier="heavy", route="oral")
 
 
-def _summary(transcript: list[dict[str, str]], topic: str) -> str:
+def _summary(transcript: list[dict[str, str]], topic: str, subject: str = "") -> str:
+    p = _subject_profile(subject)
     try:
         messages = [
             {"role": "system", "content": (
-                "你是严格的大学物理口试老师。这是最后一轮总结。"
-                "以【口试结束】开头。简短评价：指出一个掌握点和两个薄弱点（尽量具体，如『未说明XX的适用条件』），"
+                p["oral_teacher_summary"]
+                + "以【口试结束】开头。简短评价：指出一个掌握点和两个薄弱点（尽量具体，如『未说明XX的适用条件』），"
                 "再给出 3 天内可执行的复习建议。不要问新问题。"
             )},
             {"role": "user", "content": "以下是本场口试的完整对话记录：" + json.dumps(transcript[-8:], ensure_ascii=False)},
@@ -369,19 +347,20 @@ def _summary(transcript: list[dict[str, str]], topic: str) -> str:
         )
 
 
-def _detect_weak_points(transcript: list[dict[str, str]]) -> list[str]:
+def _detect_weak_points(transcript: list[dict[str, str]], subject: str = "") -> list[str]:
+    p = _subject_profile(subject)
     texts = [m["content"] for m in transcript if m["role"] == "user"]
     found: list[str] = []
-    for pat, label in _WEAK_PATTERNS:
+    for pat, label in p["weak_patterns"]:
         if any(pat.search(t) for t in texts):
             found.append(label)
     return found or ["概念表述不够严谨"]
 
 
-def _write_back_profile(transcript: list[dict[str, str]], topic: str) -> None:
+def _write_back_profile(transcript: list[dict[str, str]], topic: str, subject: str = "") -> None:
     """F1：会话结束回写学习者画像（仅本地，薄弱点追加到备注，不覆盖用户原备注）。"""
     try:
-        weak = "、".join(_detect_weak_points(transcript))
+        weak = "、".join(_detect_weak_points(transcript, subject))
         entry = f"[口试 {topic}] 薄弱点：{weak}"
         cur = row("SELECT value FROM learner_profile WHERE key = 'note'")
         merged = entry if not cur or not cur["value"] else f"{cur['value']} | {entry}"
@@ -394,32 +373,40 @@ def draft_oral_card(session: dict[str, Any]) -> dict[str, str]:
     """F1 流水线：口试 → 复习卡草稿（R3 不落库，前端确认后创建）。"""
     transcript = json.loads(session["transcript"])
     topic = session["topic"]
+    sbj = _resolve_subject(session.get("subject", ""), topic) or session.get("subject", "")
+    if not sbj and session.get("problem_id"):
+        prob = row("SELECT subject FROM problems WHERE id = ?", (int(session["problem_id"]),))
+        if prob:
+            sbj = _resolve_subject(prob.get("subject", "")) or prob.get("subject", "")
+    p = _subject_profile(sbj)
     user_answers = [m["content"] for m in transcript if m["role"] == "user"]
-    weak = "、".join(_detect_weak_points(transcript))
+    weak = "、".join(_detect_weak_points(transcript, sbj))
     my_attempt = user_answers[-1] if user_answers else ""
     content = (
         f"【口试复盘】主题：{topic}。本场暴露的薄弱点：{weak}。\n"
-        f"请重新解释该概念的物理图像、适用前提，并给出一个易误用反例。"
+        f"{p['card_local']}"
     )
     try:
-        content = _ai_card_content(transcript, topic, weak)
+        content = _ai_card_content(transcript, topic, weak, sbj)
     except Exception as exc:
         LOG.warning("口试复习卡 AI 生成失败，使用本地模板: %s", exc)
     return {
         "title": f"{topic}（口试复盘）",
         "content": content,
         "topic": topic,
+        "subject": sbj,
         "error_type": "concept_misunderstood",
         "my_attempt": my_attempt,
         "tags": [topic],
     }
 
 
-def _ai_card_content(transcript: list[dict[str, str]], topic: str, weak: str) -> str:
+def _ai_card_content(transcript: list[dict[str, str]], topic: str, weak: str, subject: str = "") -> str:
+    p = _subject_profile(subject)
     messages = [
         {"role": "system", "content": (
-            "你是物理老师。基于口试记录生成一道复习题的题目正文（一段话），"
-            f"围绕薄弱点「{weak}」设计，要求学生用自己的话重述概念并辨析反例。只输出题目正文，不要其他内容。"
+            p["oral_card_author"]
+            + f"围绕薄弱点「{weak}」设计，要求学生用自己的话重述概念并辨析反例。只输出题目正文，不要其他内容。"
         )},
         {"role": "user", "content": "口试记录：" + json.dumps(transcript[-8:], ensure_ascii=False)},
     ]

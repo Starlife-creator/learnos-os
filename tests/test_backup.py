@@ -59,7 +59,7 @@ class TestBackup(unittest.TestCase):
             return response.status, json.loads(response.read().decode("utf-8"))
 
     def test_export_contains_all_tables(self):
-        status, r = self.request("/api/export/backup")
+        status, r = self.request(f"/api/export/backup?token={config.EXPORT_TOKEN}")
         self.assertEqual(status, 200)
         self.assertIn("problems", r["tables"])
         self.assertIn("exam_papers", r["tables"])
@@ -76,7 +76,7 @@ class TestBackup(unittest.TestCase):
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 ("第二条", "力学", "动能定理", "内容", 2, now(), now()),
             )
-        status, r = self.request("/api/export/backup")
+        status, r = self.request(f"/api/export/backup?token={config.EXPORT_TOKEN}")
         raw = json.dumps(r)
 
         # 清空库再还原

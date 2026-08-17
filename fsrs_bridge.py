@@ -43,6 +43,28 @@ except Exception as exc:  # pragma: no cover - 降级路径
 
 _PARAM_FILE = APP_DIR / "data" / "fsrs_params.json"
 _RETENTION_KEY = "fsrs_desired_retention"
+# §16.2/§46.5C：训练门槛单一常量（消除 handler 与 train_parameters 两处重复），
+# 并作为「高置信度」判定的样本基线。
+FSRS_TRAIN_MIN_SAMPLES = 10
+
+
+def confidence_for(sample_count: int) -> str:
+    """§16.2 高置信度标记：训练结果携带，供 UI 提示个性化参数可信度。"""
+    if sample_count >= 200:
+        return "high"
+    if sample_count >= 50:
+        return "medium"
+    if sample_count >= FSRS_TRAIN_MIN_SAMPLES:
+        return "low"
+    return "insufficient"
+
+
+def _retention_key(subject: str = "") -> str:
+    """§46.5C：学科分层保持率键。无学科 → 全局键；有学科 → 学科专属键（覆盖全局）。"""
+    subject = (subject or "").strip()
+    if not subject or subject == "physics":
+        return _RETENTION_KEY
+    return f"{_RETENTION_KEY}_{subject}"
 
 _PARAM_CACHE: dict[str, object] | None = None
 _TRAIN_STATE: dict[str, object] = {"running": False, "result": None, "error": None}
@@ -70,25 +92,27 @@ def _load_params() -> dict[str, object] | None:
     return None
 
 
-def _desired_retention() -> float:
+def _desired_retention(subject: str = "") -> float:
+    """§46.5C：学科分层保持率。学科有专属覆盖则用覆盖，否则回退全局，否则 0.9。"""
     from db import settings_dict
+    key = _retention_key(subject)
     try:
-        value = float(settings_dict().get(_RETENTION_KEY, "0.9"))
+        value = float(settings_dict().get(key, settings_dict().get(_RETENTION_KEY, "0.9")))
         return value if 0.75 <= value <= 0.97 else 0.9
     except (TypeError, ValueError):
         return 0.9
 
 
-def _scheduler() -> Scheduler:
+def _scheduler(subject: str = "") -> Scheduler:
     params = DEFAULT_PARAMETERS
     trained = _load_params()
     if trained:
         params = trained["parameters"]  # type: ignore[assignment]
     try:
-        return Scheduler(parameters=params, desired_retention=_desired_retention())
+        return Scheduler(parameters=params, desired_retention=_desired_retention(subject))
     except Exception as exc:
         LOG.warning("FSRS 参数校验失败（用默认）: %s", exc)
-        return Scheduler(desired_retention=_desired_retention())
+        return Scheduler(desired_retention=_desired_retention(subject))
 
 
 @dataclass
@@ -132,11 +156,14 @@ def compute_fsrs_review(
     stability: float = 0.0,
     difficulty: float = 0.0,
     today: date | None = None,
+    subject: str = "",
 ) -> FsrsState:
-    """FSRS-6 调度。返回下一次复习状态（供 problems 表持久化）。"""
+    """FSRS-6 调度。返回下一次复习状态（供 problems 表持久化）。
+    subject 用于 §46.5C 学科分层保持率（无则全局）。
+    """
     today = today or date.today()
     card = _state_to_card(state, stability, difficulty, prev_interval)
-    scheduler = _scheduler()
+    scheduler = _scheduler(subject)
     review_dt = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
     updated, _log = scheduler.review_card(
         card,
@@ -164,8 +191,11 @@ def retrievability(
     difficulty: float = 0.0,
     last_review: str = "",
     current: date | None = None,
+    subject: str = "",
 ) -> float:
-    """P0：预测该卡今天的检索概率 R（0-1）。无 FSRS → 用 SM-2 间隔近似。"""
+    """P0：预测该卡今天的检索概率 R（0-1）。无 FSRS → 用 SM-2 间隔近似。
+    subject 用于 §46.5C 学科分层保持率。
+    """
     current = current or date.today()
     if not _FSRS_AVAILABLE:
         return 0.0
@@ -177,7 +207,7 @@ def retrievability(
             ref_dt = ref_dt.replace(tzinfo=timezone.utc)
         card.last_review = ref_dt
         now_dt = datetime.combine(current, datetime.min.time(), tzinfo=timezone.utc)
-        return round(float(_scheduler().get_card_retrievability(card, now_dt)), 4)
+        return round(float(_scheduler(subject).get_card_retrievability(card, now_dt)), 4)
     except Exception:
         return 0.0
 
@@ -217,11 +247,15 @@ def fsrs_status() -> dict[str, object]:
         status["sample_count"] = int(_TRAIN_STATE["result"]["sample_count"])
     if _TRAIN_STATE["error"]:
         status["train_error"] = _TRAIN_STATE["error"]
+    status["per_subject_retentions"] = per_subject_retentions()  # §46.5C 学科分层
+    status["min_train_samples"] = FSRS_TRAIN_MIN_SAMPLES  # §16.2 单一门槛常量
     return status
 
 
-def set_desired_retention(value: float) -> bool:
-    """P0：设置目标保持率（0.75-0.97），写 settings 表。"""
+def set_desired_retention(value: float, subject: str = "") -> bool:
+    """P0：设置目标保持率（0.75-0.97），写 settings 表。
+    subject 非空时为该学科设置专属保持率（§46.5C 学科分层），空则设全局。
+    """
     try:
         value = float(value)
     except (TypeError, ValueError):
@@ -231,8 +265,21 @@ def set_desired_retention(value: float) -> bool:
     from db import DB_LOCK, db
     with DB_LOCK, db() as conn:
         conn.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)",
-                     (_RETENTION_KEY, str(round(value, 2))))
+                     (_retention_key(subject), str(round(value, 2))))
     return True
+
+
+def per_subject_retentions() -> dict[str, float]:
+    """§46.5C：返回所有已设置学科专属保持率的学科及其值（含全局）。"""
+    from db import settings_dict
+    out: dict[str, float] = {}
+    for k, v in settings_dict().items():
+        if k == _RETENTION_KEY or k.startswith(_RETENTION_KEY + "_"):
+            try:
+                out[k] = float(v)
+            except (TypeError, ValueError):
+                pass
+    return out
 
 
 def train_parameters(
@@ -245,6 +292,11 @@ def train_parameters(
     """
     if not _FSRS_AVAILABLE:
         return False, {"reason": "FSRS 未启用（vendor 缺失）"}
+    # §16.2 样本不足应在依赖检查前先行判定（这是数据量问题，与 torch 是否安装无关）
+    if len(reviews) < FSRS_TRAIN_MIN_SAMPLES:
+        return False, {"reason": "复习记录不足（需 ≥%d 条，当前 %d 条）" % (FSRS_TRAIN_MIN_SAMPLES, len(reviews)),
+                       "sample_count": len(reviews),
+                       "confidence": confidence_for(len(reviews))}
     try:
         from fsrs.optimizer import Optimizer  # type: ignore
         from fsrs.review_log import ReviewLog  # type: ignore
@@ -266,9 +318,10 @@ def train_parameters(
             dt = dt.replace(tzinfo=timezone.utc)
         logs.append(ReviewLog(card_id=card_id, rating=Rating(int(rating)),
                               review_datetime=dt, review_duration=0))
-    if len(logs) < 10:
-        return False, {"reason": "复习记录不足（需 ≥10 条，当前 %d 条）" % len(logs),
-                       "sample_count": len(logs)}
+    if len(logs) < FSRS_TRAIN_MIN_SAMPLES:
+        return False, {"reason": "复习记录不足（需 ≥%d 条，当前 %d 条）" % (FSRS_TRAIN_MIN_SAMPLES, len(logs)),
+                       "sample_count": len(logs),
+                       "confidence": confidence_for(len(logs))}
     try:
         optimizer = Optimizer(logs)
         params = optimizer.compute_optimal_parameters(verbose=False)
@@ -288,7 +341,8 @@ def train_parameters(
     except OSError as exc:
         return False, {"reason": "参数写入失败：%s" % exc}
     _invalidate()
-    return True, {"sample_count": len(logs), "trained_at": now()}
+    return True, {"sample_count": len(logs), "trained_at": now(),
+                  "confidence": confidence_for(len(logs))}  # §16.2 高置信度标记
 
 
 def train_async(reviews: list[tuple[int, int, str]]) -> bool:
@@ -314,7 +368,7 @@ def train_async(reviews: list[tuple[int, int, str]]) -> bool:
 
 
 def optimal_retention(stabilities: list[float], n_total: int,
-                      seconds_per_review: float = 30.0) -> dict[str, object]:
+                      seconds_per_review: float = 30.0, subject: str = "") -> dict[str, object]:
     """CMRR 式最优保持率估算（FSRS wiki The Optimal Retention 思路的解析近似）。
 
     用你自己的卡量与平均稳定度，遍历候选保持率 R：
@@ -323,6 +377,7 @@ def optimal_retention(stabilities: list[float], n_total: int,
       - 稳态每日复习量 ≈ 卡量 / 平均间隔
       - 效率 = R / 每日复习量（单位工作量的记忆量），取最大者为推荐值
     纯估算（假设每题复习耗时固定、卡池规模稳定），供决策参考而非精确承诺。
+    subject 用于 §46.5C 以学科专属保持率为当前基准。
     """
     active = [s for s in stabilities if s and s > 0]
     n = n_total
@@ -350,6 +405,7 @@ def optimal_retention(stabilities: list[float], n_total: int,
         "assumed_stability": assumed,
         "n_items": n,
         "avg_stability": round(avg_s, 2),
+        "current": _desired_retention(subject),
         "recommended": best["retention"] if best else 0.9,
         "points": points,
         "note": "估算假设：卡池规模稳定、每题复习耗时固定 30 秒；仅供参考。",

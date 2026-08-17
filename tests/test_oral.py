@@ -32,7 +32,11 @@ class TestSocraticEngine(unittest.TestCase):
     def tearDownClass(cls):
         db.DB_PATH = cls._orig_db
         config.DB_PATH = cls._orig_db
-        cls._tmp.cleanup()
+        try:
+            cls._tmp.cleanup()
+        except OSError:
+            # 沙箱安全删除机制在无回收站时拒绝 rmtree，忽略（临时文件留在 tests/.tmp）
+            pass
 
     def test_assess_levels(self):
         self.assertEqual(_assess("懂了"), 1)
@@ -151,6 +155,46 @@ class TestSocraticEngine(unittest.TestCase):
         sid, _ = start_oral("动能定理")
         s = db.row("SELECT * FROM oral_sessions WHERE id = ?", (sid,))
         self.assertEqual(s["mode"], "socratic")
+
+
+class TestOralSubjectAwareness(unittest.TestCase):
+    """v1 口试/费曼学科感知：非物理学科不出现物理专属措辞，physics 保留原行为。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory(prefix="oral_subj_", dir=_TMP)
+        cls._orig_db = config.DB_PATH
+        config.DB_PATH = Path(cls._tmp.name) / "oral_subj_test.db"
+        db.DB_PATH = config.DB_PATH
+        db.init_db()
+
+    @classmethod
+    def tearDownClass(cls):
+        db.DB_PATH = cls._orig_db
+        config.DB_PATH = cls._orig_db
+        try:
+            cls._tmp.cleanup()
+        except OSError:
+            # 沙箱安全删除机制在无回收站时拒绝 rmtree，忽略（临时文件留在 tests/.tmp）
+            pass
+
+    def test_math_oral_no_physics_framing(self):
+        sid, q = start_oral("线性代数", "math")
+        self.assertNotIn("物理图像", q)
+        self.assertNotIn("物理口试", q)
+
+    def test_physics_oral_retains_physics_framing(self):
+        sid, q = start_oral("牛顿第二定律", "physics")
+        self.assertIn("物理", q)
+
+    def test_math_draft_card_no_physics(self):
+        sid, _ = start_oral("微积分", "math")
+        for _ in range(5):
+            session = db.row("SELECT * FROM oral_sessions WHERE id = ?", (sid,))
+            continue_oral(session, "浅", "math")
+        session = db.row("SELECT * FROM oral_sessions WHERE id = ?", (sid,))
+        draft = draft_oral_card(session)
+        self.assertNotIn("物理图像", draft["content"])
 
 
 if __name__ == "__main__":
