@@ -1036,7 +1036,7 @@ def generate_variants(problem: dict[str, Any]) -> tuple[str, list[dict[str, Any]
         )},
     ]
     try:
-        raw = call_ai(prompt, max_tokens=900, tier="heavy", retries=1)
+        raw = call_ai(prompt, max_tokens=1500, tier="heavy", retries=1)
         data = validate_object(raw, _VARIANT_SCHEMA)
         variants = data["variants"]
         if not variants:
@@ -1116,7 +1116,7 @@ def generate_bank_question(subject: str, topic: str, qtype: str = "single",
         {"role": "user", "content": user_text},
     ]
     try:
-        raw = call_ai(prompt, max_tokens=900, tier="heavy", retries=1)
+        raw = call_ai(prompt, max_tokens=1500, tier="heavy", retries=1)
         data = validate_object(raw, _BANK_Q_SCHEMA)
         q = data["question"]
         qtype_r = q.get("type")
