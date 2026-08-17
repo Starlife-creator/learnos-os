@@ -14,8 +14,9 @@ from typing import Any
 from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 
-from config import LOG, DB_PATH, MEDIA_DIR, EXPORT_TOKEN
+from config import LOG, MEDIA_DIR, EXPORT_TOKEN
 from db import DB_LOCK, db, now, row, rows
+import db as db_module  # 模块引用：上方 `db` 已被函数遮蔽，需用模块访问实时 DB_PATH
 from ai import (call_ai, call_ai_stream, fallback_hint, problem_prompt, extract_tags,
                 generate_variants, invalidate_settings_cache, get_cached_settings)
 from errors import normalize_error_type
@@ -334,7 +335,7 @@ class ProblemsMixin:
         backup_dir.mkdir(parents=True, exist_ok=True)
         backup = backup_dir / f"import_{now().replace(':', '').replace('-', '')}.db"
         try:
-            shutil.copy(DB_PATH, backup)
+            shutil.copy(db_module.DB_PATH, backup)
         except OSError as exc:
             self.json_response({"error": f"备份失败: {exc}"}, 500)
             return
