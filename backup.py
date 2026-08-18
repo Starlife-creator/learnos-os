@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -76,7 +77,16 @@ def export_backup() -> dict[str, Any]:
             ).fetchone()
             if exists:
                 data[t] = [dict(r) for r in conn.execute(f'SELECT * FROM "{t}"').fetchall()]
-    return {"version": 1, "exported_at": now(), "tables": data}
+    # 完整性校验（P4a）：对"导出表数据"做规范化序列化后计算 sha256。
+    # 规范化约定（sort_keys + separators）必须与 restore_backup 的校验侧完全一致，
+    # 否则二次序列化不一致会误报。零密钥依赖，覆盖"损坏/篡改"主要失败模式。
+    tables_bytes = json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return {
+        "version": 1,
+        "exported_at": now(),
+        "tables": data,
+        "sha256": hashlib.sha256(tables_bytes).hexdigest(),
+    }
 
 
 def _table_sql(conn: Any, name: str) -> str:
@@ -129,6 +139,18 @@ def restore_backup(raw: str) -> dict[str, Any]:
     tables = payload.get("tables")
     if not isinstance(tables, dict):
         raise ValueError("备份内容缺失 tables")
+
+    # 完整性校验（P4a）：仅当携带 sha256 时校验；旧备份缺字段则降级为警告，不阻断还原。
+    # 校验侧与导出侧共用同一规范化序列化（sort_keys + separators），避免二次序列化误报。
+    expect = payload.get("sha256")
+    if expect:
+        computed = hashlib.sha256(
+            json.dumps(tables, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        if computed != expect:
+            raise ValueError("备份完整性校验失败（sha256 不匹配，可能损坏或被篡改）")
+    elif tables is not None:
+        LOG.warning("备份缺少 sha256 字段，跳过完整性校验（兼容旧格式）")
 
     # 1) 现库整体 rename 为 .bak 时间戳（同目录，非 unlink：原子、崩溃安全、对沙箱友好）
     from db import DB_PATH as _db_path

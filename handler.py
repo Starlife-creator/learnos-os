@@ -42,6 +42,7 @@ import fsrs_bridge
 from fsrs_bridge import next_interval_days
 from handler_base import (X_HEADER, X_VALUE, _IDEMPOTENCY, _IDEMPOTENCY_TTL,
                           _as_str_list, _interleave, _prune_idempotency)
+from resp import error_counts
 
 
 class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
@@ -159,6 +160,24 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
             "style-src 'self' 'unsafe-inline'; script-src 'self'; "
             "script-src-attr 'unsafe-inline'; connect-src 'self'",
         )
+        # P5：静态资源缓存策略。API 响应已自带 Cache-Control（no-store 等），此处跳过避免重复；
+        # 仅对未显式设置缓存头的响应（静态文件）按路径补缓存策略。
+        # 注：Python 3.13 响应头存于 self._headers_buffer（字节元组列表），无 self._headers 响应对象。
+        _buf = getattr(self, "_headers_buffer", [])
+        _has_cc = False
+        for _h in _buf:
+            _b = _h[0] if isinstance(_h, (tuple, list)) else _h
+            if isinstance(_b, (bytes, bytearray)) and _b.lower().startswith(b"cache-control:"):
+                _has_cc = True
+                break
+        if not _has_cc:
+            p = urlparse(self.path).path
+            # vendor 资源（katex 等第三方库）内容稳定 → 长缓存、不可变
+            if "/vendor/" in p or p.endswith((".woff", ".woff2", ".ttf", ".eot")):
+                self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+            else:
+                # 业务资源（app-*.js / index.html 等）每次构建内容会变 → 协商缓存
+                self.send_header("Cache-Control", "no-cache")
         super().end_headers()
 
     def log_message(self, fmt: str, *args: Any) -> None:
@@ -317,7 +336,7 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
                 "latency_ms_p95": latency_p95,
                 "provider_last_error": provider_last_error,
             },
-            "errors": {},
+            "errors": error_counts(),
         })
 
     def _handle_bootstrap(self) -> None:

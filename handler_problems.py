@@ -25,6 +25,7 @@ from handler_base import (X_HEADER, X_VALUE, _IDEMPOTENCY, _IDEMPOTENCY_TTL,
                           _as_str_list, _interleave, _prune_idempotency)
 import graph
 import interop
+from resp import api_err
 
 # 拍照/截图录题（B1）魔数（模块级，mixin 内 _image_ext 引用）
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -759,7 +760,7 @@ class ProblemsMixin:
         整库重建是最高风险操作，鉴权强度不应低于只读导出。
         """
         if not self._export_token_ok():
-            self.json_response({"error": "缺少或无效的导出令牌"}, 401)
+            api_err(self, "FORBIDDEN")
             return
         raw = data.get("backup") if isinstance(data, dict) else None
         if not isinstance(raw, str) or not raw.strip():
