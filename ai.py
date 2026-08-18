@@ -21,7 +21,7 @@ from validate import validate_object, SchemaError
 # ── 应用层结果缓存（R12）──────────────────────────────────────────
 # 让"结果稳定可复用"的 AI 调用（审题/标签提取等）命中缓存省 token。
 # 双层：内存 LRU（快）+ SQLite（跨重启）。TTL 与容量都有上限防膨胀。
-_CACHE_TTL = 30 * 24 * 3600     # 30 天
+_RESULT_CACHE_TTL = 30 * 24 * 3600     # 30 天（区别于下方 settings 缓存 _CACHE_TTL=30s）
 _CACHE_MAX_MEM = 200            # 内存最多缓存 200 条
 _result_mem: dict[str, tuple[float, dict[str, Any]]] = {}
 
@@ -44,7 +44,7 @@ def cache_get(key: str) -> dict[str, Any] | None:
     mem = _result_mem.get(k)
     if mem:
         ts, val = mem
-        if time.time() - ts < _CACHE_TTL:
+        if time.time() - ts < _RESULT_CACHE_TTL:
             return val
         _result_mem.pop(k, None)
     try:
