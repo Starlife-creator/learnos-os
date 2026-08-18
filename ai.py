@@ -17,6 +17,75 @@ from db import settings_dict
 from keystore import load_key, key_file_exists
 from validate import validate_object, SchemaError
 
+
+# ── 应用层结果缓存（R12）──────────────────────────────────────────
+# 让"结果稳定可复用"的 AI 调用（审题/标签提取等）命中缓存省 token。
+# 双层：内存 LRU（快）+ SQLite（跨重启）。TTL 与容量都有上限防膨胀。
+_CACHE_TTL = 30 * 24 * 3600     # 30 天
+_CACHE_MAX_MEM = 200            # 内存最多缓存 200 条
+_result_mem: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def _ensure_cache_table() -> None:
+    try:
+        from db import DB_LOCK, db, now
+        with DB_LOCK, db() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS ai_result_cache ("
+                " cache_key TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL)")
+    except Exception as exc:
+        LOG.warning("创建结果缓存表失败: %s", exc)
+
+
+def cache_get(key: str) -> dict[str, Any] | None:
+    """读缓存：先内存后 DB；命中返回 dict，过期/缺失返回 None。"""
+    import hashlib
+    k = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    mem = _result_mem.get(k)
+    if mem:
+        ts, val = mem
+        if time.time() - ts < _CACHE_TTL:
+            return val
+        _result_mem.pop(k, None)
+    try:
+        from db import DB_LOCK, db
+        from validate import SchemaError as _SE
+        with DB_LOCK, db() as conn:
+            row = conn.execute(
+                "SELECT payload, created_at FROM ai_result_cache WHERE cache_key = ?", (k,)).fetchone()
+        if row:
+            val = json.loads(row["payload"])
+            _result_mem[k] = (time.time(), val)
+            return val
+    except (Exception, _SE) as exc:
+        LOG.debug("读结果缓存失败: %s", exc)
+    return None
+
+
+def cache_set(key: str, value: dict[str, Any]) -> None:
+    """写缓存（DB + 内存）。内存容量超限时清最旧。"""
+    import hashlib
+    try:
+        k = hashlib.sha256(key.encode("utf-8")).hexdigest()
+        from db import DB_LOCK, db, now
+        payload = json.dumps(value, ensure_ascii=False)
+        with DB_LOCK, db() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO ai_result_cache(cache_key, payload, created_at) VALUES (?, ?, ?)",
+                (k, payload, now()))
+        _result_mem[k] = (time.time(), value)
+        if len(_result_mem) > _CACHE_MAX_MEM:
+            oldest = sorted(_result_mem.items(), key=lambda kv: kv[1][0])[: len(_result_mem) - _CACHE_MAX_MEM]
+            for o_k, _ in oldest:
+                _result_mem.pop(o_k, None)
+        return None
+    except Exception as exc:
+        LOG.warning("写结果缓存失败: %s", exc)
+        return None
+
+
+_ensure_cache_table()
+
 _settings_cache: dict[str, str] | None = None
 _settings_cache_time: float = 0
 _CACHE_TTL = 30  # 秒
@@ -1029,6 +1098,12 @@ def extract_tags(
         f"课程：{course or '未知'}\n已有知识点：{topic or '无'}\n"
         f"题目标题：{title}\n题目内容：{content}"
     )
+    # 结果缓存：同内容标签提取结果稳定 → 命中省 token
+    cache_key = f"tags:{sbj}:{title}:{content[:2000]}"
+    cached = cache_get(cache_key)
+    if cached:
+        cached["source"] = "cache"
+        return cached
     prompt = [
         {"role": "system", "content": p["tag_extractor"]},
         {"role": "user", "content": user_text},
@@ -1042,7 +1117,9 @@ def extract_tags(
         confidence = float(data["confidence"])
         if confidence < 0.9:
             return {"tags": tags, "confidence": round(confidence, 2), "source": "ai", "pending": True}
-        return {"tags": tags, "confidence": round(confidence, 2), "source": "ai"}
+        result = {"tags": tags, "confidence": round(confidence, 2), "source": "ai"}
+        cache_set(cache_key, result)
+        return result
     except (SchemaError, ValueError) as exc:
         LOG.warning("AI 标签提取校验失败，降级关键词: %s", exc)
         return local_tags(title, content, course, topic, subject)
@@ -1328,6 +1405,13 @@ def review_bank_question(question: dict[str, Any], subject: str = "") -> dict[st
         _ai_available = False
         return {"verdict": "pass", "issues": [], "comment": "", "ai_available": False}
     payload = json.dumps(q, ensure_ascii=False)
+    # 结果缓存：同题同学科审题结果稳定 → 命中直接返回（省 token）
+    cache_key = f"review:{subject or ''}:{payload}"
+    cached = cache_get(cache_key)
+    if cached:
+        cached["ai_available"] = True
+        cached["cached"] = True
+        return cached
     prompt = [
         {"role": "system", "content": _REVIEW_PROMPT},
         {"role": "user", "content": f"学科：{subject or '未知'}\n待审题目：\n{payload}"},
@@ -1339,13 +1423,15 @@ def review_bank_question(question: dict[str, Any], subject: str = "") -> dict[st
         verdict = rv.get("verdict", "warn")
         if verdict not in ("pass", "warn", "reject"):
             verdict = "warn"
-        return {
+        result = {
             "verdict": verdict,
             "issues": [str(x) for x in (rv.get("issues") or [])][:8],
             "comment": str(rv.get("comment") or "").strip(),
             "revised": str(rv.get("revised") or "").strip() or None,
             "ai_available": True,
         }
+        cache_set(cache_key, {k: v for k, v in result.items() if k != "ai_available"})
+        return result
     except (SchemaError, ValueError) as exc:
         LOG.warning("AI 审题校验失败，降级: %s", exc)
     except Exception as exc:
