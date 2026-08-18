@@ -84,3 +84,4 @@ OPTIMIZATION_PLAN.md
 OPTIMIZATION_PLAN_V2.md
 WORK_LOG.md
 .git.corrupt-bak.*/
+.audit-tmp/
