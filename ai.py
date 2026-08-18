@@ -1277,7 +1277,15 @@ _BANK_Q_PROMPT = (
     "subjective=参考答案文本；composite 省略\n"
     "- explain: 解析\n"
     "- parts: 仅 composite 必填，子题数组，每个子题结构同 question（可递归嵌套）\n"
-    "只返回 JSON，不要多余文字。"
+    "只返回 JSON，不要多余文字。\n"
+    "参考示例（结构示范，学科与难度可改）：\n"
+    '例1（单选）：{"question": {"type": "single", "stem": "两个带同种电荷的小球相互靠近时，作用力方向为？", '
+    '"choices": ["互相吸引", "互相排斥", "无作用力", "引力"], "answer": 1, '
+    '"explain": "同种电荷相斥。", "concept": "库仑定律"}}\n'
+    '例2（大小题）：{"question": {"type": "composite", "stem": "一个物体从静止开始做匀加速直线运动，5s 内位移 25m。", '
+    '"parts": [{"type": "single", "stem": "该物体的加速度为？", "choices": ["1 m/s^2", "2 m/s^2", "5 m/s^2", "10 m/s^2"], "answer": 1}, '
+    '{"type": "fill", "stem": "第 5s 末的速度为 ____ m/s。", "answer": "10"}], '
+    '"explain": "由 s=1/2at^2 得 a=2 m/s^2；v=at=10 m/s。"}}'
 )
 
 
@@ -1363,7 +1371,9 @@ _REVIEW_PROMPT = (
     "- verdict: pass(没问题) / warn(有小问题可改进) / reject(有硬伤必须改)\n"
     "- issues: 发现的问题数组（没问题也可给 1-2 条优化建议）\n"
     "- comment: 一句话总评\n"
-    "- revised: 若 verdict=reject 给出建议修订后的完整题目 JSON 文本；否则可省略"
+    "- revised: 若 verdict=reject 给出建议修订后的完整题目 JSON 文本；否则可省略\n"
+    "输出示例：{\"review\": {\"verdict\": \"warn\", \"issues\": [\"选项 B 表述有歧义，建议改为更明确的干扰项\"], "
+    "\"comment\": \"题目整体合格，仅个别选项需打磨。\"}}"
 )
 
 _ai_available: bool | None = None
