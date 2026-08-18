@@ -401,14 +401,13 @@ function renderMatDraft(r, cov) {
       </div>`).join('');
   }
   const qs = d.questions;
-  const _MAT_Q_BADGE = { single: '单选', multiple: '多选', fill: '填空', subjective: '主观题', composite: '大小题' };
   if (qs && qs.length) {
     html += `<div class="card-title mt-12">${t('mat.dQuestions')}
       <label class="text-sm" style="font-weight:400"><input type="checkbox" id="matAllQ" checked onchange="matToggleAll('matQ',this.checked)"> ${t('mat.selectAll')}</label></div>`;
     html += qs.map((q, i) => `
       <label style="display:block;padding:6px 0;border-bottom:1px solid var(--border,#eee)">
         <span class="text-sm"><input type="checkbox" class="matQ" data-i="${i}" checked>
-        <span class="tag tag-blue" style="margin-right:6px">${escapeHtml(_MAT_Q_BADGE[q.type] || q.type || '单选')}</span>
+        <span class="tag tag-blue" style="margin-right:6px">${escapeHtml((typeof typeBadge === 'function' ? typeBadge(q.type) : q.type) || '')}</span>
         ${escapeHtml((q.stem || '').slice(0, 90))}${(q.stem || '').length > 90 ? '…' : ''}</span>
         <span class="tag tag-gray" style="margin-left:6px">${escapeHtml(q.concept || t('mat.qNoConcept'))}</span>
       </label>`).join('');

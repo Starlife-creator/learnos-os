@@ -399,8 +399,14 @@ async function testSettings() {
 }
 
 // ── 数据导入 / 导出 ──
-function _downloadFromApi(path, filename) {
-  return fetch(path, { headers: { 'X-Requested-With': 'LearnOS' } })
+async function _downloadFromApi(path, filename) {
+  const headers = { 'X-Requested-With': 'LearnOS' };
+  // 导出端点注入导出令牌（§16.6，令牌取自 /api/bootstrap）
+  if (typeof _isExportPath === 'function' && _isExportPath(path)) {
+    const tok = await ensureExportToken();
+    if (tok) headers['X-Export-Token'] = tok;
+  }
+  return fetch(path, { headers })
     .then(r => { if (!r.ok) throw new Error(t('export.fail').replace('{s}', r.status)); return r.blob(); })
     .then(blob => {
       const url = URL.createObjectURL(blob);
@@ -493,9 +499,14 @@ const _FORMULAS = [
 function toggleFormulaPanel() {
   const p = document.getElementById('formulaPanel');
   const content = document.getElementById('formulaContent');
+  // 学科门控：公式速查内容为纯物理；其他学科提示暂不适用（体检 P1-4）
+  if (typeof currentSubject === 'function' && currentSubject() !== 'physics') {
+    toast(t('formula.onlyPhysics'), 'error');
+    return;
+  }
   if (p.classList.contains('hidden')) {
     content.innerHTML = _FORMULAS.map(c =>
-      `<div style="margin-bottom:8px"><strong>${t('formula.' + c.key)}</strong>: ${c.eqs.map(e=>escapeHtml(e)).join(' &nbsp;| ')}</div>`
+      `<div style="margin-bottom:8px"><strong>${t(c.key)}</strong>: ${c.eqs.map(e=>escapeHtml(e)).join(' &nbsp;| ')}</div>`
     ).join('');
     p.classList.remove('hidden');
     renderMath(content);

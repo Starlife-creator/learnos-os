@@ -11,7 +11,7 @@ async function loadBankUnits() {
     const data = await api('/api/bank/units');
     _bankUnits = data.units || [];
     sel.innerHTML = '<option value="">' + t('bank.allUnits') + '</option>' +
-      _bankUnits.map(u => `<option value="${escapeHtml(u.unit)}">${escapeHtml(u.unit)}（${u.count}题，已掌握${u.done}）</option>`).join('');
+      _bankUnits.map(u => `<option value="${escapeHtml(u.unit)}">${escapeHtml(u.unit)}（${t('bank.unitSummary').replace('{n}', u.count).replace('{d}', u.done)}）</option>`).join('');
     sel.value = prev;
   } catch (e) { /* 题库不可用时保持空 */ }
 }
@@ -68,7 +68,17 @@ function startWrongDrill() {
   openDrillNext();
 }
 
-const _TYPE_BADGE = { single: '单选', multiple: '多选', fill: '填空', subjective: '主观题', composite: '大小题' };
+const _TYPE_BADGE = { single: 'qtype.single', multiple: 'qtype.multiple', fill: 'qtype.fill', subjective: 'qtype.subjective', composite: 'qtype.composite' };
+// 题型徽标（i18n）：未知类型回退单选
+function typeBadge(ty) {
+  const key = _TYPE_BADGE[ty || 'single'];
+  return key ? t(key) : t('qtype.single');
+}
+// 判定文案（📝 待评阅 / ✅ 正确 / ❌ 错误）
+function verdictBadge(correct) {
+  return correct === null ? '📝 ' + t('bank.verdictPending')
+    : (correct ? '✅ ' + t('bank.verdictCorrect') : '❌ ' + t('bank.verdictWrong'));
+}
 
 function openDrillNext() {
   if (_drillIdx >= _drillQueue.length) {
@@ -95,9 +105,9 @@ function openBankPractice(qid) {
 
 // 题型作答区渲染（递归支持大小题嵌套）
 function buildQuestionBody(item, prefix, depth = 0) {
-  const t = item.type || 'single';
-  if (t === 'single' || t === 'multiple') {
-    const inputType = t === 'single' ? 'radio' : 'checkbox';
+  const qt = item.type || 'single';
+  if (qt === 'single' || qt === 'multiple') {
+    const inputType = qt === 'single' ? 'radio' : 'checkbox';
     return `<div class="bank-choices">` + (item.choices || []).map((c, i) => `
       <label class="bank-choice" id="${prefix}_c${i}">
         <input type="${inputType}" name="${prefix}_ans" value="${i}">
@@ -105,20 +115,20 @@ function buildQuestionBody(item, prefix, depth = 0) {
         <span class="bank-choice-text">${escapeHtml(c)}</span>
       </label>`).join('') + `</div>`;
   }
-  if (t === 'fill') {
+  if (qt === 'fill') {
     // 空数来源：列表接口下发的 blanks（_pub_item 附带，不泄露答案）；
     // 兼容 AI 出题/导入流程直接带 answer 的场景；都没有则单空。
     const blanks = typeof item.blanks === 'number' && item.blanks > 0 ? item.blanks
       : (Array.isArray(item.answer) ? item.answer.length : 1);
     let h = '';
-    for (let i = 0; i < blanks; i++) h += `<input type="text" class="bank-fill" id="${prefix}_f${i}" placeholder="第 ${i+1} 空"> `;
+    for (let i = 0; i < blanks; i++) h += `<input type="text" class="bank-fill" id="${prefix}_f${i}" placeholder="${t('bank.blankNth').replace('{n}', i + 1)}"> `;
     return `<div class="bank-fill-wrap">${h}</div>`;
   }
-  if (t === 'subjective') {
-    return `<textarea class="bank-subj" id="${prefix}_s" rows="4" placeholder="在此作答…"></textarea>
-      <p class="text-xs text-muted mt-8">主观题提交后标记「待评阅」，可对照参考答案自评。</p>`;
+  if (qt === 'subjective') {
+    return `<textarea class="bank-subj" id="${prefix}_s" rows="4" placeholder="${t('bank.answerPh')}"></textarea>
+      <p class="text-xs text-muted mt-8">${t('bank.subjNote')}</p>`;
   }
-  if (t === 'composite') {
+  if (qt === 'composite') {
     return (item.parts || []).map((p, i) => {
       const lbl = depth === 0 ? `${i+1}.` : `(${i+1})`;
       return `<div class="bank-part">
@@ -131,15 +141,15 @@ function buildQuestionBody(item, prefix, depth = 0) {
 }
 
 function collectAnswer(item, prefix) {
-  const t = item.type || 'single';
-  if (t === 'single') {
+  const qt = item.type || 'single';
+  if (qt === 'single') {
     const sel = document.querySelector(`input[name="${prefix}_ans"]:checked`);
     return sel ? parseInt(sel.value, 10) : null;
   }
-  if (t === 'multiple') {
+  if (qt === 'multiple') {
     return Array.from(document.querySelectorAll(`input[name="${prefix}_ans"]:checked`)).map(r => parseInt(r.value, 10));
   }
-  if (t === 'fill') {
+  if (qt === 'fill') {
     const blanks = typeof item.blanks === 'number' && item.blanks > 0 ? item.blanks
       : (Array.isArray(item.answer) ? item.answer.length : 1);
     if (blanks > 1) {
@@ -149,14 +159,14 @@ function collectAnswer(item, prefix) {
     }
     const el = document.getElementById(`${prefix}_f0`); return el ? el.value : '';
   }
-  if (t === 'subjective') { const el = document.getElementById(`${prefix}_s`); return el ? el.value : ''; }
-  if (t === 'composite') { return (item.parts || []).map((p, i) => collectAnswer(p, `${prefix}_p${i}`)); }
+  if (qt === 'subjective') { const el = document.getElementById(`${prefix}_s`); return el ? el.value : ''; }
+  if (qt === 'composite') { return (item.parts || []).map((p, i) => collectAnswer(p, `${prefix}_p${i}`)); }
   return null;
 }
 
 function renderResultBlock(item, res, prefix, depth = 0) {
-  const t = item.type || 'single';
-  if (t === 'single' || t === 'multiple') {
+  const qt = item.type || 'single';
+  if (qt === 'single' || qt === 'multiple') {
     const correct = res.answer;
     const corrSet = Array.isArray(correct) ? correct : [correct];
     (item.choices || []).forEach((c, i) => {
@@ -166,31 +176,29 @@ function renderResultBlock(item, res, prefix, depth = 0) {
       const input = el.querySelector('input');
       if (input && input.checked && !corrSet.includes(i)) el.classList.add('bank-incorrect');
     });
-    const verdict = res.correct === null ? '📝 待评阅' : (res.correct ? '✅ 正确' : '❌ 错误');
     return `<div class="card ${res.correct === false ? 'bank-bad-card' : 'bank-ok-card'}">
-      <p class="text-sm" style="font-weight:600">${verdict}</p>
-      ${res.explain ? `<p class="text-sm mt-8">解析：${escapeHtml(res.explain)}</p>` : ''}
+      <p class="text-sm" style="font-weight:600">${verdictBadge(res.correct)}</p>
+      ${res.explain ? `<p class="text-sm mt-8">${t('bank.explain')}：${escapeHtml(res.explain)}</p>` : ''}
     </div>`;
   }
-  if (t === 'fill') {
-    const verdict = res.correct === null ? '📝 待评阅' : (res.correct ? '✅ 正确' : '❌ 错误');
+  if (qt === 'fill') {
     const ans = Array.isArray(res.answer) ? res.answer.join(' / ') : res.answer;
     return `<div class="card ${res.correct === false ? 'bank-bad-card' : 'bank-ok-card'}">
-      <p class="text-sm" style="font-weight:600">${verdict}</p>
-      <p class="text-sm mt-8">参考答案：${escapeHtml(ans)}</p>
-      ${res.explain ? `<p class="text-sm mt-8">解析：${escapeHtml(res.explain)}</p>` : ''}
+      <p class="text-sm" style="font-weight:600">${verdictBadge(res.correct)}</p>
+      <p class="text-sm mt-8">${t('bank.refAnswer')}：${escapeHtml(ans)}</p>
+      ${res.explain ? `<p class="text-sm mt-8">${t('bank.explain')}：${escapeHtml(res.explain)}</p>` : ''}
     </div>`;
   }
-  if (t === 'subjective') {
+  if (qt === 'subjective') {
     return `<div class="card bank-review-card">
-      <p class="text-sm" style="font-weight:600">📝 待评阅（请对照参考答案自评）</p>
-      <p class="text-sm mt-8">参考答案：${escapeHtml(res.answer)}</p>
-      ${res.explain ? `<p class="text-sm mt-8">解析：${escapeHtml(res.explain)}</p>` : ''}
+      <p class="text-sm" style="font-weight:600">📝 ${t('bank.subjSelfReview')}</p>
+      <p class="text-sm mt-8">${t('bank.refAnswer')}：${escapeHtml(res.answer)}</p>
+      ${res.explain ? `<p class="text-sm mt-8">${t('bank.explain')}：${escapeHtml(res.explain)}</p>` : ''}
     </div>`;
   }
-  if (t === 'composite') {
+  if (qt === 'composite') {
     let html = `<div class="card ${res.correct === false ? 'bank-bad-card' : 'bank-ok-card'}">
-      <p class="text-sm" style="font-weight:600">${res.correct === null ? '含待评阅' : (res.correct ? '✅ 全部正确' : '❌ 有错误')}</p>
+      <p class="text-sm" style="font-weight:600">${res.correct === null ? t('bank.compositePending') : (res.correct ? '✅ ' + t('bank.compositeAllCorrect') : '❌ ' + t('bank.compositeHasErrors'))}</p>
     </div>`;
     (item.parts || []).forEach((p, i) => {
       const pr = (res.parts && res.parts[i]) || {};
@@ -203,7 +211,7 @@ function renderResultBlock(item, res, prefix, depth = 0) {
 }
 
 function renderPractice(item, prefix) {
-  const badge = _TYPE_BADGE[item.type || 'single'] || '单选';
+  const badge = typeBadge(item.type);
   const progress = _practiceMode === 'drill'
     ? `<p class="text-sm text-muted mb-8">${t('bank.drillProgress').replace('{n}', _drillIdx + 1).replace('{m}', _drillQueue.length)} · ${escapeHtml(item.concept || '')}</p>`
     : `<p class="text-sm text-muted mb-8">${escapeHtml(item.unit || '')} · ${escapeHtml(item.chapter || '')} · <b>${escapeHtml(item.concept || '')}</b></p>`;
@@ -237,7 +245,7 @@ async function submitPractice(qid, prefix) {
       ? `<button class="btn btn-primary btn-sm" onclick="_drillIdx++;openDrillNext()">${t('bank.drillNext')}</button>` : '';
     const hasSubj = (qtype === 'subjective') || (qtype === 'composite' && (item.parts || []).some(p => p.type === 'subjective'));
     const scoreBtn = hasSubj
-      ? `<button class="btn btn-secondary btn-sm" id="bankAiScore" onclick="scorePractice('${qid}', '${prefix}')">🤖 AI 评分</button>` : '';
+      ? `<button class="btn btn-secondary btn-sm" id="bankAiScore" onclick="scorePractice('${qid}', '${prefix}')">🤖 ${t('bank.aiScore')}</button>` : '';
     document.getElementById('bankResult').innerHTML = renderResultBlock(item, res, prefix)
       + (res.correct === false ? `<p class="text-sm text-muted mt-8">${t('bank.addedToProblems')}</p>` : '')
       + `<div class="flex gap-8 mt-12">
@@ -261,49 +269,49 @@ async function scorePractice(qid, prefix) {
   _activePractice = { qid, prefix };
   const answer = collectAnswer(item, prefix);
   const btn = document.getElementById('bankAiScore');
-  if (btn) { btn.disabled = true; btn.textContent = '🤖 AI 评分中…'; }
+  if (btn) { btn.disabled = true; btn.textContent = '🤖 ' + t('bank.aiScoring'); }
   try {
     const r = await api('/api/bank/score', { method: 'POST', body: { qid, answer } });
     if (!r.ai_available && !r.history) {
-      toast('未配置 AI，请对照参考答案自评。', 'ok');
+      toast(t('bank.noAiSelfReview'), 'ok');
       return;
     }
-    const total = r.score === null ? '—' : r.score + ' 分';
+    const total = r.score === null ? '—' : r.score + ' ' + t('bank.pointsUnit');
     const partsHtml = (r.parts || []).map((p, i) => {
       const lbl = `${i+1}.`;
-      const pv = p.score === null ? '待评阅' : p.score + ' 分';
+      const pv = p.score === null ? t('bank.verdictPending') : p.score + ' ' + t('bank.pointsUnit');
       const pc = p.comment ? `<span class="text-sm">${escapeHtml(p.comment)}</span>` : '';
-      return `<div class="text-sm mt-4"><b>${lbl}</b> 得分 <b>${pv}</b> ${pc}</div>`;
+      return `<div class="text-sm mt-4"><b>${lbl}</b> ${t('bank.partScore')} <b>${pv}</b> ${pc}</div>`;
     }).join('');
     // 历史评分记录（最近 5 条）
     const hist = (r.history || []).slice(0, 5);
     const histHtml = hist.length
-      ? `<div class="mt-8"><p class="text-sm text-muted" style="font-weight:600">📚 历史评分</p>
+      ? `<div class="mt-8"><p class="text-sm text-muted" style="font-weight:600">📚 ${t('bank.scoreHistory')}</p>
           ${hist.map(h => `<div class="text-sm mt-4" style="display:flex;gap:8px;align-items:baseline">
-            <b>${h.score === null ? '待评阅' : h.score + ' 分'}</b>
+            <b>${h.score === null ? t('bank.verdictPending') : h.score + ' ' + t('bank.pointsUnit')}</b>
             <span class="text-muted" style="font-size:12px">${escapeHtml(String(h.created_at || '').slice(5, 16))}</span>
             ${h.comment ? `<span class="text-muted" style="font-size:12px">${escapeHtml(h.comment.slice(0, 40))}</span>` : ''}
           </div>`).join('')}
         </div>` : '';
     const aiNote = !r.ai_available
-      ? `<p class="text-sm mt-8 text-muted">🤖 未配置 AI，本次未评分（已记录提交）。</p>` : '';
+      ? `<p class="text-sm mt-8 text-muted">🤖 ${t('bank.noAiUnscored')}</p>` : '';
     document.getElementById('bankResult').innerHTML = `<div class="card bank-review-card">
-      <p class="text-sm" style="font-weight:600">🤖 AI 评分：<b>${total}</b></p>
+      <p class="text-sm" style="font-weight:600">🤖 ${t('bank.aiScore')}：<b>${total}</b></p>
       ${r.comment ? `<p class="text-sm mt-8">${escapeHtml(r.comment)}</p>` : ''}
-      ${r.against ? `<p class="text-sm mt-8" style="color:var(--text-muted)">命中要点：${escapeHtml(r.against)}</p>` : ''}
+      ${r.against ? `<p class="text-sm mt-8" style="color:var(--text-muted)">${t('bank.keyPointsHit')}：${escapeHtml(r.against)}</p>` : ''}
       ${partsHtml}
       ${aiNote}
       ${histHtml}
-      <p class="text-sm mt-8 text-muted">✅ 评分完成</p>
+      <p class="text-sm mt-8 text-muted">✅ ${t('bank.scoreDone')}</p>
       <div class="flex gap-8 mt-12">
-        <button class="btn btn-secondary btn-sm" onclick="scoreAgain()">🤖 重新评分</button>
+        <button class="btn btn-secondary btn-sm" onclick="scoreAgain()">🤖 ${t('bank.rescore')}</button>
         <button class="btn btn-sm" onclick="closeModal('bankModal');loadBankUnits();loadBank()">${t('bank.close')}</button>
       </div>
     </div>`;
   } catch (e) {
     toast(e.message, 'error');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '🤖 AI 评分'; }
+    if (btn) { btn.disabled = false; btn.textContent = '🤖 ' + t('bank.aiScore'); }
   }
 }
 
@@ -312,7 +320,7 @@ function scoreAgain() {
   const cur = _activePractice || {};
   if (!cur.qid) { location.reload(); return; }
   const btn = document.getElementById('bankAiScore');
-  if (btn) { btn.disabled = false; btn.textContent = '🤖 AI 评分'; }
+  if (btn) { btn.disabled = false; btn.textContent = '🤖 ' + t('bank.aiScore'); }
   scorePractice(cur.qid, cur.prefix || '');
 }
 
@@ -437,7 +445,7 @@ async function generateBankQuestion() {
     openBankImport();
     const ta = document.getElementById('bankImportText');
     if (ta) ta.value = JSON.stringify([q], null, 2);
-    toast('已生成题目，请复查后导入', 'ok');
+    toast(t('bank.genDone'), 'ok');
     await autoReview(q);
   } catch (e) {
     toast(e.message, 'error');
@@ -450,23 +458,23 @@ async function generateBankQuestion() {
 async function autoReview(q) {
   const box = document.getElementById('bankReviewResult');
   if (!box) return;
-  box.innerHTML = '<p class="text-sm text-muted">🤖 正在审题…</p>';
+  box.innerHTML = `<p class="text-sm text-muted">🤖 ${t('bank.reviewing')}</p>`;
   try {
     const r = await api('/api/bank/review', { method: 'POST', body: { question: q, subject: '' } });
     if (!r.ai_available) {
-      box.innerHTML = '<p class="text-sm text-muted">🤖 未配置 AI，跳过自动审题（可对照模板复查）。</p>';
+      box.innerHTML = `<p class="text-sm text-muted">🤖 ${t('bank.reviewNoAi')}</p>`;
       return;
     }
-    const badge = r.verdict === 'pass' ? '✅ 通过' : (r.verdict === 'warn' ? '⚠️ 建议修改' : '❌ 需重出');
+    const badge = r.verdict === 'pass' ? '✅ ' + t('bank.reviewPass') : (r.verdict === 'warn' ? '⚠️ ' + t('bank.reviewWarn') : '❌ ' + t('bank.reviewFail'));
     const color = r.verdict === 'pass' ? 'var(--text)' : (r.verdict === 'warn' ? 'var(--warning)' : 'var(--danger)');
     box.innerHTML = `<div class="bank-review-card" style="border-left:3px solid ${color}">
-      <p class="text-sm" style="font-weight:600;color:${color}">AI 审题：${badge}</p>
+      <p class="text-sm" style="font-weight:600;color:${color}">${t('bank.reviewTitle')}：${badge}</p>
       ${r.comment ? `<p class="text-sm mt-4">${escapeHtml(r.comment)}</p>` : ''}
       ${(r.issues && r.issues.length) ? `<ul class="text-sm mt-4" style="margin:4px 0 0 18px">${r.issues.map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul>` : ''}
-      ${r.revised ? `<p class="text-sm mt-4">💡 修订建议：<pre class="text-xs" style="background:var(--bg);padding:8px;border-radius:6px;white-space:pre-wrap">${escapeHtml(r.revised)}</pre></p>` : ''}
+      ${r.revised ? `<p class="text-sm mt-4">💡 ${t('bank.reviewRevised')}：<pre class="text-xs" style="background:var(--bg);padding:8px;border-radius:6px;white-space:pre-wrap">${escapeHtml(r.revised)}</pre></p>` : ''}
     </div>`;
   } catch (e) {
-    box.innerHTML = `<p class="text-sm" style="color:var(--danger)">🤖 审题失败：${escapeHtml(e.message)}</p>`;
+    box.innerHTML = `<p class="text-sm" style="color:var(--danger)">🤖 ${t('bank.reviewError').replace('{m}', escapeHtml(e.message))}</p>`;
   }
 }
 
@@ -474,10 +482,10 @@ async function autoReview(q) {
 async function reviewBankQuestions() {
   const text = document.getElementById('bankImportText').value.trim();
   const box = document.getElementById('bankReviewResult');
-  if (!text) { if (box) box.innerHTML = '<p class="text-sm text-muted">导入框为空，无法审题。</p>'; return; }
+  if (!text) { if (box) box.innerHTML = `<p class="text-sm text-muted">${t('bank.reviewEmpty')}</p>`; return; }
   let arr;
   try { arr = JSON.parse(text); } catch (e) {
-    if (box) box.innerHTML = '<p class="text-sm" style="color:var(--danger)">JSON 解析失败，无法审题。</p>';
+    if (box) box.innerHTML = `<p class="text-sm" style="color:var(--danger)">${t('bank.reviewBadJson')}</p>`;
     return;
   }
   if (!Array.isArray(arr)) arr = [arr];

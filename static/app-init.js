@@ -58,7 +58,7 @@ function applyUpdate() {
     if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
       const d = await fetch('/api/dashboard').then(r => r.json()).catch(() => null);
       if (d && (d.due || 0) > 0) {
-        new Notification('LearnOS', { body: `有 ${d.due} 道复习任务待完成` });
+        new Notification('LearnOS', { body: t('notify.due').replace('{n}', d.due) });
       }
     }
   } catch (e) { /* 静默 */ }

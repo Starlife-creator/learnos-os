@@ -80,6 +80,9 @@ async function loadDashboard() {
         </div>`).join('');
     } else { actEl.innerHTML = '<div class="empty"><p>' + t('msg.noActivity') + '</p></div>'; }
   } catch(e) { toast(e.message, 'error'); }
+  // 体检 P1-3/P1-5：打卡与今日学习计划独立懒加载（不阻塞/不依赖主请求）
+  loadCheckins();
+  loadPlan();
 }
 
 // ── C6 复习提醒：角标 + 浏览器通知 ──
@@ -497,5 +500,64 @@ async function queueStep(idx, skip = false) {
     _queueIdx = idx;  // 跳到该项（不计完成）
   }
   renderQueue();
+}
+
+// ── 学习打卡（体检 P1-3 接线：social.py 后端 → dashboard UI）──
+async function loadCheckins() {
+  const listEl = document.getElementById('checkinList');
+  const streakEl = document.getElementById('checkinStreak');
+  const totalEl = document.getElementById('checkinTotalMin');
+  if (!listEl) return;
+  try {
+    const d = await api('/api/social/checkins?limit=7');
+    if (streakEl) streakEl.textContent = t('social.streak').replace('{n}', d.streak || 0);
+    if (totalEl) totalEl.textContent = t('social.totalMin').replace('{n}', d.total_minutes || 0);
+    const items = d.checkins || [];
+    listEl.innerHTML = items.length
+      ? items.map(c => `
+          <div class="flex-between mb-8">
+            <span class="text-sm">${escapeHtml((c.check_date || '').slice(5))}
+              ${c.subject ? '· ' + escapeHtml(c.subject) : ''}
+              ${c.note ? '· ' + escapeHtml(c.note) : ''}</span>
+            <span class="tag tag-gray">${c.minutes} ${t('social.minutesUnit')}</span>
+          </div>`).join('')
+      : '<div class="empty"><p>' + t('social.noCheckin') + '</p></div>';
+  } catch (e) { /* 静默：打卡是增量功能，失败不打扰主仪表盘 */ }
+}
+
+async function submitCheckin() {
+  const minEl = document.getElementById('checkinMinutes');
+  const noteEl = document.getElementById('checkinNote');
+  const minutes = parseInt(minEl && minEl.value, 10) || 0;
+  if (minutes <= 0) { toast(t('social.minutesReq'), 'error'); return; }
+  try {
+    await api('/api/social/checkin', { method: 'POST', body: { minutes, note: (noteEl && noteEl.value) || '' } });
+    if (minEl) minEl.value = '';
+    if (noteEl) noteEl.value = '';
+    toast(t('social.checkinOk'));
+    loadCheckins();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── 今日学习计划（体检 P1-5 接线：agent_rules.synthesize_plan）──
+async function loadPlan() {
+  const el = document.getElementById('planCard');
+  if (!el) return;
+  try {
+    const p = await api('/api/agent/orchestrate');
+    const sugg = p.suggestions || [];
+    if (!sugg.length) { el.innerHTML = t('plan.empty'); return; }
+    el.innerHTML =
+      `<div class="text-sm text-muted" style="margin-bottom:8px">${t('plan.totalMin').replace('{n}', p.total_est_minutes || 0)}</div>` +
+      sugg.map(s => `
+        <div class="mb-8" style="padding:8px 10px;border:1px solid var(--border,#eee);border-radius:8px">
+          <div class="flex-between">
+            <span class="text-sm">${escapeHtml(s.action)}</span>
+            <span class="tag tag-gray">${s.est_minutes} ${t('social.minutesUnit')}</span>
+          </div>
+          <div class="text-sm text-muted" style="margin-top:4px">${escapeHtml(s.reason || '')}</div>
+        </div>`).join('') +
+      (p.narrative ? `<div class="hint-text" style="margin-top:8px">${escapeHtml(p.narrative)}</div>` : '');
+  } catch (e) { /* 静默：计划为增强项 */ }
 }
 

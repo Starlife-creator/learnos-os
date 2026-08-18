@@ -4,6 +4,25 @@ const API = '';
 const X_HEADER = 'X-Requested-With';
 const X_VALUE = 'LearnOS';
 
+// ── 导出令牌（§16.6）：同源应用从 /api/bootstrap 拉取，导出/还原端点注入 X-Export-Token ──
+let _exportToken = null;
+let _exportTokenPromise = null;
+async function ensureExportToken(force = false) {
+  if (_exportToken && !force) return _exportToken;
+  if (_exportTokenPromise && !force) return _exportTokenPromise;
+  _exportTokenPromise = fetch('/api/bootstrap', { headers: { [X_HEADER]: X_VALUE } })
+    .then(r => (r.ok ? r.json() : {}))
+    .then(d => { _exportToken = d.export_token || null; return _exportToken; })
+    .catch(() => { _exportToken = null; return null; })
+    .finally(() => { _exportTokenPromise = null; });
+  return _exportTokenPromise;
+}
+const _EXPORT_PATHS = ['/api/export', '/api/import/restore'];
+function _isExportPath(path) {
+  const clean = String(path).split('?')[0];
+  return _EXPORT_PATHS.some(p => clean === p || clean.startsWith(p + '/'));
+}
+
 // ── 多学科：当前学科上下文（URL ?subject= 优先，其次 localStorage，最后默认 physics）──
 const BUILTIN_SUBJECTS = ['physics', 'chemistry', 'math'];
 function currentSubject() {
@@ -177,9 +196,13 @@ async function searchPaletteRun(q) {
     if (r.concepts?.length) groups.push({ label: t('search.concepts'), items: r.concepts.map(c => ({
       text: c.name, sub: '', go: () => { closeModal('searchModal');
         window.open('concept_map.html?subject=' + encodeURIComponent(currentSubject()) + '&focus=' + encodeURIComponent(c.name), '_self'); } })) });
-    if (r.bank?.length) groups.push({ label: t('search.bank'), items: r.bank.map(b => ({
-      text: ({ single: '【单选】', multiple: '【多选】', fill: '【填空】', subjective: '【主观】', composite: '【大小题】' }[b.type] || '') + b.stem,
-      sub: b.concept, go: () => { closeModal('searchModal'); switchPage('bank'); } })) });
+    if (r.bank?.length) groups.push({ label: t('search.bank'), items: r.bank.map(b => {
+      const _typeKey = { single: 'qtype.single', multiple: 'qtype.multiple', fill: 'qtype.fill', subjective: 'qtype.subjective', composite: 'qtype.composite' }[b.type];
+      return {
+        text: (_typeKey ? '【' + t(_typeKey) + '】' : '') + b.stem,
+        sub: b.concept, go: () => { closeModal('searchModal'); switchPage('bank'); }
+      };
+    }) });
     if (r.docs?.length) groups.push({ label: t('search.docs'), items: r.docs.map(d => ({
       text: d.name + (d.page ? t('rag.pageSuffix').replace('{p}', d.page) : ''), sub: '', go: () => { closeModal('searchModal'); openRagSource(encodeURIComponent(d.path)); } })) });
     _searchItems = groups.flatMap(g => g.items);
@@ -222,6 +245,11 @@ async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', [X_HEADER]: X_VALUE };
   // 写操作携带幂等键，避免网络重试产生重复数据
   if (method !== 'GET') headers['X-Request-Id'] = uid();
+  // 导出/还原端点注入导出令牌（§16.6，令牌取自 /api/bootstrap）
+  if (_isExportPath(path)) {
+    const tok = await ensureExportToken();
+    if (tok) headers['X-Export-Token'] = tok;
+  }
   const body = opts.body ? JSON.stringify(opts.body) : undefined;
   const url = withSubject(path);
 

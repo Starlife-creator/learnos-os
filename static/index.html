@@ -86,6 +86,18 @@
     </div>
 
     <div class="card">
+      <div class="card-title" data-i18n="social.title">学习打卡</div>
+      <div class="flex gap-12" style="flex-wrap:wrap;align-items:center;margin-bottom:10px">
+        <span class="tag tag-blue" id="checkinStreak">—</span>
+        <span class="tag tag-gray" id="checkinTotalMin">—</span>
+        <input type="number" id="checkinMinutes" min="0" max="1440" placeholder="30" style="width:80px">
+        <input type="text" id="checkinNote" maxlength="280" data-i18n-ph="social.notePh" style="flex:1;min-width:140px">
+        <button class="btn btn-primary btn-sm" onclick="submitCheckin()" data-i18n="social.checkinBtn">打卡</button>
+      </div>
+      <div id="checkinList" class="hint-text">—</div>
+    </div>
+
+    <div class="card">
       <div class="card-title" data-i18n="card.trend">掌握度趋势</div>
       <svg class="trend-svg" id="trendSvg" viewBox="0 0 300 120" preserveAspectRatio="none"></svg>
       <div class="hint-text" id="trendHint" data-i18n="card.trendHint">完成复习后会记录掌握度变化</div>
@@ -115,6 +127,11 @@
     <div class="card">
       <div class="card-title" data-i18n="card.tasks">今日任务清单</div>
       <div id="taskCard" class="hint-text">—</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title" data-i18n="plan.title">今日学习计划</div>
+      <div id="planCard" class="hint-text">—</div>
     </div>
 
     <div class="card" id="topicsCard">
@@ -511,7 +528,7 @@
     </div>
     <div class="card mt-16">
       <div class="card-title" data-i18n="help.material.t">资料导入向导</div>
-      <p class="text-sm" data-i18n="help.material.b">教材库页顶部。上传 md/txt 文件（最大 8MB）或选已摄取文档 → 勾选目标（概念图谱 / 例题入题库 / 识别为试卷）→ AI 提取草稿 → 逐项勾选确认 → 导入。分段大小按你设置的模型上下文自适应，超长文本自动分段全覆盖（预计调用次数多时会先确认）。全程草稿预览不静默落库；未配置 AI 时按标题层级降级提取概念。</p>
+      <p class="text-sm" data-i18n="help.material.b">教材库页顶部。上传 md/txt 文件（最大 100MB）或选已摄取文档 → 勾选目标（概念图谱 / 例题入题库 / 识别为试卷）→ AI 提取草稿 → 逐项勾选确认 → 导入。分段大小按你设置的模型上下文自适应，超长文本自动分段全覆盖（预计调用次数多时会先确认）。全程草稿预览不静默落库；未配置 AI 时按标题层级降级提取概念。</p>
     </div>
     <div class="card mt-16">
       <div class="card-title" data-i18n="help.exam.t">考试就绪度</div>
@@ -820,17 +837,17 @@
     <div class="modal-body" style="padding:16px">
       <p class="text-sm text-muted" data-i18n="bank.importHint">支持粘贴 JSON 数组（可一次多题）。题型由 type 字段决定：single 单选 / multiple 多选 / fill 填空 / subjective 主观 / composite 大小题（含 parts 子题）。单选 answer 为正确选项下标(从0)；多选 answer 为下标数组；填空 answer 为答案字符串或数组(多空)；主观 answer 为参考答案文本；大小题无 answer，需 parts 数组。</p>
       <div class="bank-gen-row">
-        <span class="text-sm text-muted">AI 出题：</span>
+        <span class="text-sm text-muted" data-i18n="bank.genLabel">AI 出题：</span>
         <select id="bankGenType" class="input-sm">
-          <option value="single">单选</option>
-          <option value="multiple">多选</option>
-          <option value="fill">填空</option>
-          <option value="subjective">主观题</option>
-          <option value="composite">大小题</option>
+          <option value="single" data-i18n="qtype.single">单选</option>
+          <option value="multiple" data-i18n="qtype.multiple">多选</option>
+          <option value="fill" data-i18n="qtype.fill">填空</option>
+          <option value="subjective" data-i18n="qtype.subjective">主观题</option>
+          <option value="composite" data-i18n="qtype.composite">大小题</option>
         </select>
-        <input id="bankGenTopic" class="input-sm" placeholder="知识点（可选）" style="flex:1;min-width:120px">
-        <button class="btn btn-secondary btn-sm" onclick="generateBankQuestion()">生成并填入</button>
-        <button class="btn btn-secondary btn-sm" onclick="reviewBankQuestions()">🤖 AI 审题</button>
+        <input id="bankGenTopic" class="input-sm" data-i18n-ph="bank.genTopicPh" placeholder="知识点（可选）" style="flex:1;min-width:120px">
+        <button class="btn btn-secondary btn-sm" onclick="generateBankQuestion()" data-i18n="bank.genBtn">生成并填入</button>
+        <button class="btn btn-secondary btn-sm" onclick="reviewBankQuestions()" data-i18n="bank.reviewBtn">🤖 AI 审题</button>
       </div>
       <div id="bankReviewResult" class="mt-8"></div>
       <textarea id="bankImportText" rows="12" spellcheck="false" style="width:100%;font-family:Consolas,monospace;font-size:13px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);padding:10px"></textarea>

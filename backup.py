@@ -31,6 +31,14 @@ BACKUP_TABLES = [
     "concept_progress",
     "rag_chunks",
     "exam_questions",
+    # v18+ 增量业务表（体检 P0-2 补齐；缺任一张 → 还原后对应功能数据清零）
+    "subjects",           # v18 学科注册表（自建学科依赖）
+    "study_checkins",     # v21 学习小组打卡
+    "bank_scores",        # v22 题库 AI 评分历史
+    "bank_attempts",      # 题库作答记录
+    "bank_problems",      # 多题型改造的题库错题建档
+    "mastery_log",        # 掌握度日志（报告数据源）
+    "gamification",       # 成就 / 积分
 ]
 
 

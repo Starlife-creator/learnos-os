@@ -128,5 +128,62 @@ class TestBackup(unittest.TestCase):
         first.unlink()
 
 
+class TestBackupNewTablesRoundtrip(unittest.TestCase):
+    """体检 P0-2 回归：v16+ 新增的 7 张业务表必须参与导出/还原往返。
+
+    背景：BACKUP_TABLES 曾漏掉 subjects/bank_problems 等表，导致一键还原后
+    学科注册、题库错题建档等数据清零。本测试向每张表插哨兵行，
+    导出→清空→还原→逐表断言哨兵仍在。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.temp_dir = tempfile.TemporaryDirectory(prefix="backup_nt_", dir=_TMP)
+        cls._orig_db = config.DB_PATH
+        config.DB_PATH = Path(cls.temp_dir.name) / "nt.db"
+        db.DB_PATH = config.DB_PATH
+        cls._orig_app = config.APP_DIR
+        config.APP_DIR = Path(cls.temp_dir.name) / "app"
+        config.APP_DIR.mkdir(parents=True, exist_ok=True)
+        backup.APP_DIR = config.APP_DIR
+        db.init_db()
+        from db import now
+        ts = now()
+        with db.db() as conn:
+            conn.execute("INSERT INTO subjects(id, title, builtin, created_at) VALUES (?,?,?,?)",
+                         ("chem2", "自建化学", 0, ts))
+            conn.execute("INSERT INTO study_checkins(check_date, subject, minutes, note, created_at) "
+                         "VALUES (?,?,?,?,?)", ("2026-08-18", "physics", 45, "哨兵打卡", ts))
+            conn.execute("INSERT INTO bank_scores(qid, subject, score, comment, against, mode, needs_review, created_at) "
+                         "VALUES (?,?,?,?,?,?,?,?)", ("q1", "physics", 80, "哨兵评分", "", "ai", 0, ts))
+            conn.execute("INSERT INTO bank_attempts(qid, correct, attempted_at) VALUES (?,?,?)",
+                         ("q1", 1, ts))
+            conn.execute("INSERT INTO bank_problems(qid, problem_id, updated_at) VALUES (?,?,?)",
+                         ("q1", 7, ts))
+            conn.execute("INSERT INTO mastery_log(day, avg_mastery, count) VALUES (?,?,?)",
+                         ("2026-08-18", 3.5, 12))
+            conn.execute("INSERT INTO gamification(date, reviews, xp) VALUES (?,?,?)",
+                         ("2026-08-18", 5, 250))
+
+    @classmethod
+    def tearDownClass(cls):
+        db.DB_PATH = cls._orig_db
+        config.DB_PATH = cls._orig_db
+        config.APP_DIR = cls._orig_app
+        cls.temp_dir.cleanup()
+
+    def test_new_tables_roundtrip(self):
+        raw = json.dumps(backup.export_backup())
+        backup.restore_backup(raw)
+        with db.db() as conn:
+            self.assertEqual(conn.execute("SELECT title FROM subjects WHERE id='chem2'").fetchone()[0], "自建化学")
+            self.assertEqual(conn.execute("SELECT note FROM study_checkins").fetchone()[0], "哨兵打卡")
+            self.assertEqual(conn.execute("SELECT score FROM bank_scores WHERE qid='q1'").fetchone()[0], 80)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM bank_attempts").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT problem_id FROM bank_problems WHERE qid='q1'").fetchone()[0], 7)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM mastery_log").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT xp FROM gamification").fetchone()[0], 250)
+
+
 if __name__ == "__main__":
     unittest.main()
