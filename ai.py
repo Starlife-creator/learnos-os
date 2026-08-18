@@ -126,6 +126,7 @@ def display_settings() -> dict[str, str]:
         "ai_context_tokens": int(eff.get("ai_context_tokens", "32000") or 32000),
         "allow_local_ai": eff.get("allow_local_ai", "1") != "0",
         "disable_thinking": eff.get("disable_thinking", "1") != "0",
+        "max_output_tokens": int(eff.get("max_output_tokens", "4096") or 4096),
         "has_api_key": has_key,
         "key_source": eff.get("key_source", "none"),
         # 存在 keys.enc 但当前未解锁（key_source 为 none/runtime）时提示可解锁
@@ -278,11 +279,20 @@ def _prepare_ai_request(
         record(route=route, model=model, ok=False, error_kind="not_configured", start=start)
         raise ValueError('请先在「AI 设置」中填写 API 地址、密钥和模型。')
 
+    # 单次输出 token 上限：min(调用方请求, 用户设置的 max_output_tokens)
+    # ——不同型号输出上限差异大，统一夹取防越界；也避免用户设小导致截断后盲目加码。
+    cap = 0
+    try:
+        cap = int(config.get("max_output_tokens", "4096") or 4096)
+    except (TypeError, ValueError):
+        cap = 4096
+    eff_max_tokens = max(256, min(max_tokens, cap))
+
     body: dict[str, Any] = {
         "model": model,
         "messages": messages,
         "temperature": _safe_temperature(config),
-        "max_tokens": max_tokens,
+        "max_tokens": eff_max_tokens,
         "stream": stream,
     }
     # 模型预设库：按模型名/端点自动注入"关闭思考"参数。

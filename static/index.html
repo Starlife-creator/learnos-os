@@ -625,6 +625,12 @@
           </select>
           <p class="text-sm text-muted">阿里云百炼 DeepSeek 等：非流式请求必须关闭思考，否则仅返回推理内容导致解析失败。</p>
         </div>
+        <div class="form-group">
+          <label for="setMaxOutputTokens">单次输出上限（max tokens）</label>
+          <input type="number" id="setMaxOutputTokens" class="form-input"
+                 min="512" max="32768" step="128" placeholder="4096">
+          <p class="text-sm text-muted">模型单次回复的最大 token 数。设太小会导致长文提取/长答案被截断；设太大可能超出模型支持范围报错。一般 4096 即可，需要提取大量内容时可提到 8192。</p>
+        </div>
       </div>
     </div>
 

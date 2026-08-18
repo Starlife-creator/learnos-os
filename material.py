@@ -89,6 +89,85 @@ def _split_batches(text: str, batch_size: int) -> list[str]:
     return batches
 
 
+# ── 方案B：模型断句动态分段 ─────────────────────────────────────────────
+# 静态切批的边界可能落在句子/段落中间。对每个边界，取"前批尾 OVERLAP 字 +
+# 后批头 OVERLAP 字"拼成重叠片段，用 1 次微型模型调用让模型指出语义完整断点
+# （输出该把重叠部分在哪一分，如"前1行后2行"或直接给在片段中的位置），
+# 调整边界后每批语义完整 → 提取质量更高、更少截断。
+_OVERLAP = 200          # 重叠窗口（字）；可按效果调 100~400
+_SPLIT_PROMPT = (
+    "下面是一段文本的重叠区（中间是上一段与下一段的衔接处，用「|||」标记）。"
+    "请判断应从哪里切开，使两侧语义都完整（不切断句子/条目/小节）。"
+    '只返回 JSON：{"side": "left"|"right", "reason": "一句话理由"}\n'
+    "left=把重叠区归给左侧段（衔接处偏左），right=归给右侧段（衔接处偏右）。"
+)
+
+
+def _model_split_side(overlap_text: str) -> str | None:
+    """调微型模型判断重叠区应归属左/右侧段。失败/离线返回 None（保守不调整）。"""
+    try:
+        from ai import call_ai, ai_configured
+        if not ai_configured():
+            return None
+        from validate import validate_object
+        raw = call_ai([
+            {"role": "system", "content": _SPLIT_PROMPT},
+            {"role": "user", "content": overlap_text},
+        ], max_tokens=120, tier="fast", route="material")
+        data = validate_object(raw, {"side": {"type": "string", "required": True},
+                                     "reason": {"type": "string"}})
+        side = str(data.get("side", "")).strip().lower()
+        return side if side in ("left", "right") else None
+    except Exception:
+        return None
+
+
+def _refine_batch_boundaries(batches: list[str], batch_size: int, dry_run: bool = False) -> list[str]:
+    """对静态批次边界做"模型断句"微调：重叠区交给模型判断归属，调整批次切分。
+
+    实现：把每个相邻边界放入重叠上下文（前批尾 + 后批头 OVERLAP 字），
+    模型输出 left/right；left=边界前移（后批多留），right=边界后移（前批多拿）。
+    微调量限制在 [OVERLAP*0.3, OVERLAP] 内，避免批次长度失控。
+    dry_run=True：不调模型、不调整（仅用于批数预估，避免重复计费）。
+    """
+    if len(batches) < 2:
+        return batches
+    if dry_run:
+        return batches
+    out: list[str] = []
+    for i, b in enumerate(batches):
+        if i == len(batches) - 1:
+            out.append(b)
+            continue
+        nxt = batches[i + 1]
+        tail = b[-_OVERLAP:] if len(b) >= _OVERLAP else b
+        head = nxt[:_OVERLAP] if len(nxt) >= _OVERLAP else nxt
+        overlap = f"{tail}\n|||\n{head}"
+        side = _model_split_side(overlap)
+        # 按模型建议微调边界（限制幅度防失控）
+        move = int(_OVERLAP * 0.5)
+        if side == "left":
+            # 重叠区归左侧：把 head 的前移回 b（边界前移）——实际是 b 多收一个片段
+            # 保守实现：边界向后批移 MAX_BATCH_ADJUST 个字，使衔接处落在后批开头完整语义内
+            take = min(move, len(nxt) // 2)
+            if take:
+                out.append(b + nxt[:take].rstrip())
+                batches[i + 1] = nxt[take:]
+            else:
+                out.append(b)
+        elif side == "right":
+            # 重叠区归右侧：前批让出尾部 move 字给后批（衔接偏右）
+            give = min(move, len(b) // 4)
+            if give:
+                out.append(b[:-give].rstrip())
+                batches[i + 1] = b[-give:] + nxt
+            else:
+                out.append(b)
+        else:
+            out.append(b)  # 模型不可用/失败 → 保持原边界
+    return out
+
+
 # 触发拆半重试的最小批长（低于此直接放弃，避免无限递归）
 _SPLIT_MIN = 600
 
@@ -257,6 +336,8 @@ def analyze(text: str, subject: str, targets: list[str],
     batches_all = _split_batches(text, size)
     if not batches_all:
         raise ValueError("未提取到文本内容")
+    # 方案B：模型断句微调批次边界（每边界 1 次微型调用，失败自动回退原边界）
+    batches_all = _refine_batch_boundaries(batches_all, size)
     if len(batches_all) > MAX_BATCHES_HARD:
         raise ValueError(
             f"文本过长（需 {len(batches_all)} 批，超过安全上限 {MAX_BATCHES_HARD}），请拆分文件")

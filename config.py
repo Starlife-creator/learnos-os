@@ -171,6 +171,8 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     # 关闭 reasoner 思考模式（enable_thinking=false）：阿里云百炼等 DeepSeek 兼容端点，
     # 非流式请求必须关闭思考，否则报错/仅返回推理内容。默认关闭以适配 JSON 提取等结构化任务。
     "disable_thinking": {"type": "bool",  "default": "1"},
+    # 模型单次输出 token 上限（自动约束各调用点 max_tokens，防越界/防截断）
+    "max_output_tokens": {"type": "int",  "min": 512, "max": 32768, "default": "4096"},
 }
 
 

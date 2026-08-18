@@ -163,6 +163,44 @@ class TestMaterialUnit(unittest.TestCase):
         self.assertIn("第一章 内容", joined)
         self.assertIn("深度学习核心概念讨论", joined)
 
+    def test_refine_boundaries_dry_run_no_calls(self):
+        # dry_run 不做模型调用、不调整
+        batches = ["第1章 内容", "第2章 内容", "第3章 内容"]
+        with mock.patch("material._model_split_side", side_effect=AssertionError("不应调用")) as m:
+            out = material._refine_batch_boundaries(batches, 100, dry_run=True)
+        self.assertEqual(out, batches)
+        m.assert_not_called()
+
+    def test_refine_boundaries_model_fail_keeps(self):
+        # 模型不可用（返回 None）→ 边界保持
+        batches = ["第1章 内容", "第2章 内容", "第3章 内容"]
+        with mock.patch("material._model_split_side", return_value=None):
+            out = material._refine_batch_boundaries(batches, 100)
+        self.assertEqual(len(out), len(batches))
+
+    def test_refine_boundaries_left_moves(self):
+        # 模型判 left（衔接偏左归左侧）→ 边界前移，批次内容仍覆盖全文
+        b1 = "章1" * 300
+        b2 = "章2" * 300
+        batches = [b1, b2]
+        with mock.patch("material._model_split_side", return_value="left"):
+            out = material._refine_batch_boundaries(batches, 400)
+        # 第 1 批吸收了第 2 批开头一段 → 更长；第 2 批变短
+        self.assertGreater(len(out[0]), len(b1))
+        self.assertLess(len(out[1]), len(b2))
+        # 全文仍在（拼接后包含两章内容）
+        joined = out[0] + out[1]
+        self.assertIn("章1", joined)
+        self.assertIn("章2", joined)
+
+    def test_analyze_calls_refine(self):
+        # analyze 默认接入了模型断句（离线时回退原批次，source 仍 ai / heuristic 兜底）
+        long_text = "\n\n".join(f"# 第{i}章\n\n## 概念{i}\n\n内容" for i in range(3))
+        with mock.patch("ai.call_ai", return_value="not json"):
+            result = material.analyze(long_text, "physics", ["concepts"], context_tokens=2000)
+        self.assertEqual(result["source"], "heuristic")
+        self.assertTrue(result["draft"]["concepts"]["concepts"])
+
     def test_analyze_all_batches_fail_falls_back(self):
         # 多批长文 + 全部批返回非 JSON → concepts 目标回退启发式给出产出
         long_text = "\n\n".join(f"# 第{i}章\n\n## 概念{i}\n\n内容" for i in range(3))

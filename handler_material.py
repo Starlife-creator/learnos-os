@@ -98,7 +98,8 @@ class MaterialMixin:
         self.end_headers()
         try:
             size = material.batch_chars(context_tokens)
-            total_batches = len(material._split_batches(text, size))
+            total_batches = len(material._refine_batch_boundaries(
+                material._split_batches(text, size), size, dry_run=True))
             self._sse_send("start", {"batches_total": total_batches, "from_batch": from_batch})
 
             def on_progress(info: dict[str, Any]) -> None:

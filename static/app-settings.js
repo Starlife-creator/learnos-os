@@ -33,6 +33,8 @@ async function loadSettings() {
     }
     const localSel = document.getElementById('setAllowLocal');
     if (localSel) localSel.value = s.allow_local_ai === false ? '0' : '1';
+    const mtEl = document.getElementById('setMaxOutputTokens');
+    if (mtEl) mtEl.value = s.max_output_tokens || 4096;
     const thinkSel = document.getElementById('setDisableThinking');
     if (thinkSel) thinkSel.value = String(s.disable_thinking === false ? '0' : '1');
     const defSel = document.getElementById('setDefaultSubject');
@@ -376,6 +378,8 @@ async function saveSettings() {
   if (localSel) body.allow_local_ai = localSel.value;
   const thinkSel = document.getElementById('setDisableThinking');
   if (thinkSel) body.disable_thinking = thinkSel.value;
+  const mtEl = document.getElementById('setMaxOutputTokens');
+  if (mtEl && mtEl.value !== '') body.max_output_tokens = parseInt(mtEl.value, 10) || 4096;
   const key = document.getElementById('setApiKey').value;
   if (key) body.api_key = key;
   const master = document.getElementById('setMasterPassword').value;
