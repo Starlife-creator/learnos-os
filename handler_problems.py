@@ -26,6 +26,7 @@ from handler_base import (X_HEADER, X_VALUE, _IDEMPOTENCY, _IDEMPOTENCY_TTL,
 import graph
 import interop
 from resp import api_err
+from ratelimit import register_failure, clear as rl_clear
 
 # 拍照/截图录题（B1）魔数（模块级，mixin 内 _image_ext 引用）
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -49,6 +50,33 @@ class ProblemsMixin:
         qs = parse_qs(urlparse(self.path).query)
         provided = qs.get("token", [""])[0] or self.headers.get("X-Export-Token", "")
         return bool(provided) and provided == EXPORT_TOKEN
+
+    def _client_ip(self) -> str:
+        """取 TCP 对端 IP，用于失败限流归因；无法识别时按回环放宽（避免误伤）。"""
+        addr = getattr(self, "client_address", None)
+        if isinstance(addr, (tuple, list)) and addr:
+            ip = str(addr[0])
+            if ip in ("127.0.0.1", "::1", "localhost") or ip.startswith("127."):
+                return "127.0.0.1"
+            return ip
+        return "127.0.0.1"
+
+    def _guard_export_token(self) -> bool:
+        """导出/还原令牌统一守卫（P4b 限流接入点）。
+
+        - 有效令牌：清零该客户端失败计数，返回 True（放行）。
+        - 无效令牌：登记一次失败；未超阈值返 401(FORBIDDEN)，超限返 429(RATE_LIMITED)。
+        调用方：`if not self._guard_export_token(): return`。
+        """
+        ip = self._client_ip()
+        if self._export_token_ok():
+            rl_clear(ip)
+            return True
+        if register_failure(ip):
+            api_err(self, "RATE_LIMITED")
+        else:
+            api_err(self, "FORBIDDEN")
+        return False
 
     def _handle_list_problems(self) -> None:
         """支持分页与搜索: ?page=1&limit=50&q=关键词&sort=time|mastery (limit 上限 200)"""
@@ -702,8 +730,7 @@ class ProblemsMixin:
 
     def _handle_export(self) -> None:
         """只读导出。?format=json|anki-csv|ics|csv|md（默认 json）。需导出令牌（§16.6）。"""
-        if not self._export_token_ok():
-            self.json_response({"error": "缺少有效的导出令牌（?token= 或 X-Export-Token）"}, 401)
+        if not self._guard_export_token():
             return
         qs = parse_qs(urlparse(self.path).query)
         fmt = (qs.get("format", ["json"])[0] or "json").strip()
@@ -741,8 +768,7 @@ class ProblemsMixin:
 
     def _handle_backup_export(self) -> None:
         """一键备份：全库 JSON 下载。需导出令牌（§16.6）。"""
-        if not self._export_token_ok():
-            self.json_response({"error": "缺少有效的导出令牌（?token= 或 X-Export-Token）"}, 401)
+        if not self._guard_export_token():
             return
         import backup as backup_mod
         data = backup_mod.export_backup()
@@ -759,8 +785,7 @@ class ProblemsMixin:
         鉴权：与导出端点同级——除 do_POST 入口的 CSRF 外，必须携带有效导出令牌。
         整库重建是最高风险操作，鉴权强度不应低于只读导出。
         """
-        if not self._export_token_ok():
-            api_err(self, "FORBIDDEN")
+        if not self._guard_export_token():
             return
         raw = data.get("backup") if isinstance(data, dict) else None
         if not isinstance(raw, str) or not raw.strip():

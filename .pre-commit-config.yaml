@@ -1,0 +1,15 @@
+# P8（Tier C）：可选 pre-commit 增量 lint。
+#
+# 设计（对齐优化方案）：
+# - language: system —— 使用本机已安装的 ruff，pre-commit 不额外下载依赖；
+#   未安装 ruff/pre-commit 的开发者完全无感（守零强制依赖红线）。
+# - 仅校验本次 staged 的 .py 文件（增量），不追改历史告警。
+# - 启用方式（可选）：`pip install pre-commit && pre-commit install`。
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-incremental
+        name: ruff 增量检查（仅 staged 文件）
+        entry: ruff check
+        language: system
+        types: [python]

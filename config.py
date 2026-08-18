@@ -8,6 +8,7 @@ import secrets
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import Any
 
 # ── 日志器（必须先于其它使用，避免 NameError）──
 LOG = logging.getLogger("learnos")

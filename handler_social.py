@@ -8,7 +8,6 @@ from typing import Any
 from urllib.parse import urlparse, parse_qs
 
 import social
-from config import EXPORT_TOKEN
 
 
 class SocialMixin:
@@ -48,10 +47,7 @@ class SocialMixin:
     def _handle_export_social(self) -> None:
         """GET：无答案进度分享包（本地优先）。需导出令牌（§16.6）。"""
         qs = parse_qs(urlparse(self.path).query)
-        if not self._export_token_ok():
-            self.json_response(
-                {"error": "缺少有效的导出令牌（?token= 或 X-Export-Token）"}, 401
-            )
+        if not self._guard_export_token():
             return
         subj = qs.get("subject", [""])[0] or None
         payload = social.export_social(subj)
