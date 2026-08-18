@@ -94,6 +94,7 @@ class TestMaterialUnit(unittest.TestCase):
         })
         ai_questions = json.dumps({
             "questions": [{
+                "type": "single",
                 "stem": "下列说法正确的是", "choices": ["A", "B", "C", "D"], "answer": 2,
                 "explain": "质量是惯性大小的量度", "concept": "惯性", "unit": "力学", "difficulty": 2,
             }],
@@ -103,6 +104,62 @@ class TestMaterialUnit(unittest.TestCase):
         self.assertEqual(result["source"], "ai")
         self.assertEqual(len(result["draft"]["concepts"]["concepts"]), 2)
         self.assertEqual(len(result["draft"]["questions"]), 1)
+        self.assertEqual(result["draft"]["questions"][0]["type"], "single")
+
+    def test_analyze_ai_questions_multi_type(self):
+        # 多题型提取：单选/多选/填空/主观/大小题都按真实形态归一化进草稿
+        ai_questions = json.dumps({"questions": [
+            {"type": "single", "stem": "单选题干示例", "choices": ["a", "b"], "answer": 0},
+            {"type": "multiple", "stem": "多选题干示例", "choices": ["a", "b", "c"], "answer": [0, 2]},
+            {"type": "fill", "stem": "填空题干示例：____", "answer": "答案"},
+            {"type": "subjective", "stem": "简述惯性定义", "answer": "参考答案文本"},
+            {"type": "composite", "stem": "大小题材料", "parts": [
+                {"type": "single", "stem": "子题1", "choices": ["x", "y"], "answer": 1},
+                {"type": "fill", "stem": "子题2", "answer": "v"},
+            ]},
+        ]})
+        with mock.patch("ai.call_ai", return_value=ai_questions):
+            result = material.analyze(_MD, "physics", ["questions"])
+        qs = result["draft"]["questions"]
+        self.assertEqual([q["type"] for q in qs],
+                         ["single", "multiple", "fill", "subjective", "composite"])
+        self.assertEqual(qs[1]["answer"], [0, 2])
+        self.assertEqual(qs[3]["answer"], "参考答案文本")
+        self.assertEqual(len(qs[4]["parts"]), 2)
+        self.assertEqual(qs[4]["parts"][0]["type"], "single")
+        # 草稿可直接被 bank.import_questions 接受（apply 链路闭环）
+        import bank
+        with mock.patch("bank._load_custom_questions", return_value=[]), \
+             mock.patch("bank._write_custom") as wr:
+            res = bank.import_questions(qs, "physics")
+        self.assertEqual(res["imported"], 5, res["errors"])
+        self.assertEqual(res["errors"], [])
+        self.assertEqual(wr.call_count, 1)
+
+    def test_clean_questions_dedup_by_type_and_stem(self):
+        # 同批内同题干去重（type+stem 组合键），不同题型同题干不误杀
+        ai_questions = json.dumps({"questions": [
+            {"type": "single", "stem": "重复题干示例", "choices": ["a", "b"], "answer": 0},
+            {"type": "single", "stem": "重复题干示例", "choices": ["a", "b"], "answer": 1},
+            {"type": "fill", "stem": "重复题干示例", "answer": "x"},
+        ]})
+        with mock.patch("ai.call_ai", return_value=ai_questions):
+            result = material.analyze(_MD, "physics", ["questions"])
+        qs = result["draft"]["questions"]
+        self.assertEqual(len(qs), 2)
+        self.assertEqual({q["type"] for q in qs}, {"single", "fill"})
+
+    def test_clean_questions_bad_composite_skipped(self):
+        # composite 无有效子题 → 该题跳过，其余题保留
+        ai_questions = json.dumps({"questions": [
+            {"type": "composite", "stem": "坏的大小题", "parts": []},
+            {"type": "fill", "stem": "好的填空题 ____", "answer": "42"},
+        ]})
+        with mock.patch("ai.call_ai", return_value=ai_questions):
+            result = material.analyze(_MD, "physics", ["questions"])
+        qs = result["draft"]["questions"]
+        self.assertEqual(len(qs), 1)
+        self.assertEqual(qs[0]["type"], "fill")
 
     def test_analyze_ai_full_coverage_by_context(self):
         # 200k 字符长文：32k 上下文 → >8 批全覆盖（旧实现只分析 8 批）

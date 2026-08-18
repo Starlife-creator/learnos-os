@@ -41,8 +41,9 @@ Thumbs.db
 # Recreated on first key save; do not commit.
 data/keys.enc
 
-# User-created custom question bank (runtime data, not source)
+# User-created custom question banks (per-subject runtime data, not source)
 data/bank_custom.json
+data/bank_custom_*.json
 
 # User uploads (runtime content, same class as media/)
 uploads/

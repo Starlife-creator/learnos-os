@@ -39,15 +39,20 @@ _CONCEPT_SCHEMA = {
     }}},
 }
 
+# 与 bank.QUESTION_TYPES 对齐的多题型提取 schema（结构宽松校验，
+# 语义校验统一交给 bank.import_questions 在 apply 时逐条执行）。
+_Q_TYPES = ("single", "multiple", "fill", "subjective", "composite")
 _QUESTION_SCHEMA = {
     "questions": {"type": "array", "items": {"type": "object", "properties": {
-        "stem": {"type": "string", "min_length": 5, "required": True},
-        "choices": {"type": "array", "items": {"type": "string", "min_length": 1}, "required": True},
-        "answer": {"type": "integer", "min": 0, "required": True},
+        "type": {"type": "string", "enum": list(_Q_TYPES), "required": True},
+        "stem": {"type": "string", "required": True},
+        "choices": {"type": "array", "items": {"type": "string"}},
+        "answer": {"type": "any"},
         "explain": {"type": "string"},
         "concept": {"type": "string"},
         "unit": {"type": "string"},
         "difficulty": {"type": "integer", "min": 1, "max": 5},
+        "parts": {"type": "array", "items": {"type": "object"}},
     }}},
 }
 
@@ -239,21 +244,78 @@ def _clean_concepts_split(batch_text: str, _depth: int) -> dict[str, Any] | None
     return acc
 
 
+_Q_EXTRACT_PROMPT = (
+    "你是题库编辑。从给定教材/试卷片段中提取练习题，不要解释，严格只输出 JSON 对象："
+    '{"questions": [{...}, ...]}。每题字段：\n'
+    "- type: 必填，单选=single / 多选=multiple / 填空=fill / 主观=subjective / 大小题=composite\n"
+    "- stem: 题干（大小题为材料/引导语）\n"
+    "- choices: 仅 single/multiple 需要，选项数组（≥2 项）\n"
+    "- answer: single=正确选项下标(从0)；multiple=正确下标数组；fill=答案字符串或数组(多空)；"
+    "subjective=参考答案文本；composite 省略\n"
+    "- explain: 解析\n"
+    "- parts: 仅 composite 必填，子题数组，每个子题结构同本题（可嵌套），子题不再带 parts 之外的冗余字段\n"
+    "- concept/unit/difficulty: 考查概念 / 所属单元 / 难度(1-5)\n"
+    "规则：按题目在原文中的真实形态提取（单选给单选、多选给多选、填空给填空、解答/证明/论述给主观），"
+    "不要强行改造成选择题；同一材料带多问的用 composite 归组；没有可提取的题目就返回空数组；"
+    "不要自编题目或答案不确定的题。\n"
+    "参考示例（结构示范）：\n"
+    '{"questions": ['
+    '{"type": "single", "stem": "下列说法正确的是", "choices": ["力是维持运动的原因", '
+    '"惯性与速度有关", "质量是惯性大小的量度", "牛顿第二定律只适用于低速宏观"], "answer": 2, '
+    '"explain": "质量是惯性大小的唯一量度。", "concept": "惯性", "unit": "力学", "difficulty": 2}, '
+    '{"type": "composite", "stem": "一个物体从静止开始做匀加速直线运动，5s 内位移 25m。", '
+    '"parts": [{"type": "single", "stem": "该物体的加速度为？", "choices": ["1 m/s^2", "2 m/s^2", '
+    '"5 m/s^2", "10 m/s^2"], "answer": 1}, {"type": "fill", "stem": "第 5s 末的速度为 ____ m/s。", '
+    '"answer": "10"}], "explain": "由 s=1/2at^2 得 a=2 m/s^2；v=at=10 m/s。", '
+    '"concept": "匀加速直线运动", "unit": "力学", "difficulty": 3}]}'
+)
+
+
+def _norm_extracted_question(q: dict[str, Any]) -> dict[str, Any]:
+    """把模型返回的一题裁剪为 bank.import_questions 可接受的多题型结构（composite 递归）。"""
+    qtype = str(q.get("type") or "single").strip().lower()
+    if qtype not in _Q_TYPES:
+        qtype = "single"
+    out: dict[str, Any] = {
+        "type": qtype,
+        "stem": str(q.get("stem") or "").strip()[:2000],
+        "explain": str(q.get("explain") or "").strip()[:2000],
+    }
+    for k in ("concept", "unit"):
+        v = str(q.get(k) or "").strip()
+        if v:
+            out[k] = v
+    if q.get("difficulty"):
+        out["difficulty"] = q["difficulty"]
+    if qtype in ("single", "multiple") and isinstance(q.get("choices"), list):
+        out["choices"] = [str(c).strip()[:200] for c in q["choices"]]
+        out["answer"] = q.get("answer")
+    elif qtype in ("fill", "subjective"):
+        out["answer"] = q.get("answer")
+    elif qtype == "composite":
+        parts = q.get("parts")
+        out["parts"] = [_norm_extracted_question(p) for p in (parts or [])
+                        if isinstance(p, dict)]
+        if not out["parts"]:
+            raise ValueError("composite 缺少有效子题")
+    return out
+
+
 def _clean_questions(batch_text: str) -> list[dict[str, Any]] | None:
     from ai import call_ai
     prompt = [
-        {"role": "system", "content": (
-            "你是题库编辑。从给定教材/试卷片段中提取选择题，不要解释，严格只输出 JSON 对象："
-            '{"questions": [{"stem": "题干", "choices": ["A...", "B...", "C...", "D..."], '
-            '"answer": 0, "explain": "解析", "concept": "考查概念", "unit": "所属单元", "difficulty": 3}]}。'
-            "answer 是正确选项的下标（0 起）。只要客观选择题；片段没有选择题就返回空数组；"
-            "不要自编题目或答案不确定的题。"
-        )},
+        {"role": "system", "content": _Q_EXTRACT_PROMPT},
         {"role": "user", "content": batch_text},
     ]
     data = validate_object(call_ai(prompt, max_tokens=4000, tier="heavy", route="material"),
                            _QUESTION_SCHEMA)
-    return data["questions"] or None
+    out: list[dict[str, Any]] = []
+    for q in data["questions"] or []:
+        try:
+            out.append(_norm_extracted_question(q))
+        except ValueError as exc:
+            LOG.warning("提取例题单题归一化失败已跳过: %s", exc)
+    return out or None
 
 
 def _clean_paper(batch_text: str, first: bool) -> dict[str, Any] | None:
@@ -390,19 +452,15 @@ def analyze(text: str, subject: str, targets: list[str],
                     if part:
                         ok_counts[target] += 1
                     for q in part or []:
-                        stem = str(q["stem"]).strip()
-                        if stem in seen_stem:
-                            continue
-                        seen_stem.add(stem)
-                        qs.append({
-                            "stem": stem[:500],
-                            "choices": [str(c).strip()[:200] for c in q["choices"]],
-                            "answer": int(q["answer"]),
-                            "explain": str(q.get("explain", "")).strip()[:800],
-                            "concept": str(q.get("concept", "")).strip()[:40],
-                            "unit": str(q.get("unit", "")).strip()[:20],
-                            "difficulty": int(q.get("difficulty", 2)),
-                        })
+                        # _clean_questions 已归一化为 bank 多题型结构；
+                        # 按 type+题干去重，但空题干（仅 composite 引导语允许）不参与去重、原样保留
+                        stem = str(q.get("stem") or "").strip()
+                        if stem:
+                            key = f"{q.get('type')}|{stem}"
+                            if key in seen_stem:
+                                continue
+                            seen_stem.add(key)
+                        qs.append(q)
                     _tick("questions")
                 draft["questions"] = qs
             else:  # paper
