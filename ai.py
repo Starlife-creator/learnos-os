@@ -6,6 +6,7 @@ import json
 import os
 import re
 import socket
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -24,6 +25,28 @@ from validate import validate_object, SchemaError
 _RESULT_CACHE_TTL = 30 * 24 * 3600     # 30 天（区别于下方 settings 缓存 _CACHE_TTL=30s）
 _CACHE_MAX_MEM = 200            # 内存最多缓存 200 条
 _result_mem: dict[str, tuple[float, dict[str, Any]]] = {}
+
+# 进程内缓存命中计数（P1b 可观测：验证缓存收益、定位失效；不写库、无迁移）
+_cache_metrics_lock = threading.Lock()
+cache_hits = 0
+cache_misses = 0
+
+
+def _inc_cache(hit: bool) -> None:
+    global cache_hits, cache_misses
+    with _cache_metrics_lock:
+        if hit:
+            cache_hits += 1
+        else:
+            cache_misses += 1
+
+
+def get_cache_metrics() -> tuple[int, int, float]:
+    """返回 (hits, misses, ratio)。重启即失，仅作运营观测。"""
+    with _cache_metrics_lock:
+        h, m = cache_hits, cache_misses
+    ratio = (h / (h + m)) if (h + m) else 0.0
+    return h, m, round(ratio, 4)
 
 
 def _ensure_cache_table() -> None:
@@ -45,6 +68,7 @@ def cache_get(key: str) -> dict[str, Any] | None:
     if mem:
         ts, val = mem
         if time.time() - ts < _RESULT_CACHE_TTL:
+            _inc_cache(True)
             return val
         _result_mem.pop(k, None)
     try:
@@ -56,9 +80,11 @@ def cache_get(key: str) -> dict[str, Any] | None:
         if row:
             val = json.loads(row["payload"])
             _result_mem[k] = (time.time(), val)
+            _inc_cache(True)
             return val
     except (Exception, _SE) as exc:
         LOG.debug("读结果缓存失败: %s", exc)
+    _inc_cache(False)
     return None
 
 

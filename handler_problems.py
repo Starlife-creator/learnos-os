@@ -753,7 +753,14 @@ class ProblemsMixin:
         )
 
     def _handle_backup_restore(self, data) -> None:
-        """一键还原：接收备份 JSON，工作区内重建库。"""
+        """一键还原：接收备份 JSON，工作区内重建库。
+
+        鉴权：与导出端点同级——除 do_POST 入口的 CSRF 外，必须携带有效导出令牌。
+        整库重建是最高风险操作，鉴权强度不应低于只读导出。
+        """
+        if not self._export_token_ok():
+            self.json_response({"error": "缺少或无效的导出令牌"}, 401)
+            return
         raw = data.get("backup") if isinstance(data, dict) else None
         if not isinstance(raw, str) or not raw.strip():
             self.json_response({"error": "缺少 backup 字段"}, 400)

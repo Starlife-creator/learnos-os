@@ -11,7 +11,8 @@ import sqlite3
 
 from config import DB_PATH, SCHEMA, DEFAULT_SETTINGS, LOG
 
-DB_LOCK = threading.Lock()
+# RLock（可重入）：消除"持锁中再次请求锁"潜在的死锁隐患；对现有串行语义无改变。
+DB_LOCK = threading.RLock()
 
 
 def now() -> str:

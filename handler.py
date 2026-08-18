@@ -81,6 +81,7 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         (r"/api/export/backup", "_handle_backup_export"),
         (r"/api/ocr/probe", "_handle_ocr_probe"),
         (r"/api/health", "_handle_health"),
+        (r"/api/metrics", "_handle_metrics"),
         (r"/api/bootstrap", "_handle_bootstrap"),
         (r"/api/models/probe", "_handle_models_probe"),
         (r"/api/rag/docs", "_handle_rag_docs"),
@@ -165,6 +166,13 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
 
     def _csrf_ok(self) -> bool:
         return self.headers.get(X_HEADER) == X_VALUE
+
+    def _metrics_authorized(self) -> bool:
+        """/api/metrics 自管鉴权：仅本机回环或携带有效导出令牌可访问。"""
+        ra = self.client_address[0] if self.client_address else ""
+        if ra in ("127.0.0.1", "::1", "localhost", "0.0.0.0"):
+            return True
+        return self._export_token_ok()
 
     def json_response(self, data: Any, status: int = 200) -> None:
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -268,6 +276,49 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
 
     def _handle_health(self) -> None:
         self.json_response({"ok": True, "version": "0.5.0"})
+
+    def _handle_metrics(self) -> None:
+        """本地运维指标端点（P1b）：验证缓存收益、token 成本、provider 异常可观测。
+
+        鉴权见 _metrics_authorized；非本机且无令牌返回 401。内容不涉及任何题目/答案。
+        """
+        if not self._metrics_authorized():
+            self.json_response({"error": "无权访问指标端点"}, 401)
+            return
+        from ai import get_cache_metrics
+        c_h, c_m, c_ratio = get_cache_metrics()
+        tokens = 0
+        cached_tokens = 0
+        latency_p95 = None
+        provider_last_error = None
+        try:
+            with DB_LOCK, db() as conn:
+                r = conn.execute(
+                    "SELECT COALESCE(SUM(tokens),0), COALESCE(SUM(cached_tokens),0) FROM ai_telemetry"
+                ).fetchone()
+                if r:
+                    tokens, cached_tokens = r[0], r[1]
+                lat = [x[0] for x in conn.execute(
+                    "SELECT latency_ms FROM ai_telemetry WHERE latency_ms > 0 ORDER BY latency_ms").fetchall()]
+                if lat:
+                    latency_p95 = max(lat) if len(lat) < 20 else sorted(lat)[int(len(lat) * 0.95) - 1]
+                le = conn.execute(
+                    "SELECT error_kind, ts FROM ai_telemetry WHERE error_kind <> '' ORDER BY ts DESC LIMIT 1"
+                ).fetchone()
+                if le:
+                    provider_last_error = {"kind": le[0], "ts": le[1]}
+        except Exception as exc:  # 指标端点失败不应拖垮主流程
+            LOG.debug("采集指标失败（忽略）: %s", exc)
+        self.json_response({
+            "cache": {"hits": c_h, "misses": c_m, "ratio": c_ratio},
+            "ai": {
+                "tokens": tokens,
+                "cached_tokens": cached_tokens,
+                "latency_ms_p95": latency_p95,
+                "provider_last_error": provider_last_error,
+            },
+            "errors": {},
+        })
 
     def _handle_bootstrap(self) -> None:
         """同源启动配置：导出令牌等。供应用 JS 拉取后注入导出链接（§16.6）。"""

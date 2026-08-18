@@ -26,6 +26,10 @@ class TestBackup(unittest.TestCase):
         cls._orig_db = config.DB_PATH
         config.DB_PATH = Path(cls.temp_dir.name) / "backup_test.db"
         db.DB_PATH = config.DB_PATH
+        cls._orig_app = config.APP_DIR
+        config.APP_DIR = Path(cls.temp_dir.name) / "app"
+        config.APP_DIR.mkdir(parents=True, exist_ok=True)
+        backup.APP_DIR = config.APP_DIR
         db.init_db()
         with db.db() as conn:
             from db import now
@@ -45,6 +49,7 @@ class TestBackup(unittest.TestCase):
         cls.server.server_close()
         db.DB_PATH = cls._orig_db
         config.DB_PATH = cls._orig_db
+        config.APP_DIR = cls._orig_app
         cls.temp_dir.cleanup()
 
     def request(self, path, method="GET", payload=None):
