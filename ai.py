@@ -695,7 +695,10 @@ _BASE_PROFILE: dict[str, Any] = {
              "boundary conditions and limiting cases. Answer in English with clear LaTeX.",
     "tag_extractor": "你是物理题标签提取器。根据题目提取 3-6 个标签，每项格式必须是 "
                      "'知识点:名称'、'题型:名称'、'难度:易|中|难'、'方法:名称'、'错因:名称' 之一。"
-                     "只返回 JSON，不要多余文字。",
+                     "只返回 JSON，不要多余文字。结构为 {tags: [...], confidence: 0-1}。\n"
+                     "参考示例：题目：求斜面上物体沿 30° 角下滑的加速度。"
+                     "输出：{\"tags\": [\"知识点:斜面受力分析\", \"题型:计算\", \"难度:中\", "
+                     "\"方法:受力分解\", \"错因:摩擦力方向\"], \"confidence\": 0.92}",
     "variant_author": "你是物理出题助手。基于给定错题生成 3 道变式，三题模式分别为：数值替换、情境替换、反向设问。"
                       "每题必须包含 mode、title、content、answer 四个字段，只返回 JSON。可选补充 type（single/multiple/fill/subjective/composite，缺省开放式 subjective）与 choices（选择题选项数组）；选择题 answer 填正确选项字母。",
     "feynman_novice": "向一位完全不懂物理的新手讲解。规则：不许读公式，只讲物理图像与直觉。"
@@ -748,7 +751,10 @@ _CHEM_PROFILE: dict[str, Any] = {
              "properties, equation balancing, conditions and stoichiometry. Answer in English.",
     "tag_extractor": "你是化学题标签提取器。根据题目提取 3-6 个标签，每项格式必须是 "
                      "'知识点:名称'、'题型:名称'、'难度:易|中|难'、'方法:名称'、'错因:名称' 之一。"
-                     "只返回 JSON，不要多余文字。",
+                     "只返回 JSON，不要多余文字。结构为 {tags: [...], confidence: 0-1}。\n"
+                     "参考示例：题目：配平 Fe + O₂ → Fe₂O₃ 并计算电子转移。"
+                     "输出：{\"tags\": [\"知识点:氧化还原\", \"题型:配平\", \"难度:中\", "
+                     "\"方法:电子守恒\", \"错因:化合价判断\"], \"confidence\": 0.9}",
     "variant_author": "你是化学出题助手。基于给定错题生成 3 道变式，三题模式分别为：数值替换、情境替换、反向设问。"
                       "每题必须包含 mode、title、content、answer 四个字段，只返回 JSON。可选补充 type（single/multiple/fill/subjective/composite，缺省开放式 subjective）与 choices（选择题选项数组）；选择题 answer 填正确选项字母。",
     "feynman_novice": "向一位完全不懂化学的新手讲解。规则：不许堆砌术语，只讲核心直觉与图像。"
@@ -774,7 +780,10 @@ _MATH_PROFILE: dict[str, Any] = {
              "logical derivation, computation and boundary cases. Answer in English with clear LaTeX.",
     "tag_extractor": "你是数学题标签提取器。根据题目提取 3-6 个标签，每项格式必须是 "
                      "'知识点:名称'、'题型:名称'、'难度:易|中|难'、'方法:名称'、'错因:名称' 之一。"
-                     "只返回 JSON，不要多余文字。",
+                     "只返回 JSON，不要多余文字。结构为 {tags: [...], confidence: 0-1}。\n"
+                     "参考示例：题目：已知函数 f(x)=x³-3x，求其在区间 [-2,2] 上的最大值。"
+                     "输出：{\"tags\": [\"知识点:导数应用\", \"题型:最值\", \"难度:中\", "
+                     "\"方法:求导\", \"错因:端点遗漏\"], \"confidence\": 0.93}",
     "variant_author": "你是数学出题助手。基于给定错题生成 3 道变式，三题模式分别为：数值替换、情境替换、反向设问。"
                       "每题必须包含 mode、title、content、answer 四个字段，只返回 JSON。可选补充 type（single/multiple/fill/subjective/composite，缺省开放式 subjective）与 choices（选择题选项数组）；选择题 answer 填正确选项字母。",
     "feynman_novice": "向一位完全不懂数学的新手讲解。规则：不许堆砌术语，只讲核心直觉与图像。"
@@ -800,7 +809,10 @@ _GENERIC_PROFILE: dict[str, Any] = {
              "conditions, logic and boundary cases. Answer in English, using clear formulas or LaTeX when needed.",
     "tag_extractor": "你是题目标签提取器。根据题目提取 3-6 个标签，每项格式必须是 "
                      "'知识点:名称'、'题型:名称'、'难度:易|中|难'、'方法:名称'、'错因:名称' 之一。"
-                     "只返回 JSON，不要多余文字。",
+                     "只返回 JSON，不要多余文字。结构为 {tags: [...], confidence: 0-1}。\n"
+                     "参考示例：题目：求 y=x² 在 x=1 处的导数。"
+                     "输出：{\"tags\": [\"知识点:导数\", \"题型:计算\", \"难度:易\", \"方法:幂函数求导\"], "
+                     "\"confidence\": 0.95}",
     "variant_author": "你是出题助手。基于给定错题生成 3 道变式，三题模式分别为：数值替换、情境替换、反向设问。"
                       "每题必须包含 mode、title、content、answer 四个字段，只返回 JSON。可选补充 type（single/multiple/fill/subjective/composite，缺省开放式 subjective）与 choices（选择题选项数组）；选择题 answer 填正确选项字母。",
     "feynman_novice": "向一位完全不懂这个主题的新手讲解。规则：不许堆砌术语，只讲核心直觉与图像。"
@@ -1471,7 +1483,11 @@ _SCORE_PROMPT = (
     "- 对照参考答案逐要点判分，不苛求措辞一致，抓关键点是否到位；\n"
     "- 明显跑题/空白给低分并提供改进建议；表述混乱但要点齐全可给高分；\n"
     "- comment 给出 1-3 句点评（中文）：先总评，再指出失分点与改进建议，最后给分。\n"
-    "只返回 JSON，结构为 {score: {score: 0-100 整数, comment: 点评, against: 命中要点简述}}"
+    "只返回 JSON，结构为 {score: {score: 0-100 整数, comment: 点评, against: 命中要点简述}}。\n"
+    "参考示例（结构示范）：\n"
+    '输入：题目：简述牛顿第二定律。 参考答案：F=ma，F 与 a 同向。 学生：F 等于质量乘加速度。\n'
+    '输出：{"score": {"score": 85, "comment": "要点基本到位，但漏了方向关系，建议补充 F 与 a 同向。", '
+    '"against": "F=ma"}}'
 )
 
 
