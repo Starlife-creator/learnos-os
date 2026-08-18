@@ -330,6 +330,7 @@ def _prepare_ai_request(
     stream: bool,
     model_override: str | None = None,
     skip_preset: bool = False,
+    temperature: float | None = None,
 ) -> tuple[str, str, dict[str, str], dict[str, str], float]:
     """call_ai / call_ai_stream 共用的配置校验与请求构造。
 
@@ -360,7 +361,8 @@ def _prepare_ai_request(
     body: dict[str, Any] = {
         "model": model,
         "messages": messages,
-        "temperature": _safe_temperature(config),
+        "temperature": _safe_temperature(config) if temperature is None
+                          else max(0.0, min(2.0, float(temperature))),
         "max_tokens": eff_max_tokens,
         "stream": stream,
     }
@@ -449,10 +451,13 @@ def call_ai(
     tier: str | None = None,
     model_override: str | None = None,
     route: str = "",
+    temperature: float | None = None,
 ) -> str:
+    """调 OpenAI 兼容接口。temperature 覆盖设置；None=用全局配置。"""
     from telemetry import record
     model, url, payload, headers, start = _prepare_ai_request(
         messages, max_tokens, tier, route, stream=False, model_override=model_override,
+        temperature=temperature,
     )
 
     # 中转站式降级：预设注入的 thinking 参数若被端点 400 拒绝（未知参数），
@@ -1479,15 +1484,23 @@ _SCORE_SCHEMA = {
 _SCORE_PROMPT = (
     "你是严格、友好的学科阅卷老师。针对用户提供的【题目】【参考答案】【学生作答】，"
     "按 0-100 分给分并点评。\n"
-    "评分要求：\n"
-    "- 对照参考答案逐要点判分，不苛求措辞一致，抓关键点是否到位；\n"
-    "- 明显跑题/空白给低分并提供改进建议；表述混乱但要点齐全可给高分；\n"
-    "- comment 给出 1-3 句点评（中文）：先总评，再指出失分点与改进建议，最后给分。\n"
+    "评分方式：先对照下面的锚定档位表做匹配（把开放打分转成档位分类，保证一致性），"
+    "再在档位区间内微调出具体分：\n"
+    "- 90-100 分：全部要点准确覆盖，表述清晰，无实质错误；\n"
+    "- 75-89 分：多数要点到位，个别表述不严谨或漏次要点；\n"
+    "- 60-74 分：核心要点部分到位，有实质遗漏或关键表述混乱；\n"
+    "- 40-59 分：只触及皮毛，多数要点缺失或明显误解；\n"
+    "- 0-39 分：跑题、空白或严重错误（须在点评中说明原因并给改进方向）。\n"
+    "其他要求：对照参考答案逐要点判分，不苛求措辞一致，抓关键点是否到位；"
+    "comment 给出 1-3 句点评（中文）：先总评，再指出失分点与改进建议。\n"
     "只返回 JSON，结构为 {score: {score: 0-100 整数, comment: 点评, against: 命中要点简述}}。\n"
     "参考示例（结构示范）：\n"
     '输入：题目：简述牛顿第二定律。 参考答案：F=ma，F 与 a 同向。 学生：F 等于质量乘加速度。\n'
     '输出：{"score": {"score": 85, "comment": "要点基本到位，但漏了方向关系，建议补充 F 与 a 同向。", '
-    '"against": "F=ma"}}'
+    '"against": "F=ma"}}\n'
+    '输入：题目：简述牛顿第二定律。 参考答案：F=ma，F 与 a 同向。 学生：牛顿第二定律是力学基本定律。\n'
+    '输出：{"score": {"score": 30, "comment": "仅复述了定律地位，未给出 F=ma 与方向关系，核心要点缺失。", '
+    '"against": "无"}}'
 )
 
 
@@ -1604,15 +1617,35 @@ def _ai_subjective(item: dict[str, Any], user_raw: Any, subject: str) -> dict[st
         {"role": "user", "content": f"题目与参考答案与学生作答：\n{payload}"},
     ]
     try:
-        raw = call_ai(prompt, max_tokens=500, tier="heavy", retries=1)
+        # 第 1 次调用（低温 0）：只按 rubric 出结构化分值（评分稳定）
+        raw = call_ai(prompt, max_tokens=500, tier="heavy", retries=1,
+                      temperature=0.0, route="score")
         data = validate_object(raw, _SCORE_SCHEMA)
         sc = data["score"]
         s = int(sc.get("score") or 0)
-        return {
-            "score": max(0, min(100, s)),
-            "comment": str(sc.get("comment") or "").strip(),
-            "against": str(sc.get("against") or "").strip(),
-        }
+        s = max(0, min(100, s))
+        comment = str(sc.get("comment") or "").strip()
+        against = str(sc.get("against") or "").strip()
+        # 第 2 次调用（较高温 0.7）：基于已定分数生成自然点评（点评活泼不呆板）
+        # 失败不影响分数，仅降级用第一次的 comment。
+        try:
+            polish_prompt = [
+                {"role": "system", "content": (
+                    "你是友善的学习辅导老师。根据【学生作答】与【参考答案】，就刚才得到的分数 "
+                    f"（{s} 分）写 1-3 句中文点评：先肯定优点，再点出 1-2 个具体可改进点，语气亲切具体。"
+                    "只返回 JSON：{comment: 点评}" 
+                )},
+                {"role": "user", "content": f"题目与答案：\n{payload}\n学生已得 {s} 分。"},
+            ]
+            raw2 = call_ai(polish_prompt, max_tokens=200, tier="heavy", retries=1,
+                           temperature=0.7, route="score")
+            polished = validate_object(raw2, {"comment": {"type": "string", "required": True}})
+            c2 = str(polished.get("comment") or "").strip()
+            if c2:
+                comment = c2
+        except Exception:
+            pass  # 点评增强失败 → 保留第一次的 comment
+        return {"score": s, "comment": comment, "against": against}
     except (SchemaError, ValueError) as exc:
         LOG.warning("AI 评分校验失败，降级自评: %s", exc)
     except Exception as exc:
