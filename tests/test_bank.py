@@ -196,6 +196,62 @@ class TestBankJudgeDB(unittest.TestCase):
         self.assertTrue(res["needs_review"])
         self.assertEqual(res["problem_id"], 0)  # 主观不自动入错题库
 
+    def test_judge_composite_wrong_archives_full_content(self):
+        # P1：composite 答错建档须含完整题面（引导语+子题），标题不空
+        it = bank._normalize_question(
+            {"type": "composite", "id": "q-c1", "stem": "", "parts": [
+                {"type": "single", "stem": "（1）加速度方向判断？", "choices": ["同向", "反向"], "answer": 0},
+                {"type": "fill", "stem": "（2）末速度为 __ m/s", "answer": "10"},
+            ]}, 1, set(), "physics")
+        self._inject(it)
+        res = bank.judge("q-c1", [1, "10"], "physics")  # 第一小题错
+        self.assertFalse(res["correct"])
+        self.assertGreater(res["problem_id"], 0)
+        rows = db.rows("SELECT title, content FROM problems WHERE id = ?", (res["problem_id"],))
+        self.assertEqual(len(rows), 1)
+        self.assertIn("加速度方向判断", rows[0]["content"])
+        self.assertIn("末速度", rows[0]["content"])
+        self.assertIn("同向", rows[0]["content"])  # 选项也入档，复习时可见
+        self.assertTrue(rows[0]["title"].strip())  # 标题兜底（引导语为空时取子题题干）
+
+    def test_problem_content_single_with_choices(self):
+        # 普通选择题建档 content 含题干+选项（复习时不必再回题库查）
+        content = bank._problem_content(
+            {"type": "single", "stem": "下列说法正确的是", "choices": ["甲", "乙"], "answer": 0})
+        self.assertIn("下列说法正确的是", content)
+        self.assertIn("A. 甲", content)
+
+
+class TestBankListAPI(unittest.TestCase):
+    """列表/搜索端点行为：blanks 下发不泄答案、搜索命中带题型。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory(prefix="bankapi_", dir=_TMP)
+        cls._orig = config.DB_PATH
+        config.DB_PATH = Path(cls._tmp.name) / "bankapi.db"
+        db.DB_PATH = config.DB_PATH
+        db.init_db()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+        db.DB_PATH = cls._orig
+        config.DB_PATH = cls._orig
+
+    def test_list_fill_blanks_no_answer(self):
+        bank._BANK.pop("physics", None)
+        bank._BANK["physics"] = {"version": 0, "subject": "physics", "questions": [
+            {"type": "fill", "id": "fill-api-1", "stem": "两空填空题干内容", "answer": ["5", "15"],
+             "unit": "u", "chapter": "c", "concept": "cp", "difficulty": 2, "explain": "e"},
+        ]}
+        items = bank.list_questions(subject="physics")
+        self.assertEqual(len(items), 1)
+        self.assertNotIn("answer", items[0])
+        self.assertNotIn("explain", items[0])
+        self.assertEqual(items[0]["blanks"], 2)
+        bank._BANK.pop("physics", None)
+
 
 class TestBankListStrip(unittest.TestCase):
     def test_pub_strips_answers_recursive(self):
@@ -206,6 +262,20 @@ class TestBankListStrip(unittest.TestCase):
         self.assertNotIn("answer", pub)
         self.assertNotIn("explain", pub["parts"][0])
         self.assertNotIn("answer", pub["parts"][0])
+
+    def test_pub_fill_blanks_count(self):
+        # P0：fill 对外剥离答案但附带空数（前端据此渲染多空，不泄露答案）
+        pub = bank._pub_item({"type": "fill", "id": "f1", "stem": "两空：__ __",
+                              "answer": ["5", "15"], "explain": "e"})
+        self.assertNotIn("answer", pub)
+        self.assertEqual(pub["blanks"], 2)
+        pub1 = bank._pub_item({"type": "fill", "id": "f2", "stem": "单空 __", "answer": "4"})
+        self.assertEqual(pub1["blanks"], 1)
+        # composite 子题 fill 同样附带
+        pubc = bank._pub_item({"type": "composite", "id": "c1", "stem": "",
+                               "parts": [{"type": "fill", "id": "p1", "stem": "x", "answer": ["a", "b"]}]})
+        self.assertEqual(pubc["parts"][0]["blanks"], 2)
+        self.assertNotIn("answer", pubc["parts"][0])
 
 
 if __name__ == "__main__":

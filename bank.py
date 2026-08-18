@@ -348,11 +348,42 @@ def list_questions(unit: str = "", status: str = "all", q: str = "",
 
 
 def _pub_item(item: dict[str, Any]) -> dict[str, Any]:
-    """对外题目（剥离 answer/explain，避免答案提前泄露）；复合题递归剥离子题。"""
+    """对外题目（剥离 answer/explain，避免答案提前泄露）；复合题递归剥离子题。
+
+    fill 题额外附带 blanks（空数）：前端需要知道渲染几个空，但拿不到答案本体。
+    """
     pub = {k: v for k, v in item.items() if k not in _PRIVATE_FIELDS}
     if item.get("type") == "composite":
         pub["parts"] = [_pub_item(p) for p in item.get("parts", [])]
+    elif item.get("type") == "fill":
+        pub["blanks"] = len(item.get("answer") or []) if isinstance(item.get("answer"), list) else 1
     return pub
+
+
+def _problem_content(item: dict[str, Any]) -> str:
+    """错题本建档用的完整题面：composite 拼引导语+全部子题（递归、含选项），其余为题干+选项。"""
+    if item.get("type") == "composite":
+        lines = [str(item.get("stem") or "").strip()]
+        for i, p in enumerate(item.get("parts", []), 1):
+            lines.append(f"({i}) {_problem_content(p)}")
+        return "\n".join(x for x in lines if x)[:2000]
+    text = str(item.get("stem") or "")
+    if isinstance(item.get("choices"), list) and item["choices"]:
+        text += "\n" + "\n".join(
+            f"{chr(65 + i)}. {c}" for i, c in enumerate(item["choices"][:8]))
+    return text
+
+
+def _problem_title(item: dict[str, Any]) -> str:
+    """错题本标题兜底：题干过短/为空（composite 引导语可为空）时用首个子题题干。"""
+    stem = str(item.get("stem") or "").strip()
+    if len(stem) >= 5:
+        return stem[:24]
+    for p in item.get("parts") or []:
+        sub = str(p.get("stem") or "").strip()
+        if sub:
+            return sub[:24]
+    return "大小题"
 
 
 def _ensure_problem(conn: Any, item: dict[str, Any]) -> int:
@@ -375,7 +406,7 @@ def _ensure_problem(conn: Any, item: dict[str, Any]) -> int:
             )
         return pid
 
-    title = str(item.get("title") or "") or str(item["stem"])[:24]
+    title = str(item.get("title") or "") or _problem_title(item)
     subject = str(item.get("subject") or "physics")
     cid = conn.execute(
         "SELECT id FROM concepts WHERE subject = ? AND name = ?", (subject, item.get("concept", ""))
@@ -390,7 +421,7 @@ def _ensure_problem(conn: Any, item: dict[str, Any]) -> int:
         title,
         str(item.get("unit", "")),
         str(item.get("chapter", "")),
-        str(item["stem"]),
+        _problem_content(item),
         "",
         "待诊断",
         concept_csv,

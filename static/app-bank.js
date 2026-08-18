@@ -106,7 +106,10 @@ function buildQuestionBody(item, prefix, depth = 0) {
       </label>`).join('') + `</div>`;
   }
   if (t === 'fill') {
-    const blanks = Array.isArray(item.answer) ? item.answer.length : 1;
+    // 空数来源：列表接口下发的 blanks（_pub_item 附带，不泄露答案）；
+    // 兼容 AI 出题/导入流程直接带 answer 的场景；都没有则单空。
+    const blanks = typeof item.blanks === 'number' && item.blanks > 0 ? item.blanks
+      : (Array.isArray(item.answer) ? item.answer.length : 1);
     let h = '';
     for (let i = 0; i < blanks; i++) h += `<input type="text" class="bank-fill" id="${prefix}_f${i}" placeholder="第 ${i+1} 空"> `;
     return `<div class="bank-fill-wrap">${h}</div>`;
@@ -137,8 +140,12 @@ function collectAnswer(item, prefix) {
     return Array.from(document.querySelectorAll(`input[name="${prefix}_ans"]:checked`)).map(r => parseInt(r.value, 10));
   }
   if (t === 'fill') {
-    if (Array.isArray(item.answer)) {
-      return item.answer.map((_, i) => { const el = document.getElementById(`${prefix}_f${i}`); return el ? el.value : ''; });
+    const blanks = typeof item.blanks === 'number' && item.blanks > 0 ? item.blanks
+      : (Array.isArray(item.answer) ? item.answer.length : 1);
+    if (blanks > 1) {
+      return Array.from({ length: blanks }, (_, i) => {
+        const el = document.getElementById(`${prefix}_f${i}`); return el ? el.value : '';
+      });
     }
     const el = document.getElementById(`${prefix}_f0`); return el ? el.value : '';
   }
@@ -218,7 +225,8 @@ async function submitPractice(qid, prefix) {
   _activePractice = { qid, prefix };
   const qtype = item.type || 'single';
   const answer = collectAnswer(item, prefix);
-  if (qtype !== 'composite' && (answer === null || answer === '' || (Array.isArray(answer) && !answer.length))) {
+  const emptyArr = Array.isArray(answer) && (!answer.length || answer.every(a => !String(a).trim()));
+  if (qtype !== 'composite' && (answer === null || answer === '' || emptyArr)) {
     toast(t('bank.needAnswer'), 'error'); return;
   }
   const btn = document.getElementById('bankSubmit');

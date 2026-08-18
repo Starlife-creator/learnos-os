@@ -178,7 +178,8 @@ async function searchPaletteRun(q) {
       text: c.name, sub: '', go: () => { closeModal('searchModal');
         window.open('concept_map.html?subject=' + encodeURIComponent(currentSubject()) + '&focus=' + encodeURIComponent(c.name), '_self'); } })) });
     if (r.bank?.length) groups.push({ label: t('search.bank'), items: r.bank.map(b => ({
-      text: b.stem, sub: b.concept, go: () => { closeModal('searchModal'); switchPage('bank'); } })) });
+      text: ({ single: '【单选】', multiple: '【多选】', fill: '【填空】', subjective: '【主观】', composite: '【大小题】' }[b.type] || '') + b.stem,
+      sub: b.concept, go: () => { closeModal('searchModal'); switchPage('bank'); } })) });
     if (r.docs?.length) groups.push({ label: t('search.docs'), items: r.docs.map(d => ({
       text: d.name + (d.page ? t('rag.pageSuffix').replace('{p}', d.page) : ''), sub: '', go: () => { closeModal('searchModal'); openRagSource(encodeURIComponent(d.path)); } })) });
     _searchItems = groups.flatMap(g => g.items);

@@ -539,11 +539,25 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         bank_hits: list[dict[str, Any]] = []
         try:
             import bank
+
+            def _q_haystack(item: dict[str, Any]) -> str:
+                """匹配文本：题干+概念；composite 递归并入子题题干（引导语可为空）。"""
+                hay = str(item.get("stem", "")) + " " + str(item.get("concept", ""))
+                for p in item.get("parts") or []:
+                    hay += " " + _q_haystack(p)
+                return hay.lower()
+
             for question in bank.load_bank(self.subject).get("questions", []):
-                stem = str(question.get("stem", ""))
-                if q.lower() in stem.lower() or q.lower() in str(question.get("concept", "")).lower():
+                if q.lower() in _q_haystack(question):
+                    stem = str(question.get("stem", "")).strip()
+                    if not stem:  # composite 引导语为空时用首个子题题干展示
+                        for p in question.get("parts") or []:
+                            stem = str(p.get("stem", "")).strip()
+                            if stem:
+                                break
                     bank_hits.append({"id": question.get("id", ""), "stem": stem[:80],
-                                      "concept": question.get("concept", "")})
+                                      "concept": question.get("concept", ""),
+                                      "type": question.get("type", "single")})
                 if len(bank_hits) >= 6:
                     break
         except Exception:
