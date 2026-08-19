@@ -534,8 +534,10 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
             "ORDER BY updated_at DESC LIMIT 6",
             (self.subject, like, like, like))
         concepts = rows(
-            "SELECT id, name FROM concepts WHERE subject = ? AND name LIKE ? "
-            "ORDER BY mastery_est ASC LIMIT 6", (self.subject, like))
+            "SELECT c.id, c.name FROM concepts c "
+            "LEFT JOIN concept_progress cp ON cp.concept_id = c.id "
+            "WHERE c.subject = ? AND c.name LIKE ? "
+            "ORDER BY COALESCE(cp.mastery, 0) ASC, c.id LIMIT 6", (self.subject, like))
         bank_hits: list[dict[str, Any]] = []
         try:
             import bank

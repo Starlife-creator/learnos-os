@@ -118,8 +118,11 @@ def load_graph(subject: str = "physics") -> dict[str, Any]:
     """返回指定学科图谱（节点含层级/难度/掌握度，边含关系）。"""
     ensure_seed(subject)
     nodes = rows("SELECT * FROM concepts WHERE subject = ? ORDER BY id", (subject,))
+    # level 纯内存推导：逐节点 row() 每次新开 SQLite 连接（约 50ms/次），
+    # N 个节点 = N 次连接，是图谱接口分钟级延迟的头号元凶（2650 概念 ≈ 135s）
+    parent_of = {n["id"]: n["parent_id"] for n in nodes}
     for n in nodes:
-        n["level"] = _level_of(n)
+        n["level"] = _level_from_parents(n["parent_id"], parent_of)
     links = rows(
         "SELECT concept_a, concept_b, relation FROM concept_links "
         "WHERE concept_a IN (SELECT id FROM concepts WHERE subject = ?) "
@@ -127,6 +130,16 @@ def load_graph(subject: str = "physics") -> dict[str, Any]:
         (subject,),
     )
     return {"nodes": nodes, "links": links, "subject": subject}
+
+
+def _level_from_parents(parent_id: int, parent_of: dict[int, int]) -> int:
+    """基于本学科 id→parent_id 映射做层级推导（与 _level_of 语义一致，零查询）。"""
+    if parent_id == 0:
+        return _LEVEL_UNIT
+    grandparent = parent_of.get(parent_id)
+    if grandparent is None:
+        return _LEVEL_CONCEPT
+    return _LEVEL_CHAPTER if grandparent == 0 else _LEVEL_CONCEPT
 
 
 def _level_of(node: dict[str, Any]) -> int:

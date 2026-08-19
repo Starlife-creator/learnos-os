@@ -40,6 +40,24 @@ let edgeByNode = new Map();       // id -> [edge indices]
 let descendants = new Map();      // id -> [ids]
 let expanded = new Set();         // 已展开的章节 id
 let view = { x: 40, y: 30, scale: 1 };
+// ── 性能索引：loadGraph 后预建，消除 filter/find 的 O(N²)（2650 节点学科每次重绘省数百 ms）──
+let nodeById = new Map();         // id -> node
+let kidsOf = new Map();           // parent_id -> [child nodes]
+let byLevel = { unit: [], chapter: [], concept: [] };
+function indexGraph() {
+  nodeById = new Map(graphData.nodes.map(n => [n.id, n]));
+  kidsOf = new Map();
+  byLevel = { unit: [], chapter: [], concept: [] };
+  for (const n of graphData.nodes) {
+    if (n.level === 0) byLevel.unit.push(n);
+    else if (n.level === 1) byLevel.chapter.push(n);
+    else byLevel.concept.push(n);
+    if (n.parent_id) {
+      if (!kidsOf.has(n.parent_id)) kidsOf.set(n.parent_id, []);
+      kidsOf.get(n.parent_id).push(n);
+    }
+  }
+}
 const SAVE_KEY = 'conceptMapPositions.v1';
 
 function make(tag, attrs, text) {
@@ -56,36 +74,37 @@ function nodeColor(m) {
   return '#ef4444';
 }
 
-function unitColor(idx) {
+function unitColorList() {
   const colors = getComputedStyle(document.documentElement).getPropertyValue('--unit-colors').split(',').map(s => s.trim());
+  return colors.length ? colors : ['#6366f1'];
+}
+function unitColor(idx) {
+  const colors = unitColorList();
   return colors[idx % colors.length] || '#6366f1';
 }
 
 function visibleNodeIds() {
-  const vis = new Set(graphData.nodes.filter(n => n.level === 0).map(u => u.id));
-  for (const c of graphData.nodes.filter(n => n.level === 1)) {
+  const vis = new Set(byLevel.unit.map(u => u.id));
+  for (const c of byLevel.chapter) {
     vis.add(c.id);
     if (expanded.has(c.id)) {
-      graphData.nodes.filter(x => x.parent_id === c.id).forEach(x => vis.add(x.id));
+      for (const x of kidsOf.get(c.id) || []) vis.add(x.id);
     }
   }
   return vis;
 }
 
 // ── 布局：单元分列，章节堆叠，展开的章节在下方平铺概念 ──
-function layoutNodes(nodes) {
-  const units = nodes.filter(n => n.level === 0);
-  const chapters = nodes.filter(n => n.level === 1);
-  const concepts = nodes.filter(n => n.level === 2);
+function layoutNodes() {
   const pos = new Map();
   const TOP = 46, ROW_H = 46, COL_W = 118, CH_GAP = 26, UNIT_GAP = 90;
   let x = 60;
-  units.forEach(u => {
-    const chs = chapters.filter(c => c.parent_id === u.id);
+  for (const u of byLevel.unit) {
+    const chs = kidsOf.get(u.id) || [];
     let y = TOP + 40;
     let colW = 0;
     for (const ch of chs) {
-      const kids = expanded.has(ch.id) ? concepts.filter(c => c.parent_id === ch.id) : [];
+      const kids = expanded.has(ch.id) ? (kidsOf.get(ch.id) || []) : [];
       const rows = Math.max(1, Math.ceil(kids.length / 5));
       const cols = Math.min(5, Math.max(1, kids.length));
       const startKX = x + 190;
@@ -101,7 +120,7 @@ function layoutNodes(nodes) {
     }
     pos.set(u.id, { x: x + colW / 2, y: TOP });
     x += colW + UNIT_GAP;
-  });
+  }
   return pos;
 }
 
@@ -120,7 +139,7 @@ function savePositions() {
 // ── 绘制 ──
 function draw(useSaved = true) {
   const saved = useSaved ? loadSavedPositions() : {};
-  const auto = layoutNodes(graphData.nodes);
+  const auto = layoutNodes();
   const vis = visibleNodeIds();
   positions = new Map();
   for (const n of graphData.nodes) {
@@ -147,10 +166,14 @@ function draw(useSaved = true) {
       byParent.get(n.parent_id).push(n.id);
     }
   }
+  // 迭代式展开（避免递归 + 数组 spread 在长链上的 O(N²)/爆栈风险）
   const computeDesc = (id) => {
-    const kids = byParent.get(id) || [];
     const out = [];
-    for (const k of kids) { out.push(k, ...computeDesc(k)); }
+    const stack = [id];
+    while (stack.length) {
+      const cur = stack.pop();
+      for (const k of byParent.get(cur) || []) { out.push(k); stack.push(k); }
+    }
     return out;
   };
   for (const id of vis) descendants.set(id, computeDesc(id));
@@ -175,13 +198,13 @@ function draw(useSaved = true) {
     edgeByNode.get(l.concept_b).push(idx);
   }
 
-  // 节点
-  const units = graphData.nodes.filter(n => n.level === 0);
-  const unitIdx = new Map(units.map((u, i) => [u.id, i]));
+  // 节点（单元色每轮只取一次样式变量；点击走 svg 级事件委托，不再逐节点挂监听）
+  const unitIdx = new Map(byLevel.unit.map((u, i) => [u.id, i]));
+  const unitCols = unitColorList();
   for (const n of graphData.nodes) {
     if (!positions.has(n.id)) continue;
     const p = positions.get(n.id);
-    const col = n.level === 0 ? unitColor(unitIdx.get(n.id) || 0)
+    const col = n.level === 0 ? (unitCols[unitIdx.get(n.id) || 0] || '#6366f1')
       : n.level === 1 ? '#94a3b8'
       : nodeColor(n.mastery_est || 0);
     const r = n.level === 0 ? 26 : n.level === 1 ? 15 : 12;
@@ -199,12 +222,6 @@ function draw(useSaved = true) {
       'data-id': n.id, 'pointer-events': 'all',
     });
     group.appendChild(circle);
-    group.addEventListener('click', ev => {
-      ev.stopPropagation();
-      if (justDragged) { justDragged = false; return; }
-      if (n.level === 1) toggleChapter(n.id);
-      selectNode(n.id);
-    });
     gNodes.appendChild(group);
     const labelCls = n.level === 0 ? 'label label-unit' : n.level === 1 ? 'label label-chapter' : 'label';
     const labelDy = n.level === 0 ? -38 : n.level === 1 ? 32 : 24;
@@ -217,6 +234,17 @@ function draw(useSaved = true) {
   }
   applyView();
 }
+
+// svg 级 click 委托：N 个节点只挂 1 个监听（旧实现逐 group 挂，2650 节点 = 2650 个闭包）
+svg.addEventListener('click', e => {
+  const g = e.target.closest ? e.target.closest('g[data-id]') : null;
+  if (!g) return;
+  if (justDragged) { justDragged = false; return; }
+  const node = nodeById.get(Number(g.getAttribute('data-id')));
+  if (!node) return;
+  if (node.level === 1) toggleChapter(node.id);
+  selectNode(node.id);
+});
 
 function applyView() {
   const g = svg.firstElementChild;
@@ -233,7 +261,7 @@ function updateNode(id) {
   el.hit.setAttribute('cx', p.x);
   el.hit.setAttribute('cy', p.y);
   el.label.setAttribute('x', p.x);
-  const n = graphData.nodes.find(n => n.id === id);
+  const n = nodeById.get(id);
   el.label.setAttribute('y', p.y + (n && n.level === 0 ? -38 : n && n.level === 1 ? 32 : 24));
   const ids = edgeByNode.get(id);
   if (ids) for (const i of ids) rebindEdge(i);
@@ -248,7 +276,7 @@ function refreshHitRadii() {
 
 function collapseAll() { expanded.clear(); redrawAndFit(); }
 function expandAll() {
-  graphData.nodes.filter(n => n.level === 1).forEach(c => expanded.add(c.id));
+  for (const c of byLevel.chapter) expanded.add(c.id);
   redrawAndFit();
 }
 function toggleChapter(id) {
@@ -329,8 +357,7 @@ let justDragged = false;
 svg.addEventListener('pointerdown', e => {
   const g = e.target.closest ? e.target.closest('g[data-id]') : null;
   if (g) {
-    const raw = g.getAttribute('data-id');
-    const node = graphData.nodes.find(n => String(n.id) === raw);
+    const node = nodeById.get(Number(g.getAttribute('data-id')));
     if (!node) return;
     dragNode = { id: node.id, sx: e.clientX, sy: e.clientY, moved: false };
     e.preventDefault();
@@ -380,17 +407,16 @@ function applySearch(q) {
   const kw = (q || '').trim().toLowerCase();
   if (kw) {
     let needRedraw = false;
-    for (const n of graphData.nodes) {
-      if (n.level === 2 && n.name.toLowerCase().includes(kw)) {
-        const ch = graphData.nodes.find(x => x.id === n.parent_id);
-        if (ch && !expanded.has(ch.id)) { expanded.add(ch.id); needRedraw = true; }
+    for (const n of byLevel.concept) {
+      if (n.name.toLowerCase().includes(kw)) {
+        if (n.parent_id && !expanded.has(n.parent_id)) { expanded.add(n.parent_id); needRedraw = true; }
       }
     }
     if (needRedraw) { draw(); requestAnimationFrame(fitToView); }
   }
-  for (const n of graphData.nodes) {
-    const el = nodeEls.get(n.id);
-    if (!el) continue;
+  for (const [id, el] of nodeEls) {
+    const n = nodeById.get(id);
+    if (!n) continue;
     const hit = kw && n.name.toLowerCase().includes(kw);
     el.circle.classList.toggle('node-dim', !!kw && !hit);
     el.label.classList.toggle('node-dim', !!kw && !hit);
@@ -401,7 +427,7 @@ function applySearch(q) {
 // ── 详情 ──
 async function selectNode(id) {
   selectedId = id;
-  const n = graphData.nodes.find(x => x.id === id);
+  const n = nodeById.get(id);
   if (!n) return;
   document.getElementById('welcome').classList.add('hidden');
   document.getElementById('detail').classList.remove('hidden');
@@ -414,10 +440,17 @@ async function selectNode(id) {
   document.getElementById('dBar').style.width = Math.round(m * 100) + '%';
   document.getElementById('dLooms').textContent = n.looms_in || 0;
   document.getElementById('dAliases').value = n.aliases || '';
-  const byId = new Map(graphData.nodes.map(x => [x.id, x]));
-  const prereq = graphData.links.filter(l => l.concept_b === id && l.relation === 'prerequisite').map(l => byId.get(l.concept_a));
-  const succ = graphData.links.filter(l => l.concept_a === id && l.relation === 'prerequisite').map(l => byId.get(l.concept_b));
-  const cont = graphData.links.filter(l => (l.concept_a === id || l.concept_b === id) && l.relation === 'contrast').map(l => byId.get(l.concept_a === id ? l.concept_b : l.concept_a));
+  // 单遍扫 links（旧实现三遍 filter + 每次重建 byId Map）
+  const prereq = [], succ = [], cont = [];
+  for (const l of graphData.links) {
+    if (l.relation === 'prerequisite') {
+      if (l.concept_b === id) { const x = nodeById.get(l.concept_a); if (x) prereq.push(x); }
+      else if (l.concept_a === id) { const x = nodeById.get(l.concept_b); if (x) succ.push(x); }
+    } else if (l.relation === 'contrast' && (l.concept_a === id || l.concept_b === id)) {
+      const x = nodeById.get(l.concept_a === id ? l.concept_b : l.concept_a);
+      if (x) cont.push(x);
+    }
+  }
   const dPrereq = document.getElementById('dPrereq');
   dPrereq.innerHTML = '';
   if (prereq.length) dPrereq.innerHTML += `<p class="kv"><b>${t('graph.prereq')}</b>${prereq.map(p => p.name).join('、')}</p>`;
@@ -432,7 +465,8 @@ async function loadRelatedProblems(id) {
   el.innerHTML = '<p class="muted">' + t('msg.loading') + '</p>';
   try {
     const resp = await fetch(`/api/graph/problems?concept=${id}`);
-    const items = await resp.json();
+    const data = await resp.json();
+    const items = Array.isArray(data) ? data : (data.items || []);  // 后端返回 {items, chain_count}
     el.innerHTML = items.length
       ? '<p class="muted">' + t('graph.relatedLabel') + '</p><ul id="problemList">' + items.map(p =>
           `<li>${p.title}（${t('graph.masteryOf')} ${p.mastery}/5）</li>`).join('') + '</ul>'
@@ -494,6 +528,7 @@ async function loadGraph() {
   const resp = await fetch('/api/graph/concepts?subject=' + encodeURIComponent(graphSubject()));
   graphData = await resp.json();
   if (!graphData.nodes || graphData.nodes.length === 0) { alert(t('graph.empty')); return; }
+  indexGraph();
   draw();
   requestAnimationFrame(fitToView);
   // URL ?focus=概念名：全局搜索跳转后自动选中该概念
