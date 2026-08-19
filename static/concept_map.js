@@ -333,7 +333,6 @@ svg.addEventListener('pointerdown', e => {
     const node = graphData.nodes.find(n => String(n.id) === raw);
     if (!node) return;
     dragNode = { id: node.id, sx: e.clientX, sy: e.clientY, moved: false };
-    try { svg.setPointerCapture(e.pointerId); } catch {}
     e.preventDefault();
     return;
   }
