@@ -6,25 +6,44 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
 import webbrowser
 from http.server import ThreadingHTTPServer
 
-from config import HOST, PORT, LOG, ALLOW_LAN, setup_logging
+import auth
+from config import HOST, PORT, LOG, ALLOW_LAN, API_TOKEN, setup_logging
 from db import init_db
 from handler import Handler
 
 
+def _check_exposed_token() -> bool:
+    """R2 启动守卫：暴露模式必须配置 LEARNOS_API_TOKEN，否则拒绝启动。
+
+    返回 True=可继续启动；False=应退出（已输出错误日志）。
+    抽成独立函数便于测试（不真正起服务器）。
+    """
+    if auth.is_exposed() and not API_TOKEN:
+        LOG.error("=" * 60)
+        LOG.error("安全拒绝启动：LearnOS 正监听 %s（非回环地址，对网络开放）。", HOST)
+        LOG.error("暴露模式下所有写/删/还原操作必须携带 Authorization: Bearer <LEARNOS_API_TOKEN>。")
+        LOG.error("请设置环境变量 LEARNOS_API_TOKEN=<强随机串> 后重新启动（可用 `python -c \"import secrets;print(secrets.token_hex(32))\"` 生成）。")
+        LOG.error("=" * 60)
+        return False
+    if HOST not in ("127.0.0.1", "localhost", "::1") and not ALLOW_LAN:
+        LOG.warning("=" * 60)
+        LOG.warning("安全提示：LearnOS 正监听 %s（非回环地址）。", HOST)
+        LOG.warning("写操作已启用 Bearer 令牌鉴权（LEARNOS_API_TOKEN）；若为无意暴露请改回 127.0.0.1。")
+        LOG.warning("=" * 60)
+    return True
+
+
 def main() -> None:
     setup_logging()
-    # §1.1/§16.6：非回环地址对外开放时，必须有意识地通过环境变量放行，
-    # 否则打印醒目警告（导出已统一强制令牌，跨源/跨设备无法导出整库）。
-    if HOST not in ("127.0.0.1", "localhost", "::1") and not ALLOW_LAN:
-        LOG.warning("="*60)
-        LOG.warning("安全警告：LearnOS 正监听 %s（非回环地址）。", HOST)
-        LOG.warning("若需局域网/公网访问，请显式设置 LEARNOS_ALLOW_LAN=1 并自行承担风险。")
-        LOG.warning("未设置时仍可启动，但导出端点已强制一次性令牌，外部无法抓取整库。")
-        LOG.warning("="*60)
+    # R2（P1-1 根因）：暴露模式必须显式配置 LEARNOS_API_TOKEN，否则拒绝启动。
+    # 绝不静默回退到无认证——「暴露但无 token」曾是可被任意网络客户端写库的头号漏洞。
+    if not _check_exposed_token():
+        sys.exit(1)
     init_db()
     # C7：每日首次启动自动备份（幂等，失败不阻塞启动）
     try:

@@ -6,6 +6,7 @@ handler.py 与各领域 mixin 统一从这里导入，避免跨模块 NameError�
 from __future__ import annotations
 
 import re
+import threading
 from typing import Any
 
 X_HEADER = "X-Requested-With"
@@ -14,6 +15,10 @@ X_VALUE = "LearnOS"
 # 写请求幂等键（R3）：同键短窗口内重复请求返回缓存结果，防网络重试产生重复数据
 _IDEMPOTENCY: dict[str, tuple[int, dict[str, Any]]] = {}
 _IDEMPOTENCY_TTL = 3600
+# R4：幂等表多线程安全。ThreadingHTTPServer 并发线程下，`_IDEMPOTENCY.items()` 遍历
+# 与增删可交错（Handler 读 :247/:252、写 :297、剪枝 :50-57），须统一持锁。
+# 用 RLock：`_handle_create_problem` 写缓存后调用 `_prune_idempotency`（其内部再取锁），可重入。
+_IDEMPOTENCY_LOCK = threading.RLock()
 
 
 def _as_str_list(value: Any) -> list[str]:
@@ -52,6 +57,7 @@ def _prune_idempotency() -> None:
     if len(_IDEMPOTENCY) < 512:
         return
     cutoff = _dt.now().timestamp() - _IDEMPOTENCY_TTL
-    stale = [k for k, (ts, _) in _IDEMPOTENCY.items() if ts < cutoff]
-    for k in stale:
-        _IDEMPOTENCY.pop(k, None)
+    with _IDEMPOTENCY_LOCK:
+        stale = [k for k, (ts, _) in _IDEMPOTENCY.items() if ts < cutoff]
+        for k in stale:
+            _IDEMPOTENCY.pop(k, None)

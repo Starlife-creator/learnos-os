@@ -16,7 +16,9 @@ from typing import Any
 from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 
-from config import STATIC_DIR, LOG, DB_PATH, MEDIA_DIR, SETTINGS_SCHEMA, coerce_setting, EXPORT_TOKEN, HOST
+from config import STATIC_DIR, LOG, DB_PATH, MEDIA_DIR, SETTINGS_SCHEMA, coerce_setting
+import auth
+import ratelimit
 from db import DB_LOCK, db, now, row, rows, settings_dict, subject_exists, list_subjects
 from ai import (
     call_ai, call_ai_stream, fallback_hint, problem_prompt, extract_tags, generate_variants,
@@ -130,6 +132,7 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         (r"/api/ocr/extract", "_handle_ocr_extract", True),
         (r"/api/import", "_handle_import", True),
         (r"/api/import/restore", "_handle_backup_restore", True),
+        (r"/api/export/challenge", "_handle_export_challenge", False),
         (r"/api/settings/test", "_handle_settings_test", True),
         (r"/api/fsrs/train", "_handle_fsrs_train", False),
         (r"/api/fsrs/retention", "_handle_fsrs_retention", True),
@@ -186,12 +189,36 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
     def _csrf_ok(self) -> bool:
         return self.headers.get(X_HEADER) == X_VALUE
 
+    def _write_auth_ok(self) -> bool:
+        """R2：写/删/还原操作鉴权闸门（do_POST/PUT/DELETE 共用）。
+
+        回环模式（默认）：仅 CSRF 头即可（本地零摩擦，防跨站请求）。
+        暴露模式（HOST 非回环）：额外要求 `Authorization: Bearer <LEARNOS_API_TOKEN>`；
+        未配置 token 时 app.py 启动即拒绝（config.API_TOKEN 为空），此处兜底仍拒绝。
+        """
+        if not self._csrf_ok():
+            return False
+        if not auth.is_exposed():
+            return True
+        return auth.bearer_ok(self.headers.get("Authorization", ""))
+
     def _metrics_authorized(self) -> bool:
         """/api/metrics 自管鉴权：仅本机回环或携带有效导出令牌可访问。"""
         ra = self.client_address[0] if self.client_address else ""
         if ra in ("127.0.0.1", "::1", "localhost", "0.0.0.0"):
             return True
         return self._export_token_ok()
+
+    def _ai_quota(self, tier: str = "fast") -> bool:
+        """R3：AI 调用配额守卫。超限返 429（不消耗外部 API），放行返 True。
+
+        调用方（各 AI 端点入口）：`if not self._ai_quota("heavy"): return`。
+        fail-open 在 ratelimit.ai_quota_ok 内部（模块异常不阻塞学习）。
+        """
+        if not ratelimit.ai_quota_ok(self._client_ip(), tier):
+            self.json_response({"error": "AI 调用过于频繁，请稍后重试"}, 429)
+            return False
+        return True
 
     def json_response(self, data: Any, status: int = 200) -> None:
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -340,8 +367,19 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         })
 
     def _handle_bootstrap(self) -> None:
-        """同源启动配置：导出令牌等。供应用 JS 拉取后注入导出链接（§16.6）。"""
-        self.json_response({"export_token": EXPORT_TOKEN, "version": "0.5.0", "host": HOST})
+        """同源启动配置。R1 起不再回显导出令牌（令牌改为一次性挑战，由 /api/export/challenge 签发）。"""
+        self.json_response({"version": "0.5.0"})
+
+    def _handle_export_challenge(self) -> None:
+        """R1/R5：签发一次性导出/还原挑战令牌（同源 CSRF 已在 do_POST 入口拦截）。
+
+        EXPORT_TOKEN 仅作 HMAC 签名密钥，永不外发；替代原 /api/bootstrap 回显静态令牌。
+        R5 升级：签名绑定客户端 IP（换 IP 重放即拒）、TTL 内单次有效、用后即焚。
+        跨源恶意网页既读不到令牌、也无法伪造（不知密钥），故无法导出整库。
+        返回 {token, ttl}；令牌 60s 内单次有效。
+        """
+        token, ttl = auth.issue_export_challenge(self._client_ip())
+        self.json_response({"token": token, "ttl": ttl})
 
     def _handle_models_probe(self) -> None:
         from ai import probe_ollama
@@ -517,6 +555,7 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
             return
         with DB_LOCK, db() as conn:
             conn.execute("DELETE FROM subjects WHERE id = ?", (subject_id,))
+        auth.audit("delete_subject", ip=self._client_ip(), detail=subject_id)  # R5 审计
         LOG.info("删除学科: %s", subject_id)
         self.json_response({"ok": True})
 
@@ -593,8 +632,8 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         self.json_response({"started": started, "sample_count": len(sample)})
 
     def do_POST(self) -> None:
-        if not self._csrf_ok():
-            self.json_response({"error": "请求来源不被信任 (缺少 X-Requested-With)"}, 403)
+        if not self._write_auth_ok():
+            self.json_response({"error": "请求来源不被信任 (缺少 X-Requested-With 或 Bearer 令牌)"}, 403)
             return
         path = urlparse(self.path).path
         try:
@@ -603,20 +642,21 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
                 self.subject = self._subject_from_qs()
                 self._handle_material_upload()
                 return
-            # 资料导入直传文本可到 8MB（与拍照上传一致），其余接口维持 1MB
-            limit = 8_000_000 if path == "/api/material/analyze" else 1_000_000
-            data = self.read_json(max_bytes=limit)
             self.subject = self._subject_from_qs()
-            if isinstance(data, dict) and data.get("subject"):
-                self.subject = self._valid_subject(str(data["subject"]))
             for pattern, method, needs_data in Handler.POST_ROUTES:
                 match = re.fullmatch(pattern, path)
                 if not match:
                     continue
                 args = tuple(int(g) for g in match.groups())
                 if needs_data:
+                    # 资料导入直传文本可到 8MB（与拍照上传一致），其余接口维持 1MB
+                    limit = 8_000_000 if path == "/api/material/analyze" else 1_000_000
+                    data = self.read_json(max_bytes=limit)
+                    if isinstance(data, dict) and data.get("subject"):
+                        self.subject = self._valid_subject(str(data["subject"]))
                     getattr(self, method)(*args, data)
                 else:
+                    # 无请求体路由（如 /api/export/challenge）：不读 JSON，避免空体崩溃
                     getattr(self, method)(*args)
                 return
             self.json_response({"error": "接口不存在"}, 404)
@@ -687,6 +727,8 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         if str(data.get("history", "")).strip() in ("1", "true", "True"):
             self.json_response({"history": bank.recent_scores(qid)})
             return
+        if not self._ai_quota("heavy"):
+            return  # R3：AI 评分重接口；history 分支已提前返回，不误伤查询
         try:
             item = bank.find_question(qid, self._subject_of(data))
         except ValueError as exc:
@@ -787,8 +829,8 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         self.wfile.write(body)
 
     def do_PUT(self) -> None:
-        if not self._csrf_ok():
-            self.json_response({"error": "请求来源不被信任 (缺少 X-Requested-With)"}, 403)
+        if not self._write_auth_ok():
+            self.json_response({"error": "请求来源不被信任 (缺少 X-Requested-With 或 Bearer 令牌)"}, 403)
             return
         path = urlparse(self.path).path
         try:
@@ -847,8 +889,8 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         self.json_response({"ok": True, "has_api_key": bool(display_settings().get("has_api_key"))})
 
     def do_DELETE(self) -> None:
-        if not self._csrf_ok():
-            self.json_response({"error": "请求来源不被信任 (缺少 X-Requested-With)"}, 403)
+        if not self._write_auth_ok():
+            self.json_response({"error": "请求来源不被信任 (缺少 X-Requested-With 或 Bearer 令牌)"}, 403)
             return
         path = urlparse(self.path).path
         try:
@@ -860,6 +902,7 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
                         self.json_response({"error": "题目不存在"}, 404)
                         return
                 graph.update_progress(force=True)
+                auth.audit("delete_problem", ip=self._client_ip(), detail=match.group(1))  # R5 审计
                 self.json_response({"ok": True})
                 return
             match = re.fullmatch(r"/api/graph/concepts/(\d+)", path)
@@ -867,6 +910,7 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
                 if not graph.delete_concept(int(match.group(1))):
                     self.json_response({"error": "概念不存在或仍有子概念/绑定题目"}, 400)
                     return
+                auth.audit("delete_concept", ip=self._client_ip(), detail=match.group(1))  # R5 审计
                 self.json_response({"ok": True})
                 return
             match = re.fullmatch(r"/api/rag/doc/(\d+)", path)

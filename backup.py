@@ -14,7 +14,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from db import DB_LOCK, db, rows, now
+from db import DB_LOCK, db, rows, now, close_all_connections
 from config import APP_DIR, LOG
 
 BACKUP_TABLES = [
@@ -119,6 +119,7 @@ def auto_backup_if_due() -> Path | None:
         return None
     if not _db_path.is_file():
         return None
+    close_all_connections()  # R4：连接复用后必须落盘 WAL + 释放文件锁，才能安全拷库
     stamp = time.strftime("%H%M%S")
     target = backups_dir / f"auto_{today}_{stamp}.db"
     shutil.copy2(_db_path, target)
@@ -162,6 +163,9 @@ def restore_backup(raw: str) -> dict[str, Any]:
 
     # 1) 现库整体 rename 为 .bak 时间戳（同目录，非 unlink：原子、崩溃安全、对沙箱友好）
     from db import DB_PATH as _db_path
+    # R4：还原是整库级操作，必须关闭**所有线程**的连接（本 handler 线程 + 并发 worker），
+    # 否则 Windows 上 rename 被任一打开的连接锁住会失败；同时 checkpoint 落盘 WAL。
+    close_all_connections()
     if _db_path.is_file():
         bak = _db_path.with_name(
             f"{_db_path.stem}_restore_{int(time.time())}.bak")

@@ -1,7 +1,8 @@
-"""进程内失败限流（P4b，Tier C）。
+"""进程内限流（P4b Tier C + R3 AI 调用配额）。
 
-仅对「导出令牌校验失败」做内存计数，挡住针对导出/还原端点的爆破，
-不引入令牌过期/轮换（推迟项见 ADR-P4b-expire）。
+两类语义、同一模块：
+- 失败限流（P4b）：导出令牌校验失败计数，挡住爆破。
+- AI 调用配额（R3）：按 IP + 档位（heavy/fast）滑动窗口计数，护外部 API 额度。
 
 设计约束（对齐优化方案「收益最大化、风险最小化」）：
 - 零第三方依赖、纯标准库；状态进程内，重启自然清零（本地运维可接受）。
@@ -9,6 +10,7 @@
 - 回环地址（127.0.0.1 / ::1 / 127.x）阈值放宽，避免本机测试与偶发重试误伤。
 - 时间窗滑动计数，窗口外的失败自动过期，无需后台清理线程。
 - 阈值在调用时读取环境变量，测试可在运行时覆盖而无需重载模块。
+- R3 配额 fail-open：任何异常一律放行，绝不因限流器坏而阻塞正常学习。
 """
 from __future__ import annotations
 
@@ -80,3 +82,43 @@ def clear(ip: str) -> None:
 def clear_all() -> None:
     """供测试隔离。"""
     _failures.clear()
+    _ai_calls.clear()
+
+
+# ── R3：AI 调用配额（滑动窗口，按 IP + 档位）──
+# key = (ip, tier)；value = 调用时间戳列表。独立于失败限流，成功调用也计数。
+_ai_calls: dict[tuple[str, str], list[float]] = defaultdict(list)
+
+
+def _ai_limit_for(tier: str) -> int:
+    # heavy（视觉/口试/变式/资料分析等重接口）更紧；fast（打标签等轻接口）略宽
+    env_key = "LEARNOS_AI_MAX_HEAVY" if tier == "heavy" else "LEARNOS_AI_MAX_FAST"
+    default = 10 if tier == "heavy" else 40
+    return _env_int(env_key, default)
+
+
+def ai_quota_ok(ip: str, tier: str = "fast") -> bool:
+    """R3：AI 调用配额检查——窗口内调用数 < 阈值即放行并记账。
+
+    fail-open：任何异常（环境变量损坏等）一律放行，绝不阻塞正常学习。
+    调用方在 AI 入口处 `if not ai_quota_ok(ip, tier): 返 429`。
+    """
+    try:
+        now = time.time()
+        window = _window()
+        key = (ip, tier)
+        recent = _prune_calls(key, now, window)
+        if len(recent) >= _ai_limit_for(tier):
+            return False
+        recent.append(now)
+        _ai_calls[key] = recent
+        return True
+    except Exception:
+        return True
+
+
+def _prune_calls(key: tuple[str, str], now: float, window: float) -> list[float]:
+    recent = [t for t in _ai_calls[key] if now - t < window]
+    if len(recent) != len(_ai_calls[key]):
+        _ai_calls[key] = recent
+    return recent

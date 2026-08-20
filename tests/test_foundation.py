@@ -12,6 +12,7 @@ os.environ["LEARNOS_DB"] = str(Path(_TMP) / "test.db")
 
 import config  # noqa: E402
 import db  # noqa: E402
+import auth  # noqa: E402
 
 config.DB_PATH = Path(_TMP) / "test.db"
 db.DB_PATH = config.DB_PATH
@@ -114,11 +115,13 @@ class TestExportToken(unittest.TestCase):
         self.assertFalse(s._export_token_ok())
 
     def test_correct_query_token_accepted(self):
-        s = _Stub(f"/api/export?token={config.EXPORT_TOKEN}")
+        tok = auth.issue_export_challenge(ip="127.0.0.1")[0]  # R5：签名绑定 IP，须与 _Stub 默认 _client_ip 一致
+        s = _Stub(f"/api/export?token={tok}")
         self.assertTrue(s._export_token_ok())
 
     def test_correct_header_token_accepted(self):
-        s = _Stub("/api/export", token_header=config.EXPORT_TOKEN)
+        tok = auth.issue_export_challenge(ip="127.0.0.1")[0]
+        s = _Stub("/api/export", token_header=tok)
         self.assertTrue(s._export_token_ok())
 
 

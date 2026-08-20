@@ -4,18 +4,21 @@ const API = '';
 const X_HEADER = 'X-Requested-With';
 const X_VALUE = 'LearnOS';
 
-// ── 导出令牌（§16.6）：同源应用从 /api/bootstrap 拉取，导出/还原端点注入 X-Export-Token ──
-let _exportToken = null;
-let _exportTokenPromise = null;
-async function ensureExportToken(force = false) {
-  if (_exportToken && !force) return _exportToken;
-  if (_exportTokenPromise && !force) return _exportTokenPromise;
-  _exportTokenPromise = fetch('/api/bootstrap', { headers: { [X_HEADER]: X_VALUE } })
-    .then(r => (r.ok ? r.json() : {}))
-    .then(d => { _exportToken = d.export_token || null; return _exportToken; })
-    .catch(() => { _exportToken = null; return null; })
-    .finally(() => { _exportTokenPromise = null; });
-  return _exportTokenPromise;
+// ── 导出令牌（§16.6 + R1）：同源应用每次导出/还原前 POST /api/export/challenge 取一次性挑战令牌，
+//    注入 X-Export-Token。令牌 60s 内单次有效、用后即焚（防重放）；EXPORT_TOKEN 仅作服务端签名密钥，
+//    永不随响应外发，故跨源恶意网页无法导出整库。每次调用都签发新令牌（不缓存）。
+async function ensureExportToken() {
+  try {
+    const r = await fetch('/api/export/challenge', {
+      method: 'POST',
+      headers: { [X_HEADER]: X_VALUE },
+    });
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d.token || null;
+  } catch (e) {
+    return null;
+  }
 }
 const _EXPORT_PATHS = ['/api/export', '/api/import/restore'];
 function _isExportPath(path) {
@@ -156,7 +159,7 @@ document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
     e.preventDefault();
     openModal('searchModal');
-    const input = document.getElementById('searchInput');
+    const input = document.getElementById('searchPaletteInput');
     input.value = '';
     document.getElementById('searchResults').innerHTML = '';
     _searchItems = []; _searchSel = -1;
@@ -182,7 +185,8 @@ document.addEventListener('keydown', (e) => {
 
 function searchPaletteInput() {
   clearTimeout(_searchTimer);
-  const q = document.getElementById('searchInput').value.trim();
+  const q = document.getElementById('searchPaletteInput').value.trim();
+  trackEvent('search.use'); // P2-5：搜索事件埋点
   if (!q) { document.getElementById('searchResults').innerHTML = ''; _searchItems = []; return; }
   _searchTimer = setTimeout(() => searchPaletteRun(q), 250);
 }
@@ -255,7 +259,7 @@ async function api(path, opts = {}) {
 
   let fetchFailed = false;
   // no-store：绕开 HTTP 缓存与 SW Cache 存写的互锁路径，API 必须实时
-  const doFetch = () => fetch(API + url, { method, headers, body, cache: 'no-store' })
+  const doFetch = () => fetch(API + url, { method, headers, body, cache: 'no-store', signal: opts.signal })
     .catch(e => { fetchFailed = true; throw e; });
   try {
     const res = await doFetch();
@@ -271,8 +275,30 @@ async function api(path, opts = {}) {
       if (!res.ok) throw new Error(data.error || t('msg.requestFail'));
       return data;
     }
+    // 网络层异常（断网/后端不可达等）：转换为本地化友好文案，避免裸露原始 TypeError
+    if (err instanceof TypeError && fetchFailed) throw new Error(t('msg.networkError'));
     throw err;
   }
+}
+
+// 按钮锁：网络往返期间置灰防止重复触发，结束后恢复原状态
+async function withButtonLock(btn, fn) {
+  if (!btn) return fn();
+  const prev = btn.disabled; btn.disabled = true;
+  try { return await fn(); } finally { btn.disabled = prev; }
+}
+
+// ── P2-5 轻量本地事件埋点（零第三方依赖；供 N3 复盘关键 UX 指标）──
+const _TELE_KEY = 'learnos.telemetry';
+function trackEvent(name) {
+  try {
+    const t = JSON.parse(localStorage.getItem(_TELE_KEY) || '{}');
+    t[name] = (t[name] || 0) + 1;
+    localStorage.setItem(_TELE_KEY, JSON.stringify(t));
+  } catch (e) { /* 存储异常，静默 */ }
+}
+function telemetryReport() {
+  return JSON.parse(localStorage.getItem(_TELE_KEY) || '{}');
 }
 
 function toast(msg, type = 'success') {
@@ -372,18 +398,105 @@ function renderMath(el) {
 
 // ── 弹窗：焦点陷阱 + Esc/遮罩关闭 ──
 let _lastFocus = null;
+// 编辑弹窗未保存守卫：基于「打开时快照 vs 当前值」对比判定 dirty，覆盖字段/标签/星标/媒体变化
+let _editModalLast = null;
+function editSnapshot() {
+  const vals = ['editTitle','editCourse','editTopic','editContent','editAttempt','editErrorType','editMastery','editMediaPath']
+    .map(i => { const el = document.getElementById(i); return el ? el.value : ''; });
+  const star = document.getElementById('editStarred');
+  return JSON.stringify([vals, star ? (star.checked ? 1 : 0) : 0, (currentTags || []).map(t => t.text)]);
+}
+function editDirty() { return _editModalLast !== null && editSnapshot() !== _editModalLast; }
+// 草稿自动保存（P1-c2，nudge 优于硬拦截）：关闭/刷新时自动写 localStorage（key 限学科），重开新建弹窗时回填
+const _draftKey = () => 'learnos.draft.' + (currentSubject() || 'physics');
+function saveDraft() {
+  try {
+    localStorage.setItem(_draftKey(), JSON.stringify({
+      title: document.getElementById('editTitle').value,
+      course: document.getElementById('editCourse').value,
+      topic: document.getElementById('editTopic').value,
+      content: document.getElementById('editContent').value,
+      my_attempt: document.getElementById('editAttempt').value,
+      error_type: document.getElementById('editErrorType').value,
+      mastery: document.getElementById('editMastery').value,
+      starred: document.getElementById('editStarred').checked ? 1 : 0,
+      tags: (currentTags || []).map(t => t.text),
+      media_path: document.getElementById('editMediaPath').value,
+    }));
+  } catch (e) { /* 存储满/隐私模式，静默 */ }
+}
+function loadDraft() {
+  try { return JSON.parse(localStorage.getItem(_draftKey()) || 'null'); } catch (e) { return null; }
+}
+function clearDraft() {
+  try { localStorage.removeItem(_draftKey()); } catch (e) { /* 静默 */ }
+}
+function autoSaveInterval() {
+  if (!document.getElementById('editModal').classList.contains('active')) return;
+  if (editDirty()) saveDraft(); // 静默自动保存，不留提示避免打断
+}
+window.addEventListener('beforeunload', () => {
+  // 草稿已保全数据，无需浏览器原生拦截弹窗
+  if (editDirty()) saveDraft();
+});
 function openModal(id) {
   const overlay = document.getElementById(id);
   if (!overlay) return;
   _lastFocus = document.activeElement;
   overlay.classList.add('active');
+  // P2-1：弹窗开启时锁 body 滚动 + 主内容 inert（屏幕阅读器不穿透背景）
+  document.body.style.overflow = 'hidden';
+  const main = document.querySelector('.container');
+  if (main && !main.hasAttribute('inert')) main.setAttribute('inert', '');
   const focusables = overlay.querySelectorAll('input, textarea, select, button, [tabindex]');
   if (focusables.length) focusables[0].focus();
+}
+
+function unlockOverlay() {
+  // 仅当没有任何弹窗处于开启状态时还原（多弹窗叠层时最上层关闭不还原）
+  if (!document.querySelector('.modal-overlay.active')) {
+    document.body.style.overflow = '';
+    const main = document.querySelector('.container');
+    if (main) main.removeAttribute('inert');
+  }
+}
+
+// 每 30s 自动保存一次当前编辑草稿（P1-c2 防数据丢失）
+setInterval(autoSaveInterval, 30000);
+// P2-3：在飞 AI 请求可取消（LAN 下高延迟重评/口试场景）——复用 P1-g 的 api() signal 支持
+// 按弹窗归组：弹窗关闭即 abort 其内未完成的 AI fetch，避免请求堆积、串台或后台空跑
+const _aiAborts = new Map(); // modalId -> Set<AbortController>
+function trackModalAI(modalId) {
+  const ac = new AbortController();
+  if (!_aiAborts.has(modalId)) _aiAborts.set(modalId, new Set());
+  const set = _aiAborts.get(modalId);
+  set.add(ac);
+  ac.signal.addEventListener('abort', () => { set.delete(ac); if (!set.size) _aiAborts.delete(modalId); });
+  return ac.signal;
+}
+function abortModalAI(modalId) {
+  const set = _aiAborts.get(modalId);
+  if (!set) return;
+  set.forEach(ac => { try { ac.abort(); } catch (e) {} });
+  set.clear();
+  _aiAborts.delete(modalId);
 }
 function closeModal(id) {
   const overlay = document.getElementById(id);
   if (!overlay) return;
+  // 编辑弹窗未保存守卫（P1-c2）：dirty 时自动存草稿后关闭，无需 confirm（nudge 优于硬拦截）
+  if (id === 'editModal' && editDirty()) {
+    saveDraft();
+    _editModalLast = null; // 已入草稿，此后 closeModalDirect 不再重入
+  }
+  closeModalDirect(id);
+}
+function closeModalDirect(id) {
+  const overlay = document.getElementById(id);
+  if (!overlay) return;
+  abortModalAI(id); // P2-3：弹窗关闭即取消其中未完成的 AI fetch
   overlay.classList.remove('active');
+  unlockOverlay();
   if (_lastFocus && _lastFocus.focus) _lastFocus.focus();
   // 清理详情弹窗的键盘快捷键监听
   if (id === 'problemModal' && overlay._onKey) {
@@ -415,9 +528,10 @@ function removeTag(i) { currentTags.splice(i, 1); renderTags(); }
 async function extractTags() {
   const btn = document.getElementById('extractTagsBtn');
   btn.disabled = true;
+  const signal = trackModalAI('editModal'); // P2-3：弹窗关闭可取消
   try {
     const data = await api('/api/ai/extract-tags', {
-      method: 'POST',
+      method: 'POST', signal,
       body: {
         title: document.getElementById('editTitle').value,
         content: document.getElementById('editContent').value,
@@ -435,7 +549,7 @@ async function extractTags() {
     document.getElementById('editTagsHint').textContent =
       t('tag.extractResult').replace('{s}', source).replace('{c}', conf).replace('{d}', data.source !== 'ai' ? t('tag.degraded') : '') + '。';
   } catch(e) {
-    toast(e.message, 'error');
+    if (e.name !== 'AbortError') toast(e.message, 'error'); // P2-3：取消不报错
   } finally {
     btn.disabled = false;
   }

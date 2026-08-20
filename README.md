@@ -78,11 +78,23 @@ set LEARNOS_PORT=9000 && python app.py
 
 ### 安全
 
-- 所有写请求（POST/PUT/DELETE）需携带 `X-Requested-With` 头，缺失即 403——防范同机恶意网页对 localhost 的跨站调用。
-- 全库导出/备份/还原端点额外要求**导出令牌**（`X-Export-Token`）：同源前端启动时从 `/api/bootstrap` 自动拉取并注入，跨源网页无法读取故无法导出；失败尝试计入限流。
+- 所有写请求（POST/PUT/DELETE）需携带 `X-Requested-With` 头，缺失即 403——防范同机恶意网页对 localhost 的跨站调用；暴露模式（`LEARNOS_HOST` 非回环）下还要求 `Authorization: Bearer <LEARNOS_API_TOKEN>`。
+- 全库导出/备份/还原端点额外要求**一次性导出挑战令牌**：同源前端每次导出/还原前 `POST /api/export/challenge` 取一个 60s 内单次有效、绑定客户端 IP 的 HMAC 签名令牌（用后即焚，防重放）；`EXPORT_TOKEN` 仅作服务端签名密钥，**不再随 `/api/bootstrap` 回显**。跨源网页既读不到也无法伪造；失败尝试计入限流。
 - 所有响应携带 Content-Security-Policy 头：script-src 收紧为仅同源（无内联脚本），阻断外部脚本加载；AI 出站端点做协议白名单 + 重定向拦截 + 本地端点开关（SSRF 防护）。
-- SQLite 启用 WAL 模式提升并发读写；日志写入 `learnos.log`（滚动 1MB × 3，自动脱敏密钥）。
-- AI 生成内容（变式题 / 标签 / 拍照识题 / 口述卡片）一律走「草稿 → 用户确认」流程，不静默落库。
+- SQLite 启用 WAL 模式提升并发读写；日志写入 `learnos.log`（滚动 1MB × 3，自动脱敏密钥）；破坏性操作（删题/清空学科/导入/还原/备份导出）追加最小审计到 `data/audit.log`（IP + 时间 + 动作，不记敏感内容）。
+- AI 生成内容（变式题 / 标签 / 拍照识题 / 口述卡片）一律走「草稿 → 用户确认」流程，不静默落库；AI 重接口（打标签/视觉识别/口试/变式/资料分析/评分）按 IP 滑动窗口限流（heavy 档 10 次/60s，fast 档 40 次/60s，可经 `LEARNOS_AI_MAX_HEAVY` / `LEARNOS_AI_MAX_FAST` 调），超限返 429 不消耗外部 API，限流器异常自动放行（fail-open）。
+
+#### 安全部署矩阵（网络暴露相关环境变量）
+
+| 环境变量 | 作用 | 默认 | 备注 |
+|---------|------|------|------|
+| `LEARNOS_HOST` | 监听地址，**决定是否暴露** | `127.0.0.1` | 回环 = 仅本机；`0.0.0.0`/局域网 IP = 对网络开放 |
+| `LEARNOS_ALLOW_LAN` | 仅抑制「暴露但未显式放行」启动警告 | 空 | 不改变任何鉴权行为 |
+| `LEARNOS_API_TOKEN` | 暴露态写鉴权 Bearer 令牌 | 空 | 暴露模式且为空 → **启动即拒绝**（绝不静默回退无认证） |
+| `LEARNOS_EXPORT_TOKEN` | 导出挑战 HMAC 签名密钥 | 随机生成 | 设置可跨重启稳定；缺失则每次启动换新（在途导出会失效，属预期） |
+| `LEARNOS_CHALLENGE_TTL` | 导出挑战有效期（秒） | `60` | 单次有效，用后即焚 |
+
+> **快速安全暴露到局域网**：`set LEARNOS_HOST=0.0.0.0 && set LEARNOS_API_TOKEN=<用 python -c "import secrets;print(secrets.token_hex(32))" 生成>` 后启动。不带 token 启动会被拒绝，这是刻意的 fail-closed 设计。
 
 ### 程序化 / 预留接口
 

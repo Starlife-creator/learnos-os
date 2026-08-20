@@ -18,6 +18,7 @@ import db
 import ai
 import backup
 import handler_problems
+import auth
 from handler_problems import ProblemsMixin
 
 _TMP = Path(__file__).resolve().parent / ".tmp"
@@ -86,7 +87,7 @@ class TestTierA(unittest.TestCase):
         self.assertNotIn("x", called)
 
         # 有效令牌 → 放行并调用 restore_backup
-        fh2 = _FakeHandler(token_header=config.EXPORT_TOKEN)
+        fh2 = _FakeHandler(token_header=auth.issue_export_challenge(ip="127.0.0.1")[0])  # R5：签名绑定 IP，与桩默认 _client_ip 一致
         with unittest.mock.patch.object(backup, "restore_backup", fake_restore):
             fh2._handle_backup_restore({"backup": "{}"})
         self.assertEqual(fh2.status, 200)

@@ -20,6 +20,8 @@ class MaterialMixin:
         来源三选一：text（前端直传文本）、doc_id（RAG 已摄取文档）、path（工作区文件，含 uploads/）。
         Accept: text/event-stream 时走 SSE 进度流；支持 from_batch/max_batches 断点续跑。
         """
+        if not self._ai_quota("heavy"):
+            return  # R3：资料分析重接口（多轮 AI 调用），护额度
         import material
         text = str(data.get("text", "")).strip()
         doc_id = data.get("doc_id")
@@ -60,6 +62,8 @@ class MaterialMixin:
 
         来源同 analyze：text / doc_id / path。零依赖启发式始终可用，AI 可用时增强。
         """
+        if not self._ai_quota("heavy"):
+            return  # R3：原子卡生成重接口
         import material
         text = str(data.get("text", "")).strip()
         doc_id = data.get("doc_id")

@@ -34,6 +34,8 @@ class OralMixin:
         session_id = int(data.get("session_id", 0))
         answer = str(data.get("answer", "")).strip()
         subject = str(data.get("subject", "")).strip()
+        if not self._ai_quota("heavy"):
+            return  # R3：口试连答属 heavy 档，防高频打穿 AI 额度
         session = self._get_or_404("oral_sessions", session_id, "口试会话不存在")
         if session is None:
             return

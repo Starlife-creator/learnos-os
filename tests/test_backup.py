@@ -63,8 +63,14 @@ class TestBackup(unittest.TestCase):
         with urllib.request.urlopen(req, timeout=8) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
 
+    def _challenge_token(self):
+        """R1：经真实 HTTP 向 /api/export/challenge 取一次性令牌（同源 CSRF 已带）。"""
+        status, r = self.request("/api/export/challenge", method="POST")
+        assert status == 200, f"challenge 签发失败: {status}"
+        return r["token"]
+
     def test_export_contains_all_tables(self):
-        status, r = self.request(f"/api/export/backup?token={config.EXPORT_TOKEN}")
+        status, r = self.request(f"/api/export/backup?token={self._challenge_token()}")
         self.assertEqual(status, 200)
         self.assertIn("problems", r["tables"])
         self.assertIn("exam_papers", r["tables"])
@@ -81,7 +87,7 @@ class TestBackup(unittest.TestCase):
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 ("第二条", "力学", "动能定理", "内容", 2, now(), now()),
             )
-        status, r = self.request(f"/api/export/backup?token={config.EXPORT_TOKEN}")
+        status, r = self.request(f"/api/export/backup?token={self._challenge_token()}")
         raw = json.dumps(r)
 
         # 清空库再还原

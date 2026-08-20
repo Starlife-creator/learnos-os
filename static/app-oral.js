@@ -68,9 +68,15 @@ function showThinking() {
   const div = document.createElement('div');
   div.className = 'chat-msg assistant thinking';
   div.id = 'oralThinking';
-  div.innerHTML = '<div class="bubble">' + t('oral.thinking') + '</div>';
+  div.innerHTML = '<div class="bubble">' + t('oral.thinking') +
+    ' <button class="btn btn-secondary btn-sm" id="oralCancelBtn" onclick="oralCancel()">' + t('oral.cancel') + '</button></div>';
   chatEl.appendChild(div);
   chatEl.scrollTop = chatEl.scrollHeight;
+}
+
+let _oralAbort = null;
+function oralCancel() {
+  if (_oralAbort) _oralAbort.abort();
 }
 
 async function respondOral() {
@@ -82,8 +88,9 @@ async function respondOral() {
   document.getElementById('oralAnswer').value = '';
   document.getElementById('oralAnswer').disabled = true;
   showThinking();
+  _oralAbort = new AbortController();
   try {
-    const r = await api('/api/oral/respond', { method: 'POST', body: { session_id: oralSessionId, answer } });
+    const r = await api('/api/oral/respond', { method: 'POST', body: { session_id: oralSessionId, answer }, signal: _oralAbort.signal });
     const t = document.getElementById('oralThinking');
     if (t) t.remove();
     oralTurn++;
@@ -113,8 +120,15 @@ async function respondOral() {
   } catch(e) {
     const t = document.getElementById('oralThinking');
     if (t) t.remove();
-    toast(e.message, 'error');
+    if (e && e.name === 'AbortError') {
+      // 用户主动取消：不视为错误，仅提示
+      toast(t('oral.cancelled'), 'info');
+    } else {
+      toast(e.message, 'error');
+    }
     document.getElementById('oralAnswer').disabled = false;
+  } finally {
+    _oralAbort = null;
   }
 }
 

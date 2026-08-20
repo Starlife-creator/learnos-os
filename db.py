@@ -2,17 +2,28 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 import threading
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 
-import sqlite3
-
 from config import DB_PATH, SCHEMA, DEFAULT_SETTINGS, LOG
 
 # RLock（可重入）：消除"持锁中再次请求锁"潜在的死锁隐患；对现有串行语义无改变。
 DB_LOCK = threading.RLock()
+
+# R4：线程本地连接复用。ThreadingHTTPServer 每请求一线程，连接随线程缓存，
+# 省去每次 `db()` 重新 connect + 重跑 9 条 PRAGMA 的开销；`check_same_thread=False`
+# 允许跨线程回收（配合线程结束自然关闭，见 `close_thread_conn`）。
+_TLS = threading.local()
+
+# 全局连接登记表 + 代次：文件级备份/还原前 `close_all_connections()` 关闭全部线程
+# 的连接（否则 Windows 上文件被占用 rename/copy 失败）；epoch 递增使各线程下次
+# 取连接时自动重建，避免复用已关闭的连接。
+_ALL_CONNS: set[sqlite3.Connection] = set()
+_ALL_CONNS_LOCK = threading.Lock()
+_EPOCH = 0
 
 
 def now() -> str:
@@ -32,7 +43,7 @@ _PROD_PRAGMAS = [
 
 
 def connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn = sqlite3.connect(DB_PATH, timeout=10, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
@@ -50,14 +61,92 @@ def connect() -> sqlite3.Connection:
     return conn
 
 
+def _thread_conn() -> sqlite3.Connection:
+    """取当前线程的本地连接（首次创建并缓存；测试重绑 DB_PATH 或全连接关闭后自动重建）。"""
+    conn = getattr(_TLS, "conn", None)
+    path = getattr(_TLS, "db_path", None)
+    epoch = getattr(_TLS, "epoch", -1)
+    if conn is None or path != str(DB_PATH) or epoch != _EPOCH:
+        # DB_PATH 变化（测试切临时库）、线程首用、或 close_all_connections 后：旧连接作废，重建
+        if conn is not None:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+        conn = connect()
+        _TLS.conn = conn
+        _TLS.db_path = str(DB_PATH)
+        _TLS.epoch = _EPOCH
+        with _ALL_CONNS_LOCK:
+            _ALL_CONNS.add(conn)
+    return conn
+
+
+def close_thread_conn() -> None:
+    """关闭当前线程的本地连接（文件级备份/还原前调用）。
+
+    连接复用后打开的连接会：① 锁住库文件导致 Windows rename/copy 失败；
+    ② 未 checkpoint 的 WAL 数据仍在 -wal 文件中，直接拷 .db 会漏数据。
+    """
+    conn = getattr(_TLS, "conn", None)
+    if conn is not None:
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error:
+            pass
+        try:
+            conn.close()
+        except sqlite3.Error:
+            pass
+        with _ALL_CONNS_LOCK:
+            _ALL_CONNS.discard(conn)
+    _TLS.conn = None
+    _TLS.db_path = None
+    _TLS.depth = 0
+
+
+def close_all_connections() -> None:
+    """关闭所有线程的本地连接（整库还原前调用）。
+
+    还原需 rename 现库文件，任何线程的打开连接都会在 Windows 上锁文件；
+    同时 WAL 须 checkpoint 落盘。关闭后递增 epoch，各线程下次取连接自动重建。
+    """
+    global _EPOCH
+    with _ALL_CONNS_LOCK:
+        conns = list(_ALL_CONNS)
+        _ALL_CONNS.clear()
+    for c in conns:
+        try:
+            c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error:
+            pass
+        try:
+            c.close()
+        except sqlite3.Error:
+            pass
+    _EPOCH += 1
+
+
 @contextmanager
 def db():
-    conn = connect()
-    try:
-        with conn:
+    conn = _thread_conn()
+    depth = getattr(_TLS, "depth", 0)
+    if depth == 0:
+        # 最外层：负责事务边界（with conn 提交/回滚）
+        _TLS.depth = 1
+        try:
+            with conn:
+                yield conn
+        finally:
+            _TLS.depth = 0
+    else:
+        # 嵌套 db()（如 handler 内调 rows()/row() 内部又开 db()）：
+        # 复用同一连接但不再套 `with conn`，避免内层提前 commit 破坏外层事务原子性。
+        _TLS.depth = depth + 1
+        try:
             yield conn
-    finally:
-        conn.close()
+        finally:
+            _TLS.depth = depth
 
 
 def _migrate(conn: sqlite3.Connection) -> None:

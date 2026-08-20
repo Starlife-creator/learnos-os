@@ -37,13 +37,14 @@ if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
       nw.addEventListener('statechange', () => {
         if (nw.state === 'installed' && navigator.serviceWorker.controller) {
           const bar = document.getElementById('updateBar');
-          if (bar) bar.classList.add('active');
+          if (bar) { bar.classList.add('active'); bar.classList.remove('hidden'); }
         }
       });
     });
   }).catch(() => {});
 }
 function applyUpdate() {
+  trackEvent('update.click'); // P2-5
   if (navigator.serviceWorker && navigator.serviceWorker.controller) {
     navigator.serviceWorker.controller.postMessage('SKIP_WAITING');
   } else {

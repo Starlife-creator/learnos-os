@@ -14,14 +14,15 @@ from typing import Any
 from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 
-from config import LOG, MEDIA_DIR, EXPORT_TOKEN
+from config import LOG, MEDIA_DIR
+import auth
 from db import DB_LOCK, db, now, row, rows
 import db as db_module  # 模块引用：上方 `db` 已被函数遮蔽，需用模块访问实时 DB_PATH
 from ai import (call_ai, call_ai_stream, fallback_hint, problem_prompt, extract_tags,
                 generate_variants, invalidate_settings_cache, get_cached_settings)
 from errors import normalize_error_type
 from review import clamp_mastery
-from handler_base import (X_HEADER, X_VALUE, _IDEMPOTENCY, _IDEMPOTENCY_TTL,
+from handler_base import (X_HEADER, X_VALUE, _IDEMPOTENCY, _IDEMPOTENCY_TTL, _IDEMPOTENCY_LOCK,
                           _as_str_list, _interleave, _prune_idempotency)
 import graph
 import interop
@@ -42,14 +43,16 @@ def _media_dir():
 
 class ProblemsMixin:
     def _export_token_ok(self) -> bool:
-        """§1.1/§16.6：导出整库/错题库必须携带一次性本地令牌。
+        """§1.1/§16.6 + R1/R5：导出/还原必须携带一次性 HMAC 挑战令牌。
 
-        令牌通过 query `?token=` 或头 `X-Export-Token` 传递；同源应用从
-        /api/bootstrap 取得后注入下载链接，跨源网页无法读取故无法导出。
+        令牌由同源 POST /api/export/challenge 签发，60s 内单次有效、用后即焚（防重放），
+        签名绑定客户端 IP（R5：换 IP 重放即拒）。EXPORT_TOKEN 仅作 HMAC 签名密钥，
+        永不外发；跨源恶意网页读不到、也伪造不出。
+        令牌经 query `?token=` 或头 `X-Export-Token` 传递。
         """
         qs = parse_qs(urlparse(self.path).query)
         provided = qs.get("token", [""])[0] or self.headers.get("X-Export-Token", "")
-        return bool(provided) and provided == EXPORT_TOKEN
+        return bool(provided) and auth.verify_export_challenge(provided, self._client_ip())
 
     def _client_ip(self) -> str:
         """取 TCP 对端 IP，用于失败限流归因；无法识别时按回环放宽（避免误伤）。"""
@@ -242,12 +245,15 @@ class ProblemsMixin:
 
     def _handle_create_problem(self, data: dict[str, Any]) -> None:
         rid = self.headers.get("X-Request-Id")
-        if rid and rid in _IDEMPOTENCY:
-            ts, cached = _IDEMPOTENCY[rid]
-            if ts >= datetime.now().timestamp() - _IDEMPOTENCY_TTL:
-                self.json_response(cached, 201)
-                return
-            _IDEMPOTENCY.pop(rid, None)
+        if rid:
+            with _IDEMPOTENCY_LOCK:  # R4：读-判-删原子化，防并发线程交错
+                hit = _IDEMPOTENCY.get(rid)
+                if hit is not None:
+                    ts, cached = hit
+                    if ts >= datetime.now().timestamp() - _IDEMPOTENCY_TTL:
+                        self.json_response(cached, 201)
+                        return
+                    _IDEMPOTENCY.pop(rid, None)
 
         title = str(data.get("title", "")).strip()
         content = str(data.get("content", "")).strip()
@@ -292,8 +298,9 @@ class ProblemsMixin:
             graph.bind_problem(problem_id)
         result = {"id": problem_id}
         if rid:
-            _IDEMPOTENCY[rid] = (datetime.now().timestamp(), result)
-            _prune_idempotency()
+            with _IDEMPOTENCY_LOCK:  # R4：写幂等缓存与剪枝原子化
+                _IDEMPOTENCY[rid] = (datetime.now().timestamp(), result)
+                _prune_idempotency()
         self.json_response(result, 201)
 
     def _handle_update_problem(self, problem_id: int, data: dict[str, Any]) -> None:
@@ -345,6 +352,8 @@ class ProblemsMixin:
                 elif action == "star":
                     conn.execute("UPDATE problems SET starred = CASE WHEN starred THEN 0 ELSE 1 END, updated_at = ? WHERE id = ?",
                                  (now(), pid))
+        if action == "delete":
+            auth.audit("batch_delete", ip=self._client_ip(), detail=f"n={len(ids)}")  # R5 审计
         self.json_response({"ok": True, "affected": len(ids)})
 
     def _handle_import(self, data: dict[str, Any]) -> None:
@@ -426,6 +435,7 @@ class ProblemsMixin:
             self.json_response({"error": f"导入失败: {exc}"}, 400)
             return
         invalidate_settings_cache()
+        auth.audit("import", ip=self._client_ip(), detail=f"n={len(problems)}")  # R5 审计
         self.json_response({"ok": True, "imported": len(problems), "backup": str(backup)})
 
     def _handle_hint(self, problem_id: int, data: dict[str, Any]) -> None:
@@ -524,6 +534,8 @@ class ProblemsMixin:
 
     def _handle_generate_variants(self, problem_id: int) -> None:
         """A4：生成 3 道变式（AI 或离线模板），仅返回草稿不落库（R3）。"""
+        if not self._ai_quota("heavy"):
+            return  # R3：变式生成重接口
         problem = row("SELECT * FROM problems WHERE id = ?", (problem_id,))
         if not problem:
             self.json_response({"error": "题目不存在"}, 404)
@@ -627,6 +639,8 @@ class ProblemsMixin:
 
     def _handle_extract_tags(self, data: dict[str, Any]) -> None:
         """B5：AI 自动打标签（草稿，R3 不落库）。返回建议 + 置信度，前端确认后写入。"""
+        if not self._ai_quota("fast"):
+            return  # R3：打标签属 fast 档（轻接口，阈值放宽）
         title = str(data.get("title", "")).strip()
         content = str(data.get("content", "")).strip()
         if not title or not content:
@@ -664,6 +678,8 @@ class ProblemsMixin:
 
     def _handle_extract_photo(self, data: dict[str, Any]) -> None:
         """B1：视觉模型识别题目 → 卡片草稿（R3 不落库）；无 vision 降级为纯附件。"""
+        if not self._ai_quota("heavy"):
+            return  # R3：视觉识别重接口，护 API 额度
         fp = self._media_file(str(data.get("media_path", "")).strip())
         if not fp:
             raise ValueError("图片不存在")
@@ -794,6 +810,7 @@ class ProblemsMixin:
         try:
             import backup as backup_mod
             result = backup_mod.restore_backup(raw)
+            auth.audit("restore", ip=self._client_ip(), detail="full")  # R5 审计：整库重建
             self.json_response({"ok": True, **result})
         except ValueError as exc:
             self.json_response({"error": str(exc)}, 400)

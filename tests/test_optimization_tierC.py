@@ -10,7 +10,6 @@ import os
 import sys
 import time
 import unittest
-import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -19,6 +18,7 @@ import config  # noqa: E402
 import ratelimit  # noqa: E402
 import resp  # noqa: E402
 from handler_problems import ProblemsMixin  # noqa: E402
+import auth  # noqa: E402
 
 # 测试用阈值：非回环 5 次/窗、回环 12 次/窗（环境变量在调用时读取，可运行时覆盖）
 _TEST_ENV = {
@@ -26,6 +26,32 @@ _TEST_ENV = {
     "LEARNOS_RL_MAX_LOOPBACK": "12",
     "LEARNOS_RL_WINDOW": "60",
 }
+
+
+class _EnvScope:
+    """轻量环境补丁：仅保存/恢复指定键，不整表写回 os.environ。
+
+    背景：unittest.mock.patch.dict 的 stop() 会 `os.environ.update(快照)` 写回全部键，
+    一旦环境里存在外部注入的超长变量（如 >32767 字符，Windows 单变量上限）即抛
+    ValueError。本类只触碰测试声明的键，规避该环境性脆弱点。
+    """
+
+    def __init__(self, values: dict[str, str]):
+        self._values = values
+        self._saved: dict[str, str | None] = {}
+
+    def __enter__(self) -> "_EnvScope":
+        for k, v in self._values.items():
+            self._saved[k] = os.environ.get(k)
+            os.environ[k] = v
+        return self
+
+    def __exit__(self, *exc) -> None:
+        for k, old in self._saved.items():
+            if old is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = old
 
 
 class _GuardHandler(ProblemsMixin):
@@ -51,11 +77,11 @@ class TestRateLimitUnit(unittest.TestCase):
     def setUp(self):
         ratelimit.clear_all()
         resp.reset_error_counts()
-        self._env = unittest.mock.patch.dict(os.environ, _TEST_ENV)
-        self._env.start()
+        self._env = _EnvScope(_TEST_ENV)
+        self._env.__enter__()
 
     def tearDown(self):
-        self._env.stop()
+        self._env.__exit__()
         ratelimit.clear_all()
 
     def test_remote_blocked_after_limit(self):
@@ -81,7 +107,7 @@ class TestRateLimitUnit(unittest.TestCase):
             self.assertFalse(ratelimit.register_failure(ip))
 
     def test_window_expiry(self):
-        with unittest.mock.patch.dict(os.environ, {"LEARNOS_RL_WINDOW": "0.2"}):
+        with _EnvScope({"LEARNOS_RL_WINDOW": "0.2"}):
             ip = "10.0.0.7"
             for _ in range(3):
                 ratelimit.register_failure(ip)
@@ -97,11 +123,11 @@ class TestGuardIntegration(unittest.TestCase):
     def setUp(self):
         ratelimit.clear_all()
         resp.reset_error_counts()
-        self._env = unittest.mock.patch.dict(os.environ, _TEST_ENV)
-        self._env.start()
+        self._env = _EnvScope(_TEST_ENV)
+        self._env.__enter__()
 
     def tearDown(self):
-        self._env.stop()
+        self._env.__exit__()
         ratelimit.clear_all()
 
     def test_wrong_tokens_yield_401_then_429(self):
@@ -114,7 +140,7 @@ class TestGuardIntegration(unittest.TestCase):
     def test_valid_token_passes_and_resets_failures(self):
         for _ in range(4):  # 先攒 4 次失败（未超限）
             _GuardHandler(token="wrong", client_address=("10.0.0.5", 1))._guard_export_token()
-        ok = _GuardHandler(token=config.EXPORT_TOKEN,
+        ok = _GuardHandler(token=auth.issue_export_challenge(ip="10.0.0.5")[0],  # R5：签名绑定 IP，与 client_address 一致
                            client_address=("10.0.0.5", 1))._guard_export_token()
         self.assertTrue(ok)
         # 有效令牌清零失败计数：再失败 5 次仍只是 401，不会 429

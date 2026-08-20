@@ -18,7 +18,11 @@ APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False)
 STATIC_DIR = BUNDLE_ROOT / "static"
 DB_PATH = Path(os.environ.get("LEARNOS_DB", APP_DIR / "learnos.db"))
 
-# ── 网络配置 ──
+# ── 网络配置（安全矩阵见 README「安全部署」）──
+# 暴露控制三要素，职责互不重叠：
+#   LEARNOS_HOST           控制监听地址（127.0.0.1 回环 / 0.0.0.0·局域网 IP 暴露）
+#   LEARNOS_ALLOW_LAN      仅抑制"暴露但未显式放行"的启动警告，不改变任何鉴权行为
+#   LEARNOS_API_TOKEN      暴露模式下的写操作 Bearer 令牌；暴露且缺失 → 拒绝启动（R2）
 HOST = os.environ.get("LEARNOS_HOST", "127.0.0.1")
 try:
     PORT = int(os.environ.get("LEARNOS_PORT", "8765"))
@@ -28,8 +32,15 @@ except ValueError:
 
 # 一次性本地导出令牌（§1.1/§16.6）：导出整库/错题库必须携带，
 # 防止同机恶意网页跨源 fetch 整库。启动即生成，不落盘、不进日志。
+# R1/R5：不再随 /api/bootstrap 回显，仅作 HMAC 签名密钥（challenge 用后即焚）；
+# 可用 LEARNOS_EXPORT_TOKEN 固定以便跨重启稳定（否则每次启动换新）。
 EXPORT_TOKEN = os.environ.get("LEARNOS_EXPORT_TOKEN", "") or secrets.token_hex(16)
 ALLOW_LAN = os.environ.get("LEARNOS_ALLOW_LAN", "") == "1"
+
+# 暴露态写鉴权令牌（R2）：当 HOST 非回环（服务器对网络开放）时，
+# 所有写/删/还原/导出操作必须携带 `Authorization: Bearer <LEARNOS_API_TOKEN>`。
+# 缺省为空 → 暴露模式启动即拒绝（杜绝「静默回退无认证」这一头号雷）。
+API_TOKEN = os.environ.get("LEARNOS_API_TOKEN", "").strip()
 
 # ── AI 配置（支持环境变量，优先级高于本地数据库）──
 API_KEY_ENV = os.environ.get("LEARNOS_API_KEY", "").strip()

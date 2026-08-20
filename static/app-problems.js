@@ -299,6 +299,7 @@ async function viewProblem(id) {
 async function getHint(id, level) {
   const btn = document.getElementById(`hint${level}btn`);
   btn.disabled = true; btn.textContent = t('msg.loading');
+  const signal = trackModalAI('problemModal'); // P2-3：详情弹窗关闭可取消在飞 AI 流
   const area = document.getElementById('hintsArea');
   const levelName = t('hint.levelName').replace('{n}', level);
   const diagnoseHtml = (on) => on ? '<p class="hint-text" style="color:var(--warning)">' + t('hint.diagnose') + '</p>' : '';
@@ -313,6 +314,7 @@ async function getHint(id, level) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'LearnOS', 'Accept': 'text/event-stream' },
       body: JSON.stringify({ level, lang: currentLang() }),
+      signal, // P2-3：可中断 SSE 流
     });
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
@@ -340,6 +342,7 @@ async function getHint(id, level) {
       try {
         chunk = await reader.read();
       } catch (e) {
+        if (e.name === 'AbortError') throw e; // P2-3：保留取消信号，不在外层误报
         throw new Error('stream');
       }
       if (chunk.done) break;
@@ -398,7 +401,8 @@ async function getHint(id, level) {
     if (!ok) toast(t('toast.streamLost'), 'error');
     finishHintBtn(btn, levelName);
   } catch(e) {
-    toast(e.message, 'error'); btn.disabled = false; btn.textContent = levelName;
+    if (e.name !== 'AbortError') { toast(e.message, 'error'); } // P2-3：取消不报错
+    btn.disabled = false; btn.textContent = levelName;
   }
 }
 
@@ -439,9 +443,30 @@ async function editProblem(id) {
     renderTags();
     document.getElementById('editTagInput').value = '';
     renderEditPhotos([]);
+    // 草稿回填（P1-c2）：本学科存在未保存草稿时自动填入并轻提示；仅新建分支生效，编辑既有题目不受影响
+    const d = loadDraft();
+    if (d) {
+      if (d.title) document.getElementById('editTitle').value = d.title;
+      if (d.course) document.getElementById('editCourse').value = d.course;
+      if (d.topic) document.getElementById('editTopic').value = d.topic;
+      if (d.content) document.getElementById('editContent').value = d.content;
+      if (d.my_attempt) document.getElementById('editAttempt').value = d.my_attempt;
+      if (d.error_type) document.getElementById('editErrorType').value = d.error_type;
+      if (d.mastery) document.getElementById('editMastery').value = d.mastery;
+      if (d.starred) document.getElementById('editStarred').checked = true;
+      if (Array.isArray(d.tags) && d.tags.length) {
+        currentTags = d.tags.map(tg => ({ text: String(tg), pending: false }));
+        renderTags();
+      }
+      if (d.media_path) { renderEditPhotos(String(d.media_path).split(',').filter(Boolean)); }
+      trackEvent('draft.restore'); // P2-5：草稿恢复事件
+      toast(t('draft.restored'), 'info');
+    }
   }
   document.getElementById('dupHint').textContent = '';
   openModal('editModal');
+  // 未保存守卫基线：所有字段填充完成后记录快照，之后任何值变化视为 dirty
+  _editModalLast = editSnapshot();
 }
 
 // ── C7 相似题查重（编辑弹窗输入时防抖）──
@@ -505,6 +530,8 @@ function startVoiceInput(targetId, btnId = 'voiceBtn') {
 let _rec = null;
 
 async function saveProblem() {
+  const btn = document.getElementById('saveProblemBtn');
+  await withButtonLock(btn, async () => {
   const id = document.getElementById('editId').value;
   const body = {
     title: document.getElementById('editTitle').value,
@@ -526,9 +553,12 @@ async function saveProblem() {
       await api('/api/problems', { method: 'POST', body });
     }
     toast(id ? t('msg.updated') : t('msg.created'));
+    _editModalLast = null; // 保存成功：清除 dirty 基线，让 closeModal 直通
+    clearDraft();          // 草稿已固化，清除陈旧草稿
     closeModal('editModal');
     loadProblems(problemPage);
-  } catch(e) { toast(e.message, 'error'); }
+  } catch(e) { trackEvent('save.fail'); toast(e.message, 'error'); }
+  });
 }
 
 async function deleteProblem(id) {
@@ -755,8 +785,9 @@ async function extractPhoto() {
   const btn = document.getElementById('extractPhotoBtn');
   btn.disabled = true;
   btn.textContent = t('ocr.recognizing');
+  const signal = trackModalAI('editModal'); // P2-3：弹窗关闭可取消
   try {
-    const r = await api('/api/ai/extract-photo', { method: 'POST', body: { media_path: path } });
+    const r = await api('/api/ai/extract-photo', { method: 'POST', signal, body: { media_path: path } });
     if (!r.draft) {
       toast(r.error || t('ocr.noVision'), 'info');
       return;
@@ -771,7 +802,9 @@ async function extractPhoto() {
         t('ocr.answerBlock').replace('{a}', d.answer) + (d.analysis ? t('ocr.analysisBlock').replace('{a}', d.analysis) : '');
     }
     toast(t('ocr.filled'), 'success');
-  } catch(e) { toast(e.message, 'error'); }
+  } catch(e) {
+    if (e.name !== 'AbortError') toast(e.message, 'error'); // P2-3：取消不报错
+  }
   finally {
     btn.disabled = false;
     btn.textContent = t('ocr.btnTitle');

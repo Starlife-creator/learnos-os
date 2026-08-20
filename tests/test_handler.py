@@ -231,7 +231,8 @@ class TestEndpoints(unittest.TestCase):
     def test_export_roundtrip_preserves_tags(self):
         pid = self._create_problem()
         self._request("PUT", f"/api/problems/{pid}", {"tags": ["知识点:力学"]})
-        status, exported = self._request("GET", f"/api/export?token={config.EXPORT_TOKEN}")
+        _, chal = self._request("POST", "/api/export/challenge")
+        status, exported = self._request("GET", f"/api/export?token={chal['token']}")
         self.assertEqual(status, 200)
         src = next(p for p in exported["problems"] if p["id"] == pid)
         self.assertEqual(src["tags"], ["知识点:力学"])
@@ -473,7 +474,9 @@ class TestEndpoints(unittest.TestCase):
 
     def test_export_import_roundtrip(self):
         self._create_problem()
-        status, exported = self._request("GET", f"/api/export?token={config.EXPORT_TOKEN}")
+        status, chal = self._request("POST", "/api/export/challenge")
+        self.assertEqual(status, 200)
+        status, exported = self._request("GET", f"/api/export?token={chal['token']}")
         self.assertEqual(status, 200)
         self.assertIn("problems", exported)
         # 导入导出数据
@@ -494,9 +497,11 @@ class TestEndpoints(unittest.TestCase):
         return resp.status, resp.getheader("Content-Type", ""), body
 
     def _export_get(self, path, accept=None):
-        """导出端点需携带一次性导出令牌（§16.6）；同进程共享 config.EXPORT_TOKEN。"""
+        """R1：导出端点需携带一次性挑战令牌（同源 POST /api/export/challenge 签发）。"""
+        status, chal = self._request("POST", "/api/export/challenge")
+        assert status == 200, f"challenge 签发失败: {status}"
         sep = "&" if "?" in path else "?"
-        return self._raw_get(f"{path}{sep}token={config.EXPORT_TOKEN}", accept=accept)
+        return self._raw_get(f"{path}{sep}token={chal['token']}", accept=accept)
 
     def test_export_anki_csv(self):
         self._create_problem(title="CSV导出题")
