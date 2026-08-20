@@ -59,6 +59,15 @@ function indexGraph() {
   }
 }
 const SAVE_KEY = 'conceptMapPositions.v1';
+// ── LOD 分级渲染：2650 节点学科下全量 paint 是卡顿主因（14522 元素）──
+// 缩放过小 (<0.55) 时节点在屏幕上只是几个像素的点，文字/次要边/大点击圈都不可读，
+// 跳过它们能砍掉 ~60% 的 SVG 元素；放大到阈值以上再补齐。
+const LOD_TEXT_SCALE = 0.55;    // 低于此缩放：不画文字标签
+const LOD_HIT_MAX = 700;        // 可见节点超过此数：不画放大点击圈（circle 本身仍可点）
+const LOD_EDGE_SCALE = 0.4;     // 低于此缩放：只保留 prerequisite 先修边（related/contrast 省略）
+let lodText = true;             // 当前绘制是否含文字（跨阈值时按需重绘）
+let lodHit = true;
+let lodEdge = true;
 
 function make(tag, attrs, text) {
   const el = document.createElementNS(NS, tag);
@@ -148,6 +157,11 @@ function draw(useSaved = true) {
     if (p) positions.set(n.id, { x: p.x, y: p.y });
   }
 
+  // LOD 分级：按当前缩放与可见规模决定画什么（跨阈值时由 scheduleLodRedraw 触发重绘）
+  lodText = view.scale >= LOD_TEXT_SCALE;
+  lodHit = vis.size <= LOD_HIT_MAX;
+  lodEdge = view.scale >= LOD_EDGE_SCALE;
+
   svg.innerHTML = '';
   nodeEls = new Map();
   descendants = new Map();
@@ -178,10 +192,11 @@ function draw(useSaved = true) {
   };
   for (const id of vis) descendants.set(id, computeDesc(id));
 
-  // 边（曲线，只画两端可见的）
+  // 边（曲线，只画两端可见的；LOD 缩小时省略次要边）
   edges = [];
   edgeByNode = new Map();
   for (const l of graphData.links) {
+    if (!lodEdge && l.relation !== 'prerequisite') continue;
     if (!positions.has(l.concept_a) || !positions.has(l.concept_b)) continue;
     const a = positions.get(l.concept_a), b = positions.get(l.concept_b);
     const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
@@ -210,10 +225,11 @@ function draw(useSaved = true) {
     const r = n.level === 0 ? 26 : n.level === 1 ? 15 : 12;
     const group = make('g', { 'data-id': n.id });
     group.style.cursor = 'move';
-    const hit = make('circle', {
+    // 大图缩小时不放大点击圈：circle 本身 pointer-events:all 已可点，省 1/3 元素
+    const hit = lodHit ? make('circle', {
       cx: p.x, cy: p.y, r: Math.max(14 / view.scale, r + 10), class: 'node-hit',
-    });
-    group.appendChild(hit);
+    }) : null;
+    if (hit) group.appendChild(hit);
     const circle = make('circle', {
       cx: p.x, cy: p.y, r: r,
       class: 'node-' + (n.level === 0 ? 'unit' : n.level === 1 ? 'chapter' : 'concept'),
@@ -223,16 +239,36 @@ function draw(useSaved = true) {
     });
     group.appendChild(circle);
     gNodes.appendChild(group);
-    const labelCls = n.level === 0 ? 'label label-unit' : n.level === 1 ? 'label label-chapter' : 'label';
-    const labelDy = n.level === 0 ? -38 : n.level === 1 ? 32 : 24;
-    const suffix = n.level === 1 ? (expanded.has(n.id) ? ' ▼' : ' ▶') : '';
-    const label = make('text', {
-      x: p.x, y: p.y + labelDy, 'text-anchor': 'middle', class: labelCls,
-    }, n.name + suffix);
-    gNodes.appendChild(label);
+    // LOD 缩小时跳过文字标签（2650 个 <text> 是 paint 大头，缩小后也看不清）
+    let label = null;
+    if (lodText) {
+      const labelCls = n.level === 0 ? 'label label-unit' : n.level === 1 ? 'label label-chapter' : 'label';
+      const labelDy = n.level === 0 ? -38 : n.level === 1 ? 32 : 24;
+      const suffix = n.level === 1 ? (expanded.has(n.id) ? ' ▼' : ' ▶') : '';
+      label = make('text', {
+        x: p.x, y: p.y + labelDy, 'text-anchor': 'middle', class: labelCls,
+      }, n.name + suffix);
+      gNodes.appendChild(label);
+    }
     nodeEls.set(n.id, { hit, circle, label });
   }
   applyView();
+}
+
+// LOD 跨阈值重绘：缩放/平移后 scale 变化可能让文字/次要边需要出现或隐藏，
+// 但不必每个 wheel tick 都重建 DOM——debounce 到缩放停顿后再重绘。
+let lodTimer = 0;
+function scheduleLodRedraw() {
+  if (lodTimer) return;
+  lodTimer = setTimeout(() => {
+    lodTimer = 0;
+    const wantText = view.scale >= LOD_TEXT_SCALE;
+    const wantEdge = view.scale >= LOD_EDGE_SCALE;
+    if (wantText !== lodText || wantEdge !== lodEdge) {
+      draw();
+      savePositions();
+    }
+  }, 180);
 }
 
 // svg 级 click 委托：N 个节点只挂 1 个监听（旧实现逐 group 挂，2650 节点 = 2650 个闭包）
@@ -258,17 +294,19 @@ function updateNode(id) {
   if (!p || !el) return;
   el.circle.setAttribute('cx', p.x);
   el.circle.setAttribute('cy', p.y);
-  el.hit.setAttribute('cx', p.x);
-  el.hit.setAttribute('cy', p.y);
-  el.label.setAttribute('x', p.x);
-  const n = nodeById.get(id);
-  el.label.setAttribute('y', p.y + (n && n.level === 0 ? -38 : n && n.level === 1 ? 32 : 24));
+  if (el.hit) { el.hit.setAttribute('cx', p.x); el.hit.setAttribute('cy', p.y); }
+  if (el.label) {
+    const n = nodeById.get(id);
+    el.label.setAttribute('x', p.x);
+    el.label.setAttribute('y', p.y + (n && n.level === 0 ? -38 : n && n.level === 1 ? 32 : 24));
+  }
   const ids = edgeByNode.get(id);
   if (ids) for (const i of ids) rebindEdge(i);
 }
 
 function refreshHitRadii() {
   for (const el of nodeEls.values()) {
+    if (!el.hit) continue;
     const r = parseFloat(el.circle.getAttribute('r'));
     el.hit.setAttribute('r', Math.max(14 / view.scale, r + 10));
   }
@@ -312,6 +350,8 @@ function fitToView() {
   view.x = w / 2 - ((minX + maxX) / 2) * view.scale;
   view.y = h / 2 - ((minY + maxY) / 2) * view.scale;
   applyView();
+  // fit 改变 scale 后可能跨过 LOD 阈值，按需重绘（如初始加载后 2650 文字应消失）
+  scheduleLodRedraw();
 }
 
 function autoLayout() {
@@ -334,6 +374,7 @@ function zoomBy(factor) {
   view.y = py - wy * view.scale;
   applyView();
   refreshHitRadii();
+  scheduleLodRedraw();
 }
 
 // ── 交互：缩放 / 平移 / 拖动节点（Pointer Events，兼容鼠标与触屏）──
@@ -348,7 +389,7 @@ svg.addEventListener('wheel', e => {
   view.x = px - wx * view.scale;
   view.y = py - wy * view.scale;
   applyView();
-  refreshHitRadii();
+  scheduleLodRedraw();
 }, { passive: false });
 
 let dragNode = null;
@@ -419,8 +460,10 @@ function applySearch(q) {
     if (!n) continue;
     const hit = kw && n.name.toLowerCase().includes(kw);
     el.circle.classList.toggle('node-dim', !!kw && !hit);
-    el.label.classList.toggle('node-dim', !!kw && !hit);
-    el.label.classList.toggle('label-search', !!hit);
+    if (el.label) {
+      el.label.classList.toggle('node-dim', !!kw && !hit);
+      el.label.classList.toggle('label-search', !!hit);
+    }
   }
 }
 
@@ -529,12 +572,24 @@ async function loadGraph() {
   graphData = await resp.json();
   if (!graphData.nodes || graphData.nodes.length === 0) { alert(t('graph.empty')); return; }
   indexGraph();
+  // 先算布局+适应视口，再 draw——保证首帧就按最终 scale 走 LOD，
+  // 避免先全量渲染 14522 元素再精简（2650 节点下省一次数百 ms 的重绘）
+  const saved = loadSavedPositions();
+  const auto = layoutNodes();
+  const vis = visibleNodeIds();
+  positions = new Map();
+  for (const n of graphData.nodes) {
+    if (!vis.has(n.id)) continue;
+    const p = (saved[n.id] && isFinite(saved[n.id].x)) ? saved[n.id] : auto.get(n.id);
+    if (p) positions.set(n.id, { x: p.x, y: p.y });
+  }
+  fitToView();
   draw();
-  requestAnimationFrame(fitToView);
+  savePositions();
   // URL ?focus=概念名：全局搜索跳转后自动选中该概念
   const focusName = new URLSearchParams(location.search).get('focus');
   if (focusName) {
-    const node = graphData.nodes.find(n => n.name === focusName);
+    const node = nodeById.get(graphData.nodes.find(n => n.name === focusName)?.id);
     if (node) setTimeout(() => selectNode(node.id), 200);
   }
 }
