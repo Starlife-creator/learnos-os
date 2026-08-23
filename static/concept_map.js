@@ -407,7 +407,13 @@ svg.addEventListener('pointerdown', e => {
   dragStart = { x: e.clientX, y: e.clientY };
   svg.classList.add('dragging');
 });
-window.addEventListener('pointermove', e => {
+// 用 rAF 合并高频 pointermove：每帧只重绘一次，避免后代多时 60~120/s 的同步 DOM 更新掉帧
+let _pmScheduled = false;
+let _pmLastEvent = null;
+function _flushPointerMove() {
+  _pmScheduled = false;
+  const e = _pmLastEvent;
+  if (!e) return;
   if (dragNode) {
     const p = positions.get(dragNode.id);
     if (!p) return;
@@ -432,6 +438,10 @@ window.addEventListener('pointermove', e => {
   view.y += e.clientY - dragStart.y;
   dragStart = { x: e.clientX, y: e.clientY };
   applyView();
+}
+window.addEventListener('pointermove', e => {
+  _pmLastEvent = e;
+  if (!_pmScheduled) { _pmScheduled = true; requestAnimationFrame(_flushPointerMove); }
 });
 window.addEventListener('pointerup', () => {
   if (dragNode) {

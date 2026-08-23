@@ -249,20 +249,37 @@ def is_local_endpoint(base: str) -> bool:
     return base.startswith("http://localhost") or base.startswith("http://127.0.0.1") or base.startswith("http://[::1]")
 
 
+# 模型探测结果缓存：本地 Ollama 可用性不会秒级变化，缓存避免每次页面加载都付探测延迟。
+_PROBE_CACHE_TTL = 30.0
+_probe_cache: dict[str, Any] = {"ts": 0.0, "val": None}
+
+
 def probe_ollama(timeout: float = 1.5) -> dict[str, Any] | None:
-    """C3 探测本地 Ollama 服务（用户自装，仅探测不安装）。失败返回 None。"""
+    """C3 探测本地 Ollama 服务（用户自装，仅探测不安装）。失败返回 None。
+
+    优化：① 直连 localhost 并禁用代理（否则被 HTTP_PROXY 劫持后连接挂满超时）；
+    ② 结果缓存 30s，避免设置页每次加载都付 1.5~3s 探测延迟。
+    """
+    now = time.monotonic()
+    if now - _probe_cache["ts"] < _PROBE_CACHE_TTL:
+        return _probe_cache["val"]
     try:
         request = urllib.request.Request(
             "http://localhost:11434/api/tags", method="GET",
             headers={"User-Agent": "LearnOS/0.5"},
         )
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        # 直连 localhost，绕过代理（localhost 探测不应走代理，否则挂起）
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(request, timeout=timeout) as response:
             data = json.loads(response.read().decode("utf-8"))
         models = [m.get("name", "") for m in data.get("models", []) if m.get("name")]
-        return {"available": True, "models": models}
+        result = {"available": True, "models": models}
     except Exception as exc:
         LOG.debug("Ollama 探测失败: %s", exc)
-        return None
+        result = None
+    _probe_cache["ts"] = now
+    _probe_cache["val"] = result
+    return result
 
 
 def _resolve_model(config: dict[str, str], tier: str | None) -> str:
