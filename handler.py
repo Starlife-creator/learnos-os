@@ -285,7 +285,8 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         return self._valid_subject(qs.get("subject", [""])[0])
 
     def _valid_subject(self, raw: str) -> str:
-        raw = str(raw or "").strip()
+        from db import normalize_subject
+        raw = normalize_subject(raw)
         if raw and subject_exists(raw):
             return raw
         return "physics"
@@ -563,7 +564,7 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
 
     def _handle_add_subject(self, data: dict[str, Any]) -> None:
         """网页端新增学科：合法 id + 可选标题；有种子文件则自动加载图谱。"""
-        sid = str(data.get("id", "")).strip()
+        sid = str(data.get("id", "")).strip().lower()
         title = str(data.get("title", "")).strip() or sid
         if not self._SUBJECT_ID_RE.fullmatch(sid):
             self.json_response({"error": "学科 id 需字母开头，仅限字母/数字/下划线，最长 20 字符"}, 400)

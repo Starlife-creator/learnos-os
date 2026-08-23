@@ -621,7 +621,9 @@ function toast(msg) {
 }
 
 function graphSubject() {
-  return new URLSearchParams(location.search).get('subject') || localStorage.getItem('subject') || 'physics';
+  // 学科 id 全局小写归一：避免历史 Music/music 双副本导致加载到空壳科（后端亦已归一，此处为前端防御）
+  const raw = new URLSearchParams(location.search).get('subject') || localStorage.getItem('subject') || 'physics';
+  return String(raw || '').trim().toLowerCase();
 }
 
 async function loadGraph() {
@@ -653,9 +655,10 @@ async function loadGraph() {
 
 function switchGraphSubject(id) {
   if (!id) return;
-  localStorage.setItem('subject', id);
+  const sid = String(id || '').trim().toLowerCase();
+  localStorage.setItem('subject', sid);
   const url = new URL(location.href);
-  url.searchParams.set('subject', id);
+  url.searchParams.set('subject', sid);
   location.href = url.toString();
 }
 

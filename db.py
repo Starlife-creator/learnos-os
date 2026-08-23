@@ -602,10 +602,10 @@ def register_builtin_subjects() -> None:
     import json as _json
     with DB_LOCK, db() as conn:
         for p in sorted(seed_dir.glob("seed_concepts_*.json")):
-            sid = p.stem[len("seed_concepts_"):]
+            sid = normalize_subject(p.stem[len("seed_concepts_"):])
             if not sid or sid in ("physics", "chemistry", "math"):
                 continue
-            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,19}", sid) or not p.stat().st_size:
+            if not re.fullmatch(r"[a-z][a-z0-9_]{0,19}", sid) or not p.stat().st_size:
                 continue
             conn.execute(
                 "INSERT OR IGNORE INTO subjects(id, title, builtin, created_at) VALUES (?, ?, 0, ?)",
@@ -631,10 +631,15 @@ def list_subjects() -> list[dict[str, Any]]:
         ).fetchall()]
 
 
+def normalize_subject(subject_id: str) -> str:
+    """学科 id 归一：统一小写，避免 Title-case 与全小写双副本（历史坑：Music/Music 并存致空壳科）。"""
+    return str(subject_id or "").strip().lower()
+
+
 def subject_exists(subject_id: str) -> bool:
     with DB_LOCK, db() as conn:
         return conn.execute(
-            "SELECT 1 FROM subjects WHERE id = ?", (subject_id,)
+            "SELECT 1 FROM subjects WHERE id = ?", (normalize_subject(subject_id),)
         ).fetchone() is not None
 
 

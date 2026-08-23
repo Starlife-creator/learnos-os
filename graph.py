@@ -65,6 +65,8 @@ def ensure_seed(subject: str = "physics") -> None:
     - 该学科已有概念：比对种子文件 version 与 seed_versions 记录；
       若种子更新则 LOG 提示「有新版标准图谱，可导出/合并」（不强制覆盖，保留用户编辑）。
     """
+    from db import normalize_subject
+    subject = normalize_subject(subject)
     with DB_LOCK, db() as conn:
         count = conn.execute(
             "SELECT COUNT(*) AS c FROM concepts WHERE subject = ?", (subject,)
