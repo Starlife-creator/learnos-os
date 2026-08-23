@@ -3,8 +3,17 @@
 - 层级：单元(0) → 章(1) → 概念(2)，概念拥有 prerequisite/related/contrast 三种关系。
 - 掌握度：problems 绑定概念的平均 mastery 为自身掌握度；沿 prerequisite 边做
   最多两轮「先修门」传播（先修不熟 → 子概念打折），并存概念进度表。
-- 种子数据 data/seed_concepts.json 仅在库空时一次性加载；用户增删改标记
+- 种子数据 data/seed_concepts_<id>.json 仅在库空时一次性加载；用户增删改标记
   user_edited=1，不回写 seed 文件（改动仅存库）。
+
+内容来源约定（concepts.source 列记录：seed/import/rag/ai/unknown）：
+- **标准学科内容必须走种子文件**（data/seed_concepts_<id>.json + data/seed_questions_<id>.json），
+  随 git 版本化、跨设备持久、可被 PR 审阅。机械/电子/英语/天文等新建学科均沿用此路径，
+  **禁止直接写库**（库内 learnos.db 被 gitignore，换机即丢，且 ensure_seed 对非空学科永不重读）。
+- 用户运行期导入/向导提取的内容落库（source=import/rag），可用 graph.export_seed() 反哺种子文件，
+  形成「库 → 种子」内容闭环。
+- 种子升级：seed_versions 表记录每学科已加载的种子版本；种子文件 version 提升后，ensure_seed
+  会 LOG 提示「有新版标准图谱，可导出/合并」，但不自动覆盖以免丢失用户编辑。
 """
 from __future__ import annotations
 
@@ -50,25 +59,47 @@ def _load_seed(subject: str = "physics") -> dict[str, Any] | None:
 
 
 def ensure_seed(subject: str = "physics") -> None:
-    """按学科从种子文件一次性加载（幂等；该学科已有概念则跳过）。"""
+    """按学科从种子文件加载（幂等）。
+
+    - 该学科 concepts 为空：首次加载，所有节点标记 source='seed'，并记录 seed_versions。
+    - 该学科已有概念：比对种子文件 version 与 seed_versions 记录；
+      若种子更新则 LOG 提示「有新版标准图谱，可导出/合并」（不强制覆盖，保留用户编辑）。
+    """
     with DB_LOCK, db() as conn:
         count = conn.execute(
             "SELECT COUNT(*) AS c FROM concepts WHERE subject = ?", (subject,)
         ).fetchone()["c"]
-        if count:
-            return
         seed = _load_seed(subject)
+        seed_ver = int((seed or {}).get("version", 0) or 0)
+        if count:
+            # 已加载过：记录/比对种子版本，提示升级而非覆盖
+            rec = conn.execute(
+                "SELECT seed_version FROM seed_versions WHERE subject = ?", (subject,)
+            ).fetchone()
+            recorded = int(rec["seed_version"]) if rec else 0
+            if seed and seed_ver > recorded:
+                LOG.info(
+                    "学科 %s 有新版标准图谱（种子 v%d > 已加载 v%d），可在设置页导出/合并；"
+                    "当前不自动覆盖以免丢失用户编辑。",
+                    subject, seed_ver, recorded,
+                )
+                conn.execute(
+                    "INSERT INTO seed_versions(subject, seed_version, applied_at) VALUES (?, ?, ?) "
+                    "ON CONFLICT(subject) DO UPDATE SET seed_version=excluded.seed_version, applied_at=excluded.applied_at",
+                    (subject, seed_ver, now()),
+                )
+            return
         if not seed:
             return
         with conn:
             name_to_id: dict[str, int] = {}
             # 第一遍：插入全部节点（含单元/章节），建立名字索引
             for unit in seed.get("units", []):
-                unit_id = _insert_concept(conn, unit["name"], 0, 0, 0.1, name_to_id, subject)
+                unit_id = _insert_concept(conn, unit["name"], 0, 0, 0.1, name_to_id, subject, "seed")
                 for chapter in unit.get("chapters", []):
-                    ch_id = _insert_concept(conn, chapter["name"], unit_id, unit_id, 0.2, name_to_id, subject)
+                    ch_id = _insert_concept(conn, chapter["name"], unit_id, unit_id, 0.2, name_to_id, subject, "seed")
                     for c in chapter.get("concepts", []):
-                        cid = _insert_concept(conn, c["n"], ch_id, ch_id, float(c.get("d", 0.5)), name_to_id, subject)
+                        cid = _insert_concept(conn, c["n"], ch_id, ch_id, float(c.get("d", 0.5)), name_to_id, subject, "seed")
                         name_to_id.setdefault(c["n"], cid)
             # 第二遍：建先修边（不依赖出现顺序）
             for unit in seed.get("units", []):
@@ -88,19 +119,49 @@ def ensure_seed(subject: str = "physics") -> None:
                         _insert_link(conn, name_to_id[a], name_to_id[b], relation)
                     else:
                         LOG.warning("%s 关系引用不存在，已跳过: %s-%s", relation, a, b)
-        LOG.info("种子图谱已加载 (%s): %d 概念", subject, len(name_to_id))
+            # 记录种子版本（首次加载）
+            conn.execute(
+                "INSERT INTO seed_versions(subject, seed_version, applied_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(subject) DO UPDATE SET seed_version=excluded.seed_version, applied_at=excluded.applied_at",
+                (subject, seed_ver, now()),
+            )
+        LOG.info("种子图谱已加载 (%s): %d 概念 (v%d)", subject, len(name_to_id), seed_ver)
+
+
+def seed_status(subject: str = "physics") -> dict[str, Any]:
+    """返回学科种子同步状态：当前库概念数、已记录种子版本、种子文件版本、是否需要升级。"""
+    seed = _load_seed(subject)
+    seed_ver = int((seed or {}).get("version", 0) or 0)
+    with DB_LOCK, db() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) AS c FROM concepts WHERE subject = ?", (subject,)
+        ).fetchone()["c"]
+        rec = conn.execute(
+            "SELECT seed_version FROM seed_versions WHERE subject = ?", (subject,)
+        ).fetchone()
+    recorded = int(rec["seed_version"]) if rec else 0
+    return {
+        "subject": subject,
+        "concept_count": count,
+        "seed_file_version": seed_ver,
+        "loaded_version": recorded,
+        "has_seed_file": seed is not None,
+        "needs_update": bool(seed) and count > 0 and seed_ver > recorded,
+    }
 
 
 def _insert_concept(conn: Any, name: str, parent_id: int, chapter_id: int,
-                    difficulty: float, name_to_id: dict[str, int], subject: str = "physics") -> int:
+                    difficulty: float, name_to_id: dict[str, int], subject: str = "physics",
+                    source: str = "unknown") -> int:
     cur = conn.execute(
         "SELECT id FROM concepts WHERE subject = ? AND name = ?", (subject, name)
     ).fetchone()
     if cur:
         return int(cur["id"])
     cursor = conn.execute(
-        "INSERT INTO concepts(name, parent_id, chapter_id, difficulty, subject, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (name, parent_id, chapter_id, difficulty, subject, now()),
+        "INSERT INTO concepts(name, parent_id, chapter_id, difficulty, subject, created_at, source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (name, parent_id, chapter_id, difficulty, subject, now(), source),
     )
     cid = int(cursor.lastrowid)
     name_to_id[name] = cid
@@ -115,11 +176,14 @@ def _insert_link(conn: Any, a: int, b: int, relation: str) -> None:
 
 
 def load_graph(subject: str = "physics") -> dict[str, Any]:
-    """返回指定学科图谱（节点含层级/难度/掌握度，边含关系）。"""
+    """返回指定学科图谱（节点含层级/难度/掌握度，边含关系）。
+
+    level 纯内存推导：复用 nodes 列表的 parent_of 映射，零额外查询。
+    旧实现逐节点 row() 每次新开连接（约 50ms/次），2650 概念 ≈ 135s；
+    现改为单批 rows() + 内存映射，彻底消除 N 次连接。
+    """
     ensure_seed(subject)
     nodes = rows("SELECT * FROM concepts WHERE subject = ? ORDER BY id", (subject,))
-    # level 纯内存推导：逐节点 row() 每次新开 SQLite 连接（约 50ms/次），
-    # N 个节点 = N 次连接，是图谱接口分钟级延迟的头号元凶（2650 概念 ≈ 135s）
     parent_of = {n["id"]: n["parent_id"] for n in nodes}
     for n in nodes:
         n["level"] = _level_from_parents(n["parent_id"], parent_of)
@@ -130,6 +194,71 @@ def load_graph(subject: str = "physics") -> dict[str, Any]:
         (subject,),
     )
     return {"nodes": nodes, "links": links, "subject": subject}
+
+
+def export_seed(subject: str, target_path: Path | None = None) -> Path:
+    """把库内某学科的概念图谱导出为 seed_concepts_<subject>.json 形状（内容闭环）。
+
+    重建单元/章节/概念的层级结构（按 parent_id/chapter_id），并带出先修边。
+    兼容两种库内结构：标准 3 层（单元→章→概念，概念为 level 2）与扁平 2 层
+    （单元→概念，概念 level 1、chapter_id 直接指向单元）。后者会为每个单元合成一个
+    「概念」章节收纳其直接子概念，保证种子文件可被子话题加载器正确解析。
+    user_edited=1 的概念也会被导出（用户编辑应可反哺标准种子）。
+    返回写出的文件路径。
+    """
+    g = load_graph(subject)
+    nodes = {n["id"]: n for n in g["nodes"]}
+    links = g["links"]
+    id_to_name = {n["id"]: n["name"] for n in g["nodes"]}
+    # 先修边：concept_b 的先修 = concept_a
+    prereq_of: dict[int, list[int]] = {}
+    for lk in links:
+        if lk["relation"] == "prerequisite":
+            prereq_of.setdefault(lk["concept_b"], []).append(lk["concept_a"])
+
+    units: dict[str, dict] = {}        # unit_name -> {name, chapters:[{name, concepts:[]}]}
+    unit_of: dict[str, str] = {}       # chapter_name -> unit_name
+
+    def get_unit(unit_name: str) -> dict:
+        if unit_name not in units:
+            units[unit_name] = {"name": unit_name, "chapters": []}
+        return units[unit_name]
+
+    def get_chapter(unit_name: str, ch_name: str) -> dict:
+        u = get_unit(unit_name)
+        for c in u["chapters"]:
+            if c["name"] == ch_name:
+                return c
+        c = {"name": ch_name, "concepts": []}
+        u["chapters"].append(c)
+        return c
+
+    for n in g["nodes"]:
+        if n["level"] == _LEVEL_UNIT:
+            get_unit(n["name"])
+            continue
+        ch = nodes.get(n["chapter_id"])
+        # 概念归属：chapter_id 指向的节点若是单元(level0)，说明是 2 层结构，
+        # 合成「概念」章节收纳；否则归入真实章节。
+        if ch and ch["level"] == _LEVEL_UNIT:
+            unit_name = ch["name"]
+            ch_name = f"{unit_name}·概念"
+        elif ch:
+            unit_name = nodes.get(ch["parent_id"], {}).get("name") or ch["name"]
+            ch_name = ch["name"]
+        else:
+            unit_name = nodes.get(n["parent_id"], {}).get("name") or "未分类"
+            ch_name = "概念"
+        concept_obj: dict[str, Any] = {"n": n["name"], "d": n["difficulty"]}
+        pres = prereq_of.get(n["id"], [])
+        if pres:
+            concept_obj["p"] = [id_to_name[p] for p in pres if p in id_to_name]
+        get_chapter(unit_name, ch_name)["concepts"].append(concept_obj)
+
+    out = {"version": 1, "subject": subject, "units": list(units.values())}
+    path = target_path or subject_seed_path(subject)
+    path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
 
 
 def _level_from_parents(parent_id: int, parent_of: dict[int, int]) -> int:
@@ -351,8 +480,13 @@ def problems_for_concepts(concept_ids: list[int], limit: int = 100) -> list[dict
         return [dict(r) for r in cur.fetchall()]
 
 
-def add_concept(name: str, parent_id: int = 0, subject: str = "physics") -> int | None:
-    """用户新增概念（user_edited=1，不回写 seed）。parent_id 为章节点 id。"""
+def add_concept(name: str, parent_id: int = 0, subject: str = "physics",
+                source: str = "import") -> int | None:
+    """用户/向导新增概念（user_edited=1，不回写 seed）。
+
+    source 标记来源：import=用户手动/批量导入，rag=资料导入向导提取，ai=AI 生成。
+    parent_id 为章节点 id。
+    """
     name = str(name).strip()
     if not name:
         return None
@@ -370,9 +504,9 @@ def add_concept(name: str, parent_id: int = 0, subject: str = "physics") -> int 
     with DB_LOCK, db() as conn:
         try:
             cursor = conn.execute(
-                "INSERT INTO concepts(name, parent_id, chapter_id, difficulty, user_edited, created_at, subject) "
-                "VALUES (?, ?, ?, 0.5, 1, ?, ?)",
-                (name, parent_id, chapter_id, now(), subject),
+                "INSERT INTO concepts(name, parent_id, chapter_id, difficulty, user_edited, created_at, subject, source) "
+                "VALUES (?, ?, ?, 0.5, 1, ?, ?, ?)",
+                (name, parent_id, chapter_id, now(), subject, source),
             )
         except Exception as exc:
             LOG.warning("新增概念失败（可能重名）: %s", exc)

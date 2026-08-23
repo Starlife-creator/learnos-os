@@ -1,6 +1,6 @@
-"""题库模块：内置物理练习题库 + 答题判分 + 答错自动入错题库。
+"""题库模块：内置练习题库 + 答题判分 + 答错自动入错题库。
 
-- 题库内容来自 data/seed_questions.json（只读，不落库）。
+- 题库内容来自 data/seed_questions_<id>.json（只读，不落库）。
 - 答题记录/进度存入 bank_attempts / bank_problems 表。
 - 答错时自动在错题库（problems 表）建档并安排明日复习；答对仅记录进度。
 零第三方依赖；题库文件缺失时整体降级为空题库。
@@ -17,14 +17,13 @@ from typing import Any
 from config import LOG
 from db import DB_LOCK, db, now, rows
 
-BANK_FILE = Path(__file__).resolve().parent / "data" / "seed_questions.json"
 CUSTOM_FILE = Path(__file__).resolve().parent / "data" / "bank_custom.json"
 _BANK: dict[str, dict[str, Any]] = {}
 """学科 -> 题库缓存（内置 + 用户自定义）。"""
 
-# 学科：id -> 内置题库文件名（physics 沿用旧文件名保持兼容）
+# 所有学科（含内置三科）统一使用 seed_questions_<id>.json；physics 旧用 seed_questions.json，保留兼容读取。
 SUBJECT_BANKS: dict[str, str] = {
-    "physics": "seed_questions.json",
+    "physics": "seed_questions_physics.json",
     "chemistry": "seed_questions_chemistry.json",
     "math": "seed_questions_math.json",
 }
@@ -49,9 +48,15 @@ def _bank_file(subject: str) -> Path:
 
 
 def _custom_file(subject: str) -> Path:
-    if subject == "physics":
-        return CUSTOM_FILE  # 旧文件沿用，避免自定义题丢失
+    """用户自定义题库路径：统一为 bank_custom_<id>.json。"""
     return Path(__file__).resolve().parent / "data" / f"bank_custom_{subject}.json"
+
+
+def _legacy_custom_file(subject: str) -> Path | None:
+    """仅 physics：返回旧 bank_custom.json 路径（若存在），用于兼容读取。"""
+    if subject != "physics":
+        return None
+    return CUSTOM_FILE if CUSTOM_FILE.is_file() else None
 
 
 def load_bank(subject: str = "physics") -> dict[str, Any]:
@@ -99,6 +104,7 @@ def find_question(qid: str, subject: str = "physics") -> dict[str, Any]:
 
 
 def _load_custom_questions(subject: str = "physics") -> list[dict[str, Any]]:
+    # 优先读统一命名的新文件 bank_custom_<id>.json
     try:
         data = json.loads(_custom_file(subject).read_text("utf-8"))
         if isinstance(data, list):
@@ -107,6 +113,17 @@ def _load_custom_questions(subject: str = "physics") -> list[dict[str, Any]]:
             return data["questions"]
     except (OSError, ValueError, json.JSONDecodeError):
         pass
+    # 兼容旧 physics 文件 bank_custom.json
+    legacy = _legacy_custom_file(subject)
+    if legacy:
+        try:
+            data = json.loads(legacy.read_text("utf-8"))
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict) and isinstance(data.get("questions"), list):
+                return data["questions"]
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
     return []
 
 
@@ -116,6 +133,13 @@ def _write_custom(questions: list[dict[str, Any]], subject: str = "physics") -> 
     tmp = target.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), "utf-8")
     os.replace(tmp, target)
+    # 兼容迁移：若旧 physics 文件 bank_custom.json 仍存在，写入新文件后删除旧文件
+    legacy = _legacy_custom_file(subject)
+    if legacy and legacy.is_file():
+        try:
+            legacy.unlink()
+        except OSError:
+            pass
 
 
 def import_questions(items: Any, subject: str = "physics") -> dict[str, Any]:

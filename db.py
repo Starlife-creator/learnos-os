@@ -537,6 +537,21 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (23, ?)", (now(),))
         LOG.info("数据库已迁移到 v23 (concepts.explanation 概念详解)")
 
+    # v24: 概念来源标记 + 种子版本表 — 区分 seed/import/ai/rag，支持种子升级提示
+    if current < 24:
+        ccols = {r[1] for r in conn.execute("PRAGMA table_info(concepts)").fetchall()}
+        if "source" not in ccols:
+            conn.execute("ALTER TABLE concepts ADD COLUMN source TEXT NOT NULL DEFAULT 'unknown'")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS seed_versions (
+                subject TEXT PRIMARY KEY,
+                seed_version INTEGER NOT NULL DEFAULT 0,
+                applied_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (24, ?)", (now(),))
+        LOG.info("数据库已迁移到 v24 (concepts.source + seed_versions)")
+
 
 # 内置三科的中文显示名（title）；user 自定义过的中文 title 不会被覆盖。
 _BUILTIN_SUBJECT_TITLES = {
@@ -553,6 +568,7 @@ def register_builtin_subjects() -> None:
     也会补成中文（仅当 title 还是英文 id 时才改，避免覆盖用户自定义的中文名）。
     """
     from config import BUNDLE_ROOT
+    import json as _json
     with DB_LOCK, db() as conn:
         for sid in ("physics", "chemistry", "math"):
             conn.execute(
@@ -564,9 +580,26 @@ def register_builtin_subjects() -> None:
                 "UPDATE subjects SET title = ? WHERE id = ? AND title = ?",
                 (_BUILTIN_SUBJECT_TITLES[sid], sid, sid),
             )
+            # 登记内置三科的种子版本，避免 seed_status 误报 needs_update
+            seed_name = {"physics": "seed_concepts.json",
+                         "chemistry": "seed_concepts_chemistry.json",
+                         "math": "seed_concepts_math.json"}.get(sid, f"seed_concepts_{sid}.json")
+            seed_path = BUNDLE_ROOT / "data" / seed_name
+            ver = 0
+            if seed_path.is_file():
+                try:
+                    ver = int((_json.loads(seed_path.read_text(encoding="utf-8")) or {}).get("version", 0) or 0)
+                except (OSError, ValueError, _json.JSONDecodeError):
+                    ver = 0
+            conn.execute(
+                "INSERT INTO seed_versions(subject, seed_version, applied_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(subject) DO UPDATE SET seed_version=excluded.seed_version, applied_at=excluded.applied_at",
+                (sid, ver, now()),
+            )
     seed_dir = BUNDLE_ROOT / "data"
     if not seed_dir.is_dir():
         return
+    import json as _json
     with DB_LOCK, db() as conn:
         for p in sorted(seed_dir.glob("seed_concepts_*.json")):
             sid = p.stem[len("seed_concepts_"):]
@@ -577,6 +610,16 @@ def register_builtin_subjects() -> None:
             conn.execute(
                 "INSERT OR IGNORE INTO subjects(id, title, builtin, created_at) VALUES (?, ?, 0, ?)",
                 (sid, sid, now()),
+            )
+            # 登记种子版本，使 seed_status 能识别"已是最新"
+            try:
+                ver = int((_json.loads(p.read_text(encoding="utf-8")) or {}).get("version", 0) or 0)
+            except (OSError, ValueError, _json.JSONDecodeError):
+                ver = 0
+            conn.execute(
+                "INSERT INTO seed_versions(subject, seed_version, applied_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(subject) DO UPDATE SET seed_version=excluded.seed_version, applied_at=excluded.applied_at",
+                (sid, ver, now()),
             )
 
 

@@ -105,6 +105,7 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         (r"/api/social/checkins", "_handle_social_checkins"),
         (r"/api/social/streak", "_handle_social_streak"),
         (r"/api/export/social", "_handle_export_social"),
+        (r"/api/export/seed", "_handle_export_seed"),
     ]
 
     POST_ROUTES: list[tuple[str, str, bool]] = [
@@ -134,6 +135,7 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         (r"/api/import", "_handle_import", True),
         (r"/api/import/restore", "_handle_backup_restore", True),
         (r"/api/export/challenge", "_handle_export_challenge", False),
+        (r"/api/export/seed", "_handle_export_seed", True),
         (r"/api/settings/test", "_handle_settings_test", True),
         (r"/api/fsrs/train", "_handle_fsrs_train", False),
         (r"/api/fsrs/retention", "_handle_fsrs_retention", True),
@@ -432,13 +434,58 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         self.json_response(bank.stats(self.subject))
 
     def _handle_subjects(self) -> None:
-        """学科列表：注册表（内置三科 + 种子学科 + 网页端自建）。"""
+        """学科列表：注册表（内置三科 + 种子学科 + 网页端自建）。
+
+        附带每科的统计：概念数、题库题数、是否有种子图谱、是否需要种子升级。
+        前端据此对「无图谱/无题库」学科显示明确空状态徽标，而非静默空白。
+        """
+        import graph
+        import bank
         subjects = list_subjects()
         for s in subjects:
-            s.setdefault("title", s["id"])
+            sid = s["id"]
+            s.setdefault("title", sid)
             if not s["title"]:
-                s["title"] = s["id"]
+                s["title"] = sid
+            # 概念数
+            with DB_LOCK, db() as conn:
+                s["concept_count"] = conn.execute(
+                    "SELECT COUNT(*) FROM concepts WHERE subject = ?", (sid,)
+                ).fetchone()[0]
+            # 题库题数（种子+自定义合并）
+            try:
+                s["question_count"] = len(bank.load_bank(sid).get("questions", []))
+            except Exception:
+                s["question_count"] = 0
+            # 种子图谱状态
+            st = graph.seed_status(sid)
+            s["has_seed_graph"] = st["has_seed_file"]
+            s["seed_needs_update"] = st["needs_update"]
         self.json_response({"subjects": subjects, "current": self.subject})
+
+    def _handle_export_seed(self, data: dict[str, Any]) -> None:
+        """POST /api/export/seed：把库内某学科图谱导出为 seed_concepts_<subject>.json（内容闭环）。
+
+        body: {subject?}；默认当前学科。写出到 data/ 下，返回路径与概念数。
+        注意：导出的种子文件进 git（data/ 不忽略），可被其他克隆复用；但写库数据（explanation 等）
+        不随种子导出，需另行备份 learnos.db。
+        """
+        import graph
+        subject = self._subject_of(data)
+        if not subject:
+            self.json_response({"error": "缺少 subject"}, 400)
+            return
+        try:
+            path = graph.export_seed(subject)
+        except Exception as exc:
+            self.json_response({"error": f"导出失败: {exc}"}, 500)
+            return
+        self.json_response({
+            "ok": True,
+            "subject": subject,
+            "path": str(path),
+            "concept_count": len(graph.load_graph(subject)["nodes"]),
+        })
 
     # ── 学科渲染配置（§29）──
     def _handle_render_config(self) -> None:
