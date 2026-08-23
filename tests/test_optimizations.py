@@ -170,23 +170,23 @@ class TestSubjectAdmin(unittest.TestCase):
 
     def test_add_and_delete_subject(self):
         status, data = self._request("POST", "/api/subjects",
-                                     {"id": "biology", "title": "生物"})
+                                     {"id": "zztemp_delme", "title": "临时测试学科"})
         self.assertEqual(status, 201)
         _, listing = self._request("GET", "/api/subjects")
-        entry = next(s for s in listing["subjects"] if s["id"] == "biology")
-        self.assertEqual(entry["title"], "生物")
+        entry = next(s for s in listing["subjects"] if s["id"] == "zztemp_delme")
+        self.assertEqual(entry["title"], "临时测试学科")
         self.assertFalse(entry["builtin"])
         # 重复添加 → 409
-        status, _, = self._request("POST", "/api/subjects", {"id": "biology"})
+        status, _, = self._request("POST", "/api/subjects", {"id": "zztemp_delme"})
         self.assertEqual(status, 409)
         # 非法 id → 400
         status, _ = self._request("POST", "/api/subjects", {"id": "1bad id"})
         self.assertEqual(status, 400)
         # 无数据自建学科可删除
-        status, data = self._request("DELETE", "/api/subjects/biology")
+        status, data = self._request("DELETE", "/api/subjects/zztemp_delme")
         self.assertEqual(status, 200)
         _, listing = self._request("GET", "/api/subjects")
-        self.assertNotIn("biology", {s["id"] for s in listing["subjects"]})
+        self.assertNotIn("zztemp_delme", {s["id"] for s in listing["subjects"]})
 
     def test_builtin_and_data_protection(self):
         status, _ = self._request("DELETE", "/api/subjects/physics")
