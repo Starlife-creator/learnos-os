@@ -77,7 +77,13 @@ async function loadSubjectsAdmin() {
           <span class="text-muted text-sm">${escapeHtml(s.id)}</span>
         </span>
         ${s.builtin ? `<span class="tag tag-gray">${t('set.subjBuiltin')}</span>`
-                    : `<button class="btn btn-secondary btn-sm" onclick="deleteSubject('${escapeHtml(s.id)}')">${t('set.subjDelete')}</button>`}
+                    : `<select id="scope-${escapeHtml(s.id)}" class="form-control form-control-sm" style="width:auto">
+                         <option value="full">${t('set.scopeFull')}</option>
+                         <option value="graph">${t('set.scopeGraph')}</option>
+                         <option value="bank">${t('set.scopeBank')}</option>
+                         <option value="personal">${t('set.scopePersonal')}</option>
+                       </select>
+                       <button class="btn btn-secondary btn-sm" onclick="deleteSubject('${escapeHtml(s.id)}')">${t('set.subjDelete')}</button>`}
       </div>`).join('');
   } catch(e) { /* 静默：列表加载失败不阻塞设置页 */ }
 }
@@ -98,9 +104,14 @@ async function addSubject() {
 }
 
 async function deleteSubject(id) {
-  if (!confirm(t('set.subjConfirm').replace('{s}', id))) return;
+  const sel = document.getElementById('scope-' + id);
+  const scope = sel ? sel.value : 'full';
+  const msg = t('set.subjConfirm')
+    .replace('{s}', id)
+    .replace('{scope}', t('set.scope_' + scope) || scope);
+  if (!confirm(msg)) return;
   try {
-    await api('/api/subjects/' + encodeURIComponent(id), { method: 'DELETE' });
+    await api('/api/subjects/' + encodeURIComponent(id) + '?scope=' + encodeURIComponent(scope), { method: 'DELETE' });
     toast(t('set.subjDeleted').replace('{s}', id));
     loadSubjectsAdmin();
     loadSubjectOptions(document.getElementById('setDefaultSubject'));

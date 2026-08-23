@@ -188,16 +188,63 @@ class TestSubjectAdmin(unittest.TestCase):
         _, listing = self._request("GET", "/api/subjects")
         self.assertNotIn("zztemp_delme", {s["id"] for s in listing["subjects"]})
 
-    def test_builtin_and_data_protection(self):
+    def test_builtin_rejected(self):
+        # 内置学科任何 scope 均拒绝
         status, _ = self._request("DELETE", "/api/subjects/physics")
-        self.assertEqual(status, 400)  # 内置不可删
+        self.assertEqual(status, 400)
+        status, _ = self._request("DELETE", "/api/subjects/physics?scope=graph")
+        self.assertEqual(status, 400)
+
+    def test_unknown_scope_rejected(self):
+        self._request("POST", "/api/subjects", {"id": "zzscopetest"})
+        status, data = self._request("DELETE", "/api/subjects/zzscopetest?scope=bogus")
+        self.assertEqual(status, 400)
+        self.assertIn("scope", data["error"])
+        self._request("DELETE", "/api/subjects/zzscopetest")  # 清理
+
+    def test_scope_partial_deletion(self):
+        """分层删除：各 scope 仅清对应维度，其余维度保留。"""
+        sid = "zzscopetest"
+        self._request("POST", "/api/subjects", {"id": sid})
+        # 注入三类数据
+        self._request("POST", "/api/problems",
+                      {"title": "p", "content": "c", "course": "x", "topic": "t",
+                       "error_type": "概念不清", "subject": sid})
+
+        # 1) personal：只删 problems，学科容器仍在
+        status, data = self._request("DELETE", f"/api/subjects/{sid}?scope=personal")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["scope"], "personal")
+        self.assertIn("problems", data["deleted"])
+        # 学科本身未被删
+        _, listing = self._request("GET", "/api/subjects")
+        self.assertIn(sid, {s["id"] for s in listing["subjects"]})
+
+        # 2) bank：删 bank_problems/bank_scores（此处 0 行，验证不报错且 scope 正确）
+        status, data = self._request("DELETE", f"/api/subjects/{sid}?scope=bank")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["scope"], "bank")
+
+        # 3) full：删学科一切（含 subjects 行）
+        status, data = self._request("DELETE", f"/api/subjects/{sid}?scope=full")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["scope"], "full")
+        self.assertIn("subjects", data["deleted"])
+        _, listing = self._request("GET", "/api/subjects")
+        self.assertNotIn(sid, {s["id"] for s in listing["subjects"]})
+
+    def test_full_delete_with_data_is_allowed(self):
+        """有数据时 full 删除允许级联清空（不再返回 409）。"""
         self._request("POST", "/api/subjects", {"id": "history"})
         conn_body = {"title": "h", "content": "c", "course": "x", "topic": "t",
                      "error_type": "概念不清", "subject": "history"}
         self._request("POST", "/api/problems", conn_body)
-        status, data = self._request("DELETE", "/api/subjects/history")
-        self.assertEqual(status, 409)  # 有数据阻止
-        self.assertIn("problems", data["error"])
+        status, data = self._request("DELETE", "/api/subjects/history?scope=full")
+        self.assertEqual(status, 200)
+        self.assertIn("problems", data["deleted"])
+        # 学科已注销
+        _, listing = self._request("GET", "/api/subjects")
+        self.assertNotIn("history", {s["id"] for s in listing["subjects"]})
 
 
 if __name__ == "__main__":

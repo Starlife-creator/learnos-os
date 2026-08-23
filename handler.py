@@ -582,8 +582,27 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         LOG.info("新增学科: %s (%s)", sid, title)
         self.json_response({"ok": True, "subject": {"id": sid, "title": title, "builtin": False}}, 201)
 
+    # 各 scope 对应的待删表（按依赖顺序：先子后父）
+    _SUBJECT_SCOPE_TABLES: dict[str, list[str]] = {
+        # 图谱维度：概念节点 + 先修/关联边 + 种子版本标记
+        "graph": ["concept_links", "concepts", "seed_versions"],
+        # 题库维度：题目 + 评分
+        "bank": ["bank_scores", "bank_problems"],
+        # 个人学习数据维度：错题本/口试 + 掌握度日志 + 打卡
+        "personal": ["study_checkins", "mastery_log", "problems"],
+    }
+
     def _handle_delete_subject(self, subject_id: str) -> None:
-        """删除自建学科：内置不可删；已有数据（错题/概念/题库作答）时阻止。"""
+        """删除学科数据，支持按 scope 分层：
+
+        - scope=full（默认）：删该学科一切（subjects + 全部维度），等同于注销学科。
+        - scope=graph：只删图谱（concepts/concept_links/seed_versions），保留题库与个人数据。
+        - scope=bank：只删题库（bank_problems/bank_scores）。
+        - scope=personal：只删个人学习数据（problems/mastery_log/study_checkins）。
+
+        内置学科（builtin）任何 scope 均拒绝。full 以外的 scope 不删 subjects 行本身
+        （学科容器保留，仅清空所选维度）；仅 full 才会移除学科注册。
+        """
         info = row("SELECT id, builtin FROM subjects WHERE id = ?", (subject_id,))
         if not info:
             self.json_response({"error": "学科不存在"}, 404)
@@ -591,22 +610,39 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         if info["builtin"]:
             self.json_response({"error": "内置学科不可删除"}, 400)
             return
-        counts: dict[str, int] = {}
-        for name, sql in (
-            ("problems", "SELECT COUNT(*) AS c FROM problems WHERE subject = ?"),
-            ("concepts", "SELECT COUNT(*) AS c FROM concepts WHERE subject = ?"),
-            ("bank_problems", "SELECT COUNT(*) AS c FROM bank_problems WHERE subject = ?"),
-        ):
-            counts[name] = int(row(sql, (subject_id,))["c"])
-        if any(counts.values()):
-            detail = "、".join(f"{k} {v}" for k, v in counts.items() if v)
-            self.json_response({"error": f"该学科仍有数据（{detail}），请先清空后再删除"}, 409)
+        # 解析 scope（允许 ?scope= 传参）
+        qs = parse_qs(urlparse(self.path).query)
+        scope = (qs.get("scope", ["full"])[0] or "full").strip().lower()
+        if scope not in ("full", "graph", "bank", "personal"):
+            self.json_response({"error": "未知 scope，仅支持 full/graph/bank/personal"}, 400)
             return
+
+        if scope == "full":
+            tables = ["concept_links", "concepts", "seed_versions",
+                      "bank_scores", "bank_problems",
+                      "study_checkins", "mastery_log", "problems", "subjects"]
+        else:
+            tables = self._SUBJECT_SCOPE_TABLES[scope]
+
+        deleted: dict[str, int] = {}
         with DB_LOCK, db() as conn:
-            conn.execute("DELETE FROM subjects WHERE id = ?", (subject_id,))
-        auth.audit("delete_subject", ip=self._client_ip(), detail=subject_id)  # R5 审计
-        LOG.info("删除学科: %s", subject_id)
-        self.json_response({"ok": True})
+            for tbl in tables:
+                if tbl == "subjects":
+                    cur = conn.execute("DELETE FROM subjects WHERE id = ?", (subject_id,))
+                elif tbl == "concept_links":
+                    # concept_links 无 subject 列，经 concepts 子查询定位该学科节点
+                    cur = conn.execute(
+                        "DELETE FROM concept_links WHERE concept_a IN "
+                        "(SELECT id FROM concepts WHERE subject = ?) "
+                        "OR concept_b IN (SELECT id FROM concepts WHERE subject = ?)",
+                        (subject_id, subject_id))
+                else:
+                    cur = conn.execute(f"DELETE FROM {tbl} WHERE subject = ?", (subject_id,))
+                deleted[tbl] = cur.rowcount
+        auth.audit("delete_subject", ip=self._client_ip(),
+                   detail=f"{subject_id}|scope={scope}")  # R5 审计
+        LOG.info("删除学科数据: %s scope=%s %s", subject_id, scope, deleted)
+        self.json_response({"ok": True, "scope": scope, "deleted": deleted})
 
     def _handle_global_search(self) -> None:
         """全局搜索（Ctrl+K）：跨错题/概念/题库/RAG 文档，各组最多 6 条。"""
