@@ -489,66 +489,181 @@
 
   <!-- ── 帮助页 ── -->
   <div id="page-help" class="page">
-    <h2 style="font-size:18px;margin-bottom:14px" data-i18n="help.title">功能帮助</h2>
-    <div class="card">
+    <div class="help-head">
+      <h2 style="font-size:18px;margin-bottom:4px" data-i18n="help.title">功能帮助</h2>
       <p class="text-sm text-muted" data-i18n="help.intro">LearnOS 是本地优先的个人学习系统：记录尝试 → 分级提示 → 主动回忆 → 间隔复习 → 口试检验。所有数据保存在本机数据库，不依赖云端；AI 为可选增强，未配置时各模块自动降级。</p>
+      <div class="help-search">
+        <span class="help-search-icon">🔍</span>
+        <input id="helpSearch" type="search" placeholder="搜索帮助：概览 / 题库 / FSRS / 导入…" data-i18n-ph="help.searchPh" oninput="helpFilter()" aria-label="搜索帮助">
+        <button class="btn btn-sm btn-secondary" onclick="startHelpTour()" data-i18n="help.tourBtn">新手引导</button>
+      </div>
     </div>
-    <div class="card mt-16">
-      <div class="card-title" data-i18n="help.quick.t">快速上手（五步学习循环）</div>
-      <p class="text-sm" data-i18n="help.quick.b">① 「设置」页配置 AI 接口（OpenAI 兼容，本地 Ollama 亦可）→ ② 「题库」练习或「错题」页录入错题 → ③ 「复习」页按时复习并评分 → ④ 「口试」检验真正理解 → ⑤ 「概览」页跟踪趋势与薄弱点。建议每天从「概览」的今日行动开始。</p>
-    </div>
-    <div class="card mt-16">
-      <div class="card-title" data-i18n="help.dashboard.t">概览与今日行动</div>
-      <p class="text-sm" data-i18n="help.dashboard.b">展示待复习数、掌握度、未来 7 天复习压力、记忆保持曲线与错因分布。今日行动是统一学习队列：到期复习 → 薄弱概念口试 → 错题巩固 → 题库练习，按优先级逐项推进。顽固错题（重复出错 ≥2 次）单独列出。全局搜索：Ctrl+K 跨错题/概念/题库/资料直达。</p>
-    </div>
-    <div class="card mt-16">
-      <div class="card-title" data-i18n="help.bank.t">题库练习</div>
-      <p class="text-sm" data-i18n="help.bank.b">按学科/单元选择题目练习，作答即时判定对错并记录。答错的题可一键转入错题簿（带题干与解析）；题库状态分三种：未做 / 已入错题 / 最近答对。支持 JSON 批量导入自选题，也支持用「资料导入向导」从教材自动提取例题。</p>
-    </div>
-    <div class="card mt-16">
-      <div class="card-title" data-i18n="help.problems.t">错题管理</div>
-      <p class="text-sm" data-i18n="help.problems.b1">录入错题时填写：题目、自己的尝试、错误类型、陷阱笔记——「错在哪里」比答案更有价值。支持拍照上传，AI 识别生成草稿（需 vision 模型），确认后才保存。</p>
-      <p class="text-sm mt-8" data-i18n="help.problems.b2">四级提示逐步引导：1 概念检查（只指出方向）→ 2 解题方向 → 3 解题框架 → 4 完整解析（附「自己重做一遍」引导）。上次复习失败时一级提示会附加诊断建议。「举一反三」可生成 3 道变式题，草稿确认后保存；AI 打标签同样是草稿确认制。列表支持卡片/表格两种视图（表格可按任意列排序）与保存的筛选器（组合条件起名保存、一键切换）。</p>
-    </div>
-    <div class="card mt-16">
-      <div class="card-title" data-i18n="help.review.t">间隔复习</div>
-      <p class="text-sm" data-i18n="help.review.b">默认 FSRS-6 算法（内置实现，不可用时自动降级 SM-2），在最佳遗忘点安排复习。回忆后按四档评分：忘记 / 模糊 / 想起 / 秒答——评分越诚实，调度越准。队列按优先级排序：逾期久 > 掌握度低 > 带漏点，同知识点自动交错；可在设置中设每日上限防止爆量。逾期复习按间隔减半顺延；「估算最优保持率」会基于你的卡量模拟工作量/记忆量平衡给出推荐值，样本够多还可训练个人化参数。</p>
-    </div>
-    <div class="card mt-16">
-      <div class="card-title" data-i18n="help.oral.t">口试与费曼自评</div>
-      <p class="text-sm" data-i18n="help.oral.b">选一个知识点，AI 五轮追问层层深入，检验能否用自己的话讲清概念。口试与提示会自动注入学习者画像（薄弱点/高频错因/目标），追问方向动态偏向你的薄弱区。口试结束后可让 AI 生成口述卡片草稿存入错题。费曼模式配合自评表使用：先自己讲，再对照评分。</p>
-    </div>
-    <div class="card mt-16">
-      <div class="card-title" data-i18n="help.graph.t">知识图谱</div>
-      <p class="text-sm" data-i18n="help.graph.b">独立页（更多 ▾ → 图谱）可视化概念层级、先修关系与掌握度：绿=已掌握、黄=学习中、红=薄弱。概念支持设置别名（如 N2L = 牛顿第二定律）。错题页的「未链接提及」会自动扫描错题文本中出现但未绑定的概念（含别名），一键确认绑定，让掌握度统计更准。概念可手动增删。</p>
-    </div>
-    <div class="card mt-16">
-      <div class="card-title" data-i18n="help.rag.t">教材库（RAG）</div>
-      <p class="text-sm" data-i18n="help.rag.b">把工作区内的教材/课件/笔记（md/txt/pdf）摄取进资料库后，AI 提示与解答会自动引用你的资料片段（来源可点开）。支持 BM25/FTS5 搜索；删除可撤销。扫描版试卷可用 OCR 卡片提取文本。</p>
-    </div>
-    <div class="card mt-16">
-      <div class="card-title" data-i18n="help.material.t">资料导入向导</div>
-      <p class="text-sm" data-i18n="help.material.b">教材库页顶部。上传 md/txt 文件（最大 100MB）或选已摄取文档 → 勾选目标（概念图谱 / 例题入题库 / 识别为试卷）→ AI 提取草稿 → 逐项勾选确认 → 导入。分段大小按你设置的模型上下文自适应，超长文本自动分段全覆盖（预计调用次数多时会先确认）。全程草稿预览不静默落库；未配置 AI 时按标题层级降级提取概念。</p>
-    </div>
-    <div class="card mt-16">
-      <div class="card-title" data-i18n="help.exam.t">考试就绪度</div>
-      <p class="text-sm" data-i18n="help.exam.b">录入你的真题试卷（或用导入向导整卷识别），把题目关联到错题，系统按知识点统计该卷的就绪度：绿 ≥80% / 黄 ≥60% / 红 <60%，并给出优先补弱清单。</p>
-    </div>
-    <div class="card mt-16">
-      <div class="card-title" data-i18n="help.subject.t">学科管理</div>
-      <p class="text-sm" data-i18n="help.subject.b">右上角切换当前学科，图谱/题库/错题/复习全部按学科隔离。设置页「学科管理」可新增自建学科（支持中文显示名）或删除空学科；内置物理/化学/数学不可删。放入 data/seed_concepts_&lt;id&gt;.json 可为新学科预置概念图谱。</p>
-    </div>
-    <div class="card mt-16">
-      <div class="card-title" data-i18n="help.ai.t">AI 配置与隐私</div>
-      <p class="text-sm" data-i18n="help.ai.b">设置页填写 OpenAI 兼容接口（api_base / key / 模型，可分 fast 轻量与 heavy 推理档）。API Key 绝不写入数据库：优先环境变量，其次 AES-GCM 加密密钥库（主密码），再次会话内存；日志自动脱敏。AI 未配置或失败时：提示降级为本地模板、变式降级离线生成、识别降级附件模式——主流程始终可用。</p>
-    </div>
-    <div class="card mt-16">
-      <div class="card-title" data-i18n="help.data.t">数据备份与导出</div>
-      <p class="text-sm" data-i18n="help.data.b">概览页「导出数据」生成 JSON（题目+提示+复习记录）；导入前自动备份数据库。每天首次运行自动备份到 backups/（保留 7 份）。数据库为本机 learnos.db，可随时复制迁移。</p>
-    </div>
-  </div>
 
-  <!-- ── 设置页 ── -->
+    <div class="help-layout">
+      <aside class="help-toc" id="helpToc">
+        <div class="help-toc-title" data-i18n="help.toc">目录</div>
+        <a class="help-toc-link" data-target="help-quick">① 快速上手（五步循环）</a>
+        <a class="help-toc-link" data-target="help-dashboard">概览与今日行动</a>
+        <a class="help-toc-link" data-target="help-bank">题库练习</a>
+        <a class="help-toc-link" data-target="help-problems">错题管理</a>
+        <a class="help-toc-link" data-target="help-review">间隔复习 (FSRS)</a>
+        <a class="help-toc-link" data-target="help-oral">口试与费曼自评</a>
+        <a class="help-toc-link" data-target="help-graph">知识图谱</a>
+        <a class="help-toc-link" data-target="help-rag">教材库 (RAG)</a>
+        <a class="help-toc-link" data-target="help-material">资料导入向导</a>
+        <a class="help-toc-link" data-target="help-exam">考试就绪度</a>
+        <a class="help-toc-link" data-target="help-subject">学科管理</a>
+        <a class="help-toc-link" data-target="help-ai">AI 配置与隐私</a>
+        <a class="help-toc-link" data-target="help-data">数据备份与导出</a>
+      </aside>
+
+      <div class="help-content">
+        <details class="card help-item" id="help-quick" open>
+          <summary class="card-title help-item-title" data-i18n="help.quick.t">快速上手（五步学习循环）</summary>
+          <div class="help-item-body">
+            <p class="text-sm" data-i18n="help.quick.b">① 在「设置」页配置 AI 接口（OpenAI 兼容，本地 Ollama 亦可）→ ② 在「题库」练习或「错题」页录入错题 → ③ 在「复习」页按时复习并评分 → ④ 在「口试」检验真正理解 → ⑤ 在「概览」页跟踪趋势与薄弱点。建议每天从「概览」的今日行动开始。</p>
+            <div class="help-loop">
+              <svg viewBox="0 0 680 150" role="img" aria-label="五步学习循环">
+                <title>五步学习循环</title>
+                <desc>录入 → 提示 → 回忆 → 复习 → 口试 → 回到录入</desc>
+                <rect width="680" height="150" fill="transparent"/>
+                <g font-family="var(--font-sans,system-ui)">
+                  <rect x="14" y="45" width="108" height="58" rx="12" fill="var(--accent-light)" stroke="var(--accent)" stroke-width="1.5"/>
+                  <text x="68" y="72" font-size="13" font-weight="500", fill="var(--accent)" text-anchor="middle">① 录入</text>
+                  <text x="68" y="90" font-size="11" fill="var(--text-2)" text-anchor="middle">错题/题库</text>
+                  <rect x="148" y="45" width="108" height="58" rx="12" fill="var(--accent-light)" stroke="var(--accent)" stroke-width="1.5"/>
+                  <text x="202" y="72" font-size="13" font-weight="500" fill="var(--accent)" text-anchor="middle">② 提示</text>
+                  <text x="202" y="90" font-size="11" fill="var(--text-2)" text-anchor="middle">四级引导</text>
+                  <rect x="282" y="45" width="108" height="58" rx="12" fill="var(--accent-light)" stroke="var(--accent)" stroke-width="1.5"/>
+                  <text x="336" y="72" font-size="13" font-weight="500" fill="var(--accent)" text-anchor="middle">③ 回忆</text>
+                  <text x="336" y="90" font-size="11" fill="var(--text-2)" text-anchor="middle">主动作答</text>
+                  <rect x="416" y="45" width="108" height="58" rx="12" fill="var(--accent-light)" stroke="var(--accent)" stroke-width="1.5"/>
+                  <text x="470" y="72" font-size="13" font-weight="500" fill="var(--accent)" text-anchor="middle">④ 复习</text>
+                  <text x="470" y="90" font-size="11" fill="var(--text-2)" text-anchor="middle">FSRS 调度</text>
+                  <rect x="550" y="45" width="108" height="58" rx="12" fill="var(--accent-light)" stroke="var(--accent)" stroke-width="1.5"/>
+                  <text x="604" y="72" font-size="13" font-weight="500" fill="var(--accent)" text-anchor="middle">⑤ 口试</text>
+                  <text x="604" y="90" font-size="11" fill="var(--text-2)" text-anchor="middle">费曼检验</text>
+                  <path d="M122 74 L148 74" stroke="var(--text-2)" stroke-width="1.5" fill="none"/>
+                  <path d="M256 74 L282 74" stroke="var(--text-2)" stroke-width="1.5" fill="none"/>
+                  <path d="M390 74 L416 74" stroke="var(--text-2)" stroke-width="1.5" fill="none"/>
+                  <path d="M524 74 L550 74" stroke="var(--text-2)" stroke-width="1.5" fill="none"/>
+                  <path d="M604 103 C 604 140, 68 140, 68 105" stroke="var(--danger)" stroke-width="1.5" fill="none" stroke-dasharray="4 4"/>
+                </g>
+              </svg>
+              <div class="help-loop-actions">
+                <button class="btn btn-sm btn-secondary" onclick="switchPage('settings')">去「设置」配置 AI</button>
+                <button class="btn btn-sm btn-secondary" onclick="switchPage('bank')">去「题库」</button>
+                <button class="btn btn-sm btn-secondary" onclick="switchPage('problems')">去「错题」</button>
+                <button class="btn btn-sm btn-secondary" onclick="switchPage('review')">去「复习」</button>
+                <button class="btn btn-sm btn-secondary" onclick="switchPage('oral')">去「口试」</button>
+                <button class="btn btn-sm btn-secondary" onclick="switchPage('dashboard')">去「概览」</button>
+              </div>
+              <p class="text-sm text-muted mt-8" data-i18n="help.loopNote">诚实评分让调度更准 → 薄弱点回归录入/巩固。点击上方节点或按钮可直接跳转到对应页面。</p>
+            </div>
+          </div>
+        </details>
+
+        <details class="card help-item" id="help-dashboard">
+          <summary class="card-title help-item-title" data-i18n="help.dashboard.t">概览与今日行动</summary>
+          <div class="help-item-body">
+            <p class="text-sm" data-i18n="help.dashboard.b">展示待复习数、掌握度、未来 7 天复习压力、记忆保持曲线与错因分布。今日行动是统一学习队列：到期复习 → 薄弱概念口试 → 错题巩固 → 题库练习，按优先级逐项推进。顽固错题（重复出错 ≥2 次）单独列出。全局搜索：Ctrl+K 跨错题/概念/题库/资料直达。</p>
+            <button class="btn btn-sm btn-secondary mt-8" onclick="switchPage('dashboard')" data-i18n="help.goDashboard">打开「概览」</button>
+          </div>
+        </details>
+
+        <details class="card help-item" id="help-bank">
+          <summary class="card-title help-item-title" data-i18n="help.bank.t">题库练习</summary>
+          <div class="help-item-body">
+            <p class="text-sm" data-i18n="help.bank.b">按学科/单元选择题目练习，作答即时判定对错并记录。答错的题可一键转入错题簿（带题干与解析）；题库状态分三种：未做 / 已入错题 / 最近答对。支持 JSON 批量导入自选题，也支持用「资料导入向导」从教材自动提取例题。</p>
+            <button class="btn btn-sm btn-secondary mt-8" onclick="switchPage('bank')" data-i18n="help.goBank">打开「题库」</button>
+          </div>
+        </details>
+
+        <details class="card help-item" id="help-problems">
+          <summary class="card-title help-item-title" data-i18n="help.problems.t">错题管理</summary>
+          <div class="help-item-body">
+            <p class="text-sm" data-i18n="help.problems.b1">录入错题时填写：题目、自己的尝试、错误类型、陷阱笔记——「错在哪里」比答案更有价值。支持拍照上传，AI 识别生成草稿（需 vision 模型），确认后才保存。</p>
+            <p class="text-sm mt-8" data-i18n="help.problems.b2">四级提示逐步引导：1 概念检查（只指出方向）→ 2 解题方向 → 3 解题框架 → 4 完整解析（附「自己重做一遍」引导）。上次复习失败时一级提示会附加诊断建议。「举一反三」可生成 3 道变式题，草稿确认后保存；AI 打标签同样是草稿确认制。列表支持卡片/表格两种视图（表格可按任意列排序）与保存的筛选器（组合条件起名保存、一键切换）。</p>
+            <button class="btn btn-sm btn-secondary mt-8" onclick="switchPage('problems')" data-i18n="help.goProblems">打开「错题」</button>
+          </div>
+        </details>
+
+        <details class="card help-item" id="help-review">
+          <summary class="card-title help-item-title" data-i18n="help.review.t">间隔复习</summary>
+          <div class="help-item-body">
+            <p class="text-sm" data-i18n="help.review.b">默认 FSRS-6 算法（内置实现，不可用时自动降级 SM-2），在最佳遗忘点安排复习。回忆后按四档评分：忘记 / 模糊 / 想起 / 秒答——评分越诚实，调度越准。队列按优先级排序：逾期久 > 掌握度低 > 带漏点，同知识点自动交错；可在设置中设每日上限防止爆量。逾期复习按间隔减半顺延；「估算最优保持率」会基于你的卡量模拟工作量/记忆量平衡给出推荐值，样本够多还可训练个人化参数。</p>
+            <button class="btn btn-sm btn-secondary mt-8" onclick="switchPage('review')" data-i18n="help.goReview">打开「复习」</button>
+          </div>
+        </details>
+
+        <details class="card help-item" id="help-oral">
+          <summary class="card-title help-item-title" data-i18n="help.oral.t">口试与费曼自评</summary>
+          <div class="help-item-body">
+            <p class="text-sm" data-i18n="help.oral.b">选一个知识点，AI 五轮追问层层深入，检验能否用自己的话讲清概念。口试与提示会自动注入学习者画像（薄弱点/高频错因/目标），追问方向动态偏向你的薄弱区。口试结束后可让 AI 生成口述卡片草稿存入错题。费曼模式配合自评表使用：先自己讲，再对照评分。</p>
+            <button class="btn btn-sm btn-secondary mt-8" onclick="switchPage('oral')" data-i18n="help.goOral">打开「口试」</button>
+          </div>
+        </details>
+
+        <details class="card help-item" id="help-graph">
+          <summary class="card-title help-item-title" data-i18n="help.graph.t">知识图谱</summary>
+          <div class="help-item-body">
+            <p class="text-sm" data-i18n="help.graph.b">独立页（更多 ▾ → 图谱）可视化概念层级、先修关系与掌握度：绿=已掌握、黄=学习中、红=薄弱。概念支持设置别名（如 N2L = 牛顿第二定律）。错题页的「未链接提及」会自动扫描错题文本中出现但未绑定的概念（含别名），一键确认绑定，让掌握度统计更准。概念可手动增删。</p>
+            <button class="btn btn-sm btn-secondary mt-8" onclick="switchPage('graph')" data-i18n="help.goGraph">打开「图谱」</button>
+          </div>
+        </details>
+
+        <details class="card help-item" id="help-rag">
+          <summary class="card-title help-item-title" data-i18n="help.rag.t">教材库（RAG）</summary>
+          <div class="help-item-body">
+            <p class="text-sm" data-i18n="help.rag.b">把工作区内的教材/课件/笔记（md/txt/pdf）摄取进资料库后，AI 提示与解答会自动引用你的资料片段（来源可点开）。支持 BM25/FTS5 搜索；删除可撤销。扫描版试卷可用 OCR 卡片提取文本。</p>
+            <button class="btn btn-sm btn-secondary mt-8" onclick="switchPage('rag')" data-i18n="help.goRag">打开「教材库」</button>
+          </div>
+        </details>
+
+        <details class="card help-item" id="help-material">
+          <summary class="card-title help-item-title" data-i18n="help.material.t">资料导入向导</summary>
+          <div class="help-item-body">
+            <p class="text-sm" data-i18n="help.material.b">教材库页顶部。上传 md/txt ,文件（最大 100MB）或选已摄取文档 → 勾选目标（概念图谱 / 例题入题库 / 识别为试卷）→ AI 提取草稿 → 逐项勾选确认 → 导入。分段大小按你设置的模型上下文自适应，超长文本自动分段全覆盖（预计调用次数多时会先确认）。全程草稿预览不静默落库；未配置 AI 时按标题层级降级提取概念。</p>
+            <button class="btn btn-sm btn-secondary mt-8" onclick="switchPage('rag')" data-i18n="help.goMaterial">去「教材库」使用向导</button>
+          </div>
+        </details>
+
+        <details class="card help-item" id="help-exam">
+          <summary class="card-title help-item-title" data-i18n="help.exam.t">考试就绪度</summary>
+          <div class="help-item-body">
+            <p class="text-sm" data-i18n="help.exam.b">录入你的真题试卷（或用导入向导整卷识别），把题目关联到错题，系统按知识点统计该卷的就绪度：绿 ≥80% / 黄 ≥60% / 红 <60%，并给出优先补弱清单。</p>
+            <button class="btn btn-sm btn-secondary mt-8" onclick="switchPage('exam')" data-i18n="help.goExam">打开「考试」</button>
+          </div>
+        </details>
+
+        <details class="card help-item" id="help-subject">
+          <summary class="card-title help-item-title" data-i18n="help.subject.t">学科管理</summary>
+          <div class="help-item-body">
+            <p class="text-sm" data-i18n="help.subject.b">右上角切换当前学科，图谱/题库/错题/复习全部按学科隔离。设置页「学科管理」可新增自建学科（支持中文显示名）或删除空学科；内置物理/化学/数学不可删。放入 data/seed_concepts_<id>.json 可为新学科预置概念图谱。</p>
+            <button class="btn btn-sm btn-secondary mt-8" onclick="switchPage('settings')" data-i18n="help.goSettings">打开「设置」管理学科</button>
+          </div>
+        </details>
+
+        <details class="card help-item" id="help-ai">
+          <summary class="card-title help-item-title" data-i18n="help.ai.t">AI 配置与隐私</summary>
+          <div class="help-item-body">
+            <p class="text-sm" data-i18n="help.ai.b">设置页填写 OpenAI 兼容接口（api_base / key / 模型，可分 fast 轻量与 heavy 推理档）。API Key 绝不写入数据库：优先环境变量，其次 AES-GCM 加密密钥库（主密码），再次会话内存；日志自动脱敏。AI 未配置或失败时：提示降级为本地模板、变式降级离线生成、识别降级附件模式——主流程始终可用。</p>
+            <button class="btn btn-sm btn-secondary mt-8" onclick="switchPage('settings')" data-i18n="help.goSettings2">打开「设置」配置 AI</button>
+          </div>
+        </details>
+
+        <details class="card help-item" id="help-data">
+          <summary class="card-title help-item-title" data-i18n="help.data.t">数据备份与导出</summary>
+          <div class="help-item-body">
+            <p class="text-sm" data-i18n="help.data.b">概览页「导出数据」生成 JSON（题目+提示+ 复习记录）；导入前自动备份数据库。每天首次运行自动备份到 backups/（保留 7 份）。数据库为本机 learnos.db，可随时复制迁移。</p>
+            <button class="btn btn-sm btn-secondary mt-8" onclick="switchPage('dashboard')" data-i18n="help.goDashboard2">打开「概览」导出</button>
+          </div>
+        </details>
+
+        <div class="help-empty hidden" id="helpEmpty" data-i18n="help.empty">没有匹配的条目，换个关键词试试。</div>
+      </div>
+    </div>
+  </div>  <!-- ── 设置页 ── -->
   <div id="page-settings" class="page">
     <div class="card">
       <div class="card-title" data-i18n="set.aiTitle">AI 设置</div>

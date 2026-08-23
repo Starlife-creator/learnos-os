@@ -250,6 +250,63 @@ a { color: var(--accent); text-decoration: none; }
 .text-mono { font-family: var(--mono); }
 .hidden { display: none !important; }
 
+/* ── 帮助系统 ── */
+.help-head { margin-bottom: 16px; }
+.help-search { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.help-search-icon { color: var(--text-2); font-size: 14px; }
+.help-search input {
+  flex: 1; min-width: 0; padding: 9px 12px; font-size: 14px;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  outline: none;
+}
+.help-search input:focus { border-color: var(--accent); }
+.help-layout { display: grid; grid-template-columns: 200px 1fr; gap: 18px; align-items: start; }
+.help-toc {
+  position: sticky; top: 64px; align-self: start;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 12px;
+}
+.help-toc-title { font-size: 12px; font-weight: 500; color: var(--text-2); margin-bottom: 8px; }
+.help-toc-link {
+  display: block; padding: 8px 10px; margin: 2px 0; border-radius: 8px;
+  font-size: 13px; color: var(--text-2); cursor: pointer; text-decoration: none;
+  transition: background .12s, color .12s;
+}
+.help-toc-link:hover { background: var(--bg); color: var(--text); }
+.help-toc-link.active { background: var(--accent-light); color: var(--accent); font-weight: 500; }
+.help-item { margin-bottom: 12px; }
+.help-item > summary {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  list-style: none; user-select: none;
+}
+.help-item > summary::-webkit-details-marker { display: none; }
+.help-item-title::before {
+  content: "▸"; font-size: 12px; color: var(--text-2); transition: transform .15s;
+}
+.help-item[open] > summary .help-item-title::before,
+.help-item[open] > summary > .help-item-title::before { content: "▾"; }
+.help-item-body { margin-top: 10px; padding-left: 4px; }
+.help-loop { margin-top: 12px; padding: 12px; background: var(--bg); border-radius: var(--radius); }
+.help-loop svg { width: 100%; height: auto; display: block; }
+.help-loop-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.help-empty { padding: 16px; color: var(--text-2); font-size: 13px; }
+
+/* ── 新手引导遮罩 ── */
+.tour-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center;
+}
+.tour-card {
+  background: var(--surface); color: var(--text); border-radius: 12px;
+  padding: 22px 24px; max-width: 420px; width: 90%;
+  border: 1px solid var(--border); box-shadow: 0 12px 40px rgba(0,0,0,.35);
+}
+.tour-card h4 { font-size: 16px; font-weight: 500; margin-bottom: 8px; }
+.tour-card p { font-size: 14px; line-height: 1.7; color: var(--text); }
+.tour-card .tour-step { font-size: 12px; color: var(--text- 2); margin-bottom: 12px; }
+.tour-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
 /* ── 趋势图 ── */
 .trend-svg { width: 100%; height: 120px; }
 
@@ -275,6 +332,8 @@ a { color: var(--accent); text-decoration: none; }
   .form-row { grid-template-columns: 1fr; gap: 12px; }
   .modal { width: 95%; padding: 16px; border-radius: 8px; }
   .card { padding: 14px; }
+  .help-layout { grid-template-columns: 1fr; gap: 12px; }
+  .help-toc { position: static; }
   .chat-msg { max-width: 95%; }
   .btn { padding: 10px 16px; min-height: 44px; }
   .btn-sm { padding: 8px 12px; min-height: 36px; }

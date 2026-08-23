@@ -64,3 +64,106 @@ function applyUpdate() {
     }
   } catch (e) { /* 静默 */ }
 })();
+
+// ── 帮助系统：搜索 / 目录高亮 / 新手引导 ──
+function helpFilter() {
+  const q = (document.getElementById('helpSearch').value || '').trim().toLowerCase();
+  const items = document.querySelectorAll('.help-item');
+  const empty = document.getElementById('helpEmpty');
+  let shown = 0;
+  items.forEach(el => {
+    const text = el.textContent.toLowerCase();
+    const hit = !q || text.includes(q);
+    el.classList.toggle('hidden', !hit);
+    if (hit) shown++;
+  });
+  if (empty) empty.classList.toggle('hidden', shown > 0);
+}
+
+// 目录点击 → 展开对应区块并滚动定位
+document.querySelectorAll('#helpToc .help-toc-link').forEach(link => {
+  link.addEventListener('click', (e) => {
+    e.preventDefault();
+    const id = link.dataset.target;
+    const sec = document.getElementById(id);
+    if (!sec) return;
+    sec.open = true;
+    sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+});
+
+// 滚动时高亮当前可见区块
+(function setupHelpSpy() {
+  const links = Array.from(document.querySelectorAll('#helpToc .help-toc-link'));
+  const map = new Map(links.map(l => [l.dataset.target, l]));
+  const items = links.map(l => document.getElementById(l.dataset.target)).filter(Boolean);
+  if (!('IntersectionObserver' in window) || !items.length) return;
+  const obs = new IntersectionObserver((entries) => {
+    entries.forEach(en => {
+      if (en.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const link = map.get(en.target.id);
+        if (link) link.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-80px 0px -60% 0px', threshold: 0 });
+  items.forEach(el => obs.observe(el));
+})();
+
+// 新手引导：分步高亮（不依赖第三方），状态存 localStorage
+function startHelpTour() {
+  const steps = [
+    { sel: '#help-quick', title: '五步学习循环', body: '这是 LearnOS 的核心闭环：录入 → 提示 → 主动回忆 → 间隔复习 → 口试。建议每天从「概览」的今日行动开始。' },
+    { sel: '#help-dashboard', title: '今日行动', body: '「概览」页把到期复习、薄弱概念口试、错题巩固、题库练习汇总到一个队列，按优先级推进。' },
+    { sel: '#help-review', title: '诚实评分', body: '复习时按 忘记 / 模糊 / 想起 / 秒答 四档评分，评分越诚实，FSRS 调度越准。' },
+    { sel: '#help-oral', title: '口试检验', body: '用 AI 五轮追问检验你是否真正理解，答案按「中国/红涨绿跌」无关的纯知识判定即可。' },
+    { sel: '#help-data', title: '数据安全', body: '数据全部存在本机 learnos.db，可随时导出/备份。需要时从「概览」页导出即可。' }
+  ];
+  let i = 0;
+  const overlay = document.createElement('div');
+  overlay.className = 'tour-overlay';
+  function render() {
+    const s = steps[i];
+    overlay.innerHTML = '';
+    const card = document.createElement('div');
+    card.className = 'tour-card';
+    card.innerHTML =
+      '<div class="tour-step">第 ' + (i + 1) + ' / ' + steps.length + ' 步</div>' +
+      '<h4>' + s.title + '</h4>' +
+      '<p>' + s.body + '</p>' +
+      '<div class="tour-actions">' +
+        (i > 0 ? '<button class="btn btn-sm btn-secondary" id="tourPrev">上一步</button>' : '') +
+        (i < steps.length - 1
+          ? '<button class="btn btn-sm btn-primary" id="tourNext">下一步</button>'
+          : '<button class="btn btn-sm btn-primary" id="tourNext">完成</button>') +
+        '<button class="btn btn-sm btn-secondary" id="tourSkip">跳过</button>' +
+      '</div>';
+    overlay.appendChild(card);
+    card.querySelector('#tourNext').addEventListener('click', () => {
+      i++;
+      if (i >= steps.length) return close();
+      render();
+    });
+    const prev = card.querySelector('#tourPrev');
+    if (prev) prev.addEventListener('click', () => { i--; render(); });
+    card.querySelector('#tourSkip').addEventListener('click', close);
+    const target = document.getElementById(s.sel.replace('#', ''));
+    if (target) { target.open = true; target.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+  }
+  function close() {
+    overlay.remove();
+    try { localStorage.setItem('learnos_help_tour_done', '1'); } catch (e) {}
+  }
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  document.body.appendChild(overlay);
+  render();
+}
+
+// 首次进入帮助页时自动引导一次
+(function autoTour() {
+  try {
+    if (localStorage.getItem('learnos_help_tour_done')) return;
+    const help = document.getElementById('page-help');
+    if (help && help.classList.contains('active')) startHelpTour();
+  } catch (e) {}
+})();
