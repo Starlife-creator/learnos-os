@@ -58,6 +58,26 @@ class TestGraphCore(unittest.TestCase):
         data2 = graph.load_graph()
         self.assertEqual(len(data2["nodes"]), len(data["nodes"]))
 
+    def test_subject_id_normalization(self):
+        """守护：学科 id 大小写归一，杜绝 Title-case 双副本空壳科（2026-08-23 踩坑）。
+
+        任意大小写变体查询/加载都命中同一小写学科，且不产生独立大写壳。
+        """
+        # 临时库由 init_db→register_builtin_subjects 加载 data/seed_concepts_* 全部小写学科
+        self.assertTrue(db.subject_exists("biology"), "临时库应已注册 biology 种子学科")
+        # 大小写变体查同一科
+        self.assertTrue(db.subject_exists("Biology"))
+        self.assertTrue(db.subject_exists("BIOLOGY"))
+        # 加载大小写变体不报错且返回同一学科节点集（不产生新壳）
+        g_lower = graph.load_graph("biology")
+        g_upper = graph.load_graph("BIOLOGY")
+        self.assertGreater(len(g_lower["nodes"]), 0)
+        self.assertEqual(len(g_upper["nodes"]), len(g_lower["nodes"]))
+        # subjects 表里不存在独立的大写壳条目
+        ids = {s["id"] for s in db.list_subjects()}
+        self.assertNotIn("Biology", ids)
+        self.assertIn("biology", ids)
+
     def test_mastery_no_prereq(self):
         """验收用例 1：无先修概念 → 掌握度 = 自身聚合。"""
         pid = self._make_problem("参考系题", "参考系与坐标系", "关于参考系的题目", 4)

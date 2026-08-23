@@ -184,6 +184,8 @@ def load_graph(subject: str = "physics") -> dict[str, Any]:
     旧实现逐节点 row() 每次新开连接（约 50ms/次），2650 概念 ≈ 135s；
     现改为单批 rows() + 内存映射，彻底消除 N 次连接。
     """
+    from db import normalize_subject
+    subject = normalize_subject(subject)
     ensure_seed(subject)
     nodes = rows("SELECT * FROM concepts WHERE subject = ? ORDER BY id", (subject,))
     parent_of = {n["id"]: n["parent_id"] for n in nodes}
