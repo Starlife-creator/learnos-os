@@ -1,0 +1,221 @@
+[
+  {
+    "id": "e-s1",
+    "type": "single",
+    "concept": "音素",
+    "stem": "英语国际音标中元音与辅音音素的总数是（ ）",
+    "options": [
+      "44",
+      "46",
+      "48",
+      "50"
+    ],
+    "answer": [
+      2
+    ],
+    "explain": "IPA记录英语共48个音素：20个元音+28个辅音。"
+  },
+  {
+    "id": "e-s2",
+    "type": "single",
+    "concept": "现在完成时",
+    "stem": "表示过去动作对现在造成影响，应使用（ ）",
+    "options": [
+      "一般过去时",
+      "现在完成时",
+      "过去进行时",
+      "一般现在时"
+    ],
+    "answer": [
+      1
+    ],
+    "explain": "现在完成时have/has+done强调过去动作与现在的关联。"
+  },
+  {
+    "id": "e-s3",
+    "type": "single",
+    "concept": "定语从句",
+    "stem": "先行词指人时，限制性定语从句常用关系代词（ ）",
+    "options": [
+      "which",
+      "that",
+      "who",
+      "whose"
+    ],
+    "answer": [
+      2
+    ],
+    "explain": "who引导指人的定语从句，which指物，that通用，whose表所属。"
+  },
+  {
+    "id": "e-s4",
+    "type": "single",
+    "concept": "冠词",
+    "stem": "独一无二的事物前通常用（ ）",
+    "options": [
+      "a",
+      "an",
+      "the",
+      "零冠词"
+    ],
+    "answer": [
+      2
+    ],
+    "explain": "the sun、the moon等独一无二事物用定冠词the。"
+  },
+  {
+    "id": "e-s5",
+    "type": "single",
+    "concept": "虚拟语气",
+    "stem": "If I ___ you, I would take the job. 空格处应填（ ）",
+    "options": [
+      "am",
+      "was",
+      "were",
+      "be"
+    ],
+    "answer": [
+      2
+    ],
+    "explain": "虚拟语气中be动词一律用were，不论人称。"
+  },
+  {
+    "id": "e-m1",
+    "type": "multiple",
+    "concept": "构词法",
+    "stem": "下列属于英语构词法的有（ ）",
+    "options": [
+      "派生法",
+      "合成法",
+      "转化法",
+      "缩略法"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "explain": "四大构词法：派生（加缀）、合成（合词）、转化（转性）、缩略（截短/首字母）。"
+  },
+  {
+    "id": "e-m2",
+    "type": "multiple",
+    "concept": "非谓语动词",
+    "stem": "下列可作句子主语的有（ ）",
+    "options": [
+      "不定式",
+      "动名词",
+      "谓语动词",
+      "过去分词"
+    ],
+    "answer": [
+      0,
+      1
+    ],
+    "explain": "不定式与动名词可作主语；谓语是句子核心动词；过去分词多作修饰。"
+  },
+  {
+    "id": "e-m3",
+    "type": "multiple",
+    "concept": "句子种类",
+    "stem": "英语基本句子种类包括（ ）",
+    "options": [
+      "陈述句",
+      "疑问句",
+      "祈使句",
+      "感叹句"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "explain": "四大句式：陈述、疑问、祈使、感叹，外加there be存在句。"
+  },
+  {
+    "id": "e-f1",
+    "type": "fill",
+    "concept": "名词的数",
+    "stem": "child的复数形式是 __。",
+    "answer": [
+      "children"
+    ],
+    "explain": "child是不规则名词，复数为children。"
+  },
+  {
+    "id": "e-f2",
+    "type": "fill",
+    "concept": "比较级",
+    "stem": "good的比较级是 __。",
+    "answer": [
+      "better"
+    ],
+    "explain": "good/well为不规则变化，比较级better、最高级best。"
+  },
+  {
+    "id": "e-f3",
+    "type": "fill",
+    "concept": "介词",
+    "stem": "表示在具体的某天上午用介词 __。",
+    "answer": [
+      "on"
+    ],
+    "explain": "on用于具体某天或某天上下午（on Monday morning）。"
+  },
+  {
+    "id": "e-j1",
+    "type": "subjective",
+    "concept": "定语从句",
+    "stem": "简述定语从句中限制性从句与非限制性从句的区别，并各举一例。",
+    "answer": [
+      "限制性从句紧贴先行词、去掉后句意不完整，不用逗号，如The book that I bought is good.；",
+      "非限制性从句用逗号隔开、补充说明、去掉不影响主干，如My brother, who lives in Beijing, is a doctor."
+    ],
+    "explain": "核心区别：是否影响句意完整性与逗号使用；非限制性从句不能用that引导。"
+  },
+  {
+    "id": "e-j2",
+    "type": "subjective",
+    "concept": "被动语态翻译",
+    "stem": "为什么英语被动语态常译为汉语主动句？请说明并举例。",
+    "answer": [
+      "汉语偏好主动或无主语句，硬译'被'字生硬；",
+      "例：The book was published in 2020. 译作'该书2020年出版'而非'被出版'。"
+    ],
+    "explain": "英汉语态习惯差异：汉语'被'多含不幸义，被动常转主动或无主语句更自然。"
+  },
+  {
+    "id": "e-c1",
+    "type": "composite",
+    "concept": "阅读理解",
+    "sub": [
+      {
+        "id": "e-c1a",
+        "type": "single",
+        "stem": "略读（skimming）的主要目的是（ ）",
+        "options": [
+          "找细节",
+          "抓大意",
+          "猜词义",
+          "记笔记"
+        ],
+        "answer": [
+          1
+        ],
+        "explain": "略读为快速掌握文章主旨与结构。"
+      },
+      {
+        "id": "e-c1b",
+        "type": "fill",
+        "stem": "为定位具体数字或人名，应使用 __ 阅读技巧。",
+        "answer": [
+          "扫读"
+        ],
+        "explain": "扫读scanning用于快速定位特定信息。"
+      }
+    ],
+    "explain": "阅读两大宏观技巧：略读抓纲、扫读定位，配合推理与猜词构成完整能力。"
+  }
+]

@@ -1,0 +1,460 @@
+{
+  "version": 1,
+  "subject": "electronics",
+  "questions": [
+    {
+      "id": "e-s1",
+      "type": "single",
+      "unit": "电路分析基础",
+      "chapter": "电路元件",
+      "concept": "欧姆定律",
+      "difficulty": 2,
+      "stem": "阻值 R=10Ω 的电阻两端加 U=20V，流过电流 I =（ ）",
+      "choices": [
+        "2A",
+        "0.5A",
+        "200A",
+        "30A"
+      ],
+      "answer": 0,
+      "explain": "I=U/R=20/10=2A。"
+    },
+    {
+      "id": "e-s2",
+      "type": "single",
+      "unit": "电路分析基础",
+      "chapter": "电路定律",
+      "concept": "基尔霍夫电压定律",
+      "difficulty": 3,
+      "stem": "闭合回路中各段电压的代数和恒为（ ）",
+      "choices": [
+        "零",
+        "电源电压",
+        "电流之和",
+        "无穷大"
+      ],
+      "answer": 0,
+      "explain": "KVL：ΣU=0，体现能量守恒。"
+    },
+    {
+      "id": "e-s3",
+      "type": "single",
+      "unit": "模拟电子技术",
+      "chapter": "二极管",
+      "concept": "单向导电性",
+      "difficulty": 2,
+      "stem": "二极管正向导通时，硅管导通电压约为（ ）",
+      "choices": [
+        "0.7V",
+        "0.2V",
+        "5V",
+        "0V"
+      ],
+      "answer": 0,
+      "explain": "硅二极管导通压降约0.7V，锗约0.2V。"
+    },
+    {
+      "id": "e-s4",
+      "type": "single",
+      "unit": "模拟电子技术",
+      "chapter": "三极管",
+      "concept": "电流放大系数",
+      "difficulty": 2,
+      "stem": "BJT共射极直流电流放大系数 β =（ ）",
+      "choices": [
+        "IC/IB",
+        "IB/IC",
+        "IE/IC",
+        "UBE/UCE"
+      ],
+      "answer": 0,
+      "explain": "β=IC/IB，典型几十到几百。"
+    },
+    {
+      "id": "e-s5",
+      "type": "single",
+      "unit": "数字电子技术",
+      "chapter": "逻辑代数",
+      "concept": "与非门",
+      "difficulty": 2,
+      "stem": "二输入与非门，输入 A=1、B=1 时输出为（ ）",
+      "choices": [
+        "0",
+        "1",
+        "不定",
+        "高阻"
+      ],
+      "answer": 0,
+      "explain": "与非：先与(1·1=1)再非→0。"
+    },
+    {
+      "id": "e-s6",
+      "type": "single",
+      "unit": "数字电子技术",
+      "chapter": "时序逻辑电路",
+      "concept": "D触发器",
+      "difficulty": 3,
+      "stem": "上升沿D触发器，时钟到来时输出 Q 变为（ ）",
+      "choices": [
+        "D端的值",
+        "Q非",
+        "0",
+        "保持"
+      ],
+      "answer": 0,
+      "explain": "边沿D触发器在时钟边沿把D存入Q。"
+    },
+    {
+      "id": "e-s7",
+      "type": "single",
+      "unit": "信号与系统",
+      "chapter": "系统分析",
+      "concept": "傅里叶变换",
+      "difficulty": 3,
+      "stem": "将时域信号转为频域表示的数学工具是（ ）",
+      "choices": [
+        "傅里叶变换",
+        "对数变换",
+        "坐标变换",
+        "拉氏反变换"
+      ],
+      "answer": 0,
+      "explain": "傅里叶变换给出信号频谱。"
+    },
+    {
+      "id": "e-s8",
+      "type": "single",
+      "unit": "电机与电器",
+      "chapter": "变压器",
+      "concept": "变比",
+      "difficulty": 2,
+      "stem": "变压器原边 N1=1000 匝、副边 N2=100 匝，变比 k =（ ）",
+      "choices": [
+        "10",
+        "0.1",
+        "1100",
+        "900"
+      ],
+      "answer": 0,
+      "explain": "k=N1/N2=10。"
+    },
+    {
+      "id": "e-s9",
+      "type": "single",
+      "unit": "通信与嵌入式基础",
+      "chapter": "嵌入式系统",
+      "concept": "I2C",
+      "difficulty": 3,
+      "stem": "I2C总线使用的数据线数量是（ ）",
+      "choices": [
+        "2条(SDA/SCL)",
+        "4条",
+        "1条",
+        "8条"
+      ],
+      "answer": 0,
+      "explain": "I2C仅SDA、SCL两根线，节省引脚。"
+    },
+    {
+      "id": "e-s10",
+      "type": "single",
+      "unit": "电路分析基础",
+      "chapter": "正弦交流电路",
+      "concept": "谐振",
+      "difficulty": 3,
+      "stem": "RLC串联电路发生串联谐振时，总阻抗（ ）",
+      "choices": [
+        "最小且为R",
+        "最大",
+        "为零",
+        "为无穷大"
+      ],
+      "answer": 0,
+      "explain": "谐振时X_L=X_C抵消，Z=R最小，电流最大。"
+    },
+    {
+      "id": "e-m1",
+      "type": "multiple",
+      "unit": "数字电子技术",
+      "chapter": "逻辑门电路",
+      "concept": "CMOS电路",
+      "difficulty": 3,
+      "stem": "以下属于CMOS电路优点的有（ ）",
+      "choices": [
+        "静态功耗低",
+        "集成度高",
+        "速度快无限制",
+        "抗干扰差"
+      ],
+      "answer": [
+        0,
+        1
+      ],
+      "explain": "CMOS静态功耗极低、集成度高；速度非无限、抗扰较好。"
+    },
+    {
+      "id": "e-m2",
+      "type": "multiple",
+      "unit": "模拟电子技术",
+      "chapter": "放大电路",
+      "concept": "负反馈",
+      "difficulty": 4,
+      "stem": "放大电路引入负反馈可带来的改善有（ ）",
+      "choices": [
+        "提高稳定性",
+        "减小非线性失真",
+        "展宽频带",
+        "增大增益"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explain": "负反馈稳增益、抑失真、展频带；增益降低。"
+    },
+    {
+      "id": "e-m3",
+      "type": "multiple",
+      "unit": "电机与电器",
+      "chapter": "交流电机",
+      "concept": "异步电动机",
+      "difficulty": 3,
+      "stem": "异步电动机转动必需的要素有（ ）",
+      "choices": [
+        "旋转磁场",
+        "转子导体切割磁感线",
+        "直流励磁",
+        "同步转速运行"
+      ],
+      "answer": [
+        0,
+        1
+      ],
+      "explain": "旋转磁场+转子感应电流受力；无需直流励磁，不在同步速运行。"
+    },
+    {
+      "id": "e-m4",
+      "type": "multiple",
+      "unit": "通信与嵌入式基础",
+      "chapter": "嵌入式系统",
+      "concept": "串行通信",
+      "difficulty": 3,
+      "stem": "常见的MCU板级串行总线有（ ）",
+      "choices": [
+        "UART",
+        "SPI",
+        "I2C",
+        "PCIe"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explain": "UART/SPI/I2C是板级常用；PCIe是高速板间总线。"
+    },
+    {
+      "id": "e-m5",
+      "type": "multiple",
+      "unit": "电路分析基础",
+      "chapter": "电路定律",
+      "concept": "戴维南定理",
+      "difficulty": 4,
+      "stem": "求戴维南等效需要知道（ ）",
+      "choices": [
+        "开路电压Uoc",
+        "等效电阻Req",
+        "短路电流Isc",
+        "负载阻值"
+      ],
+      "answer": [
+        0,
+        1
+      ],
+      "explain": "戴维南等效=Uoc串联Req；Isc可由二者求得，非必需。"
+    },
+    {
+      "id": "e-f1",
+      "type": "fill",
+      "unit": "电路分析基础",
+      "chapter": "基本物理量",
+      "concept": "电功率",
+      "difficulty": 2,
+      "stem": "电阻 R=5Ω、电流 I=2A，消耗功率 P = I²R = __ W。",
+      "answer": [
+        "20"
+      ],
+      "explain": "P=2²×5=20W。"
+    },
+    {
+      "id": "e-f2",
+      "type": "fill",
+      "unit": "模拟电子技术",
+      "chapter": "三极管",
+      "concept": "放大区",
+      "difficulty": 3,
+      "stem": "BJT工作在放大区要求发射结__偏、集电结__偏。",
+      "answer": [
+        "正",
+        "反"
+      ],
+      "explain": "放大区：发射结正偏、集电结反偏。"
+    },
+    {
+      "id": "e-f3",
+      "type": "fill",
+      "unit": "数字电子技术",
+      "chapter": "逻辑代数",
+      "concept": "逻辑代数的基本定理",
+      "difficulty": 3,
+      "stem": "德摩根定律：A·B的非等于__（填表达式）。",
+      "answer": [
+        "A非+B非"
+      ],
+      "explain": "A·B的非=A非+B非。"
+    },
+    {
+      "id": "e-f4",
+      "type": "fill",
+      "unit": "电机与电器",
+      "chapter": "交流电机",
+      "concept": "转差率",
+      "difficulty": 3,
+      "stem": "异步电动机同步转速 n1=1500r/min、转子 n=1455r/min，转差率 s≈__（保留两位小数）。",
+      "answer": [
+        "0.03"
+      ],
+      "explain": "s=(1500−1455)/1500=0.03。"
+    },
+    {
+      "id": "e-f5",
+      "type": "fill",
+      "unit": "电路分析基础",
+      "chapter": "动态电路",
+      "concept": "时间常数",
+      "difficulty": 2,
+      "stem": "RC电路 R=1kΩ、C=1μF，时间常数 τ = RC = __ ms。",
+      "answer": [
+        "1"
+      ],
+      "explain": "τ=1000×1e-6=0.001s=1ms。"
+    },
+    {
+      "id": "e-j1",
+      "type": "subjective",
+      "unit": "模拟电子技术",
+      "chapter": "放大电路",
+      "concept": "静态工作点",
+      "difficulty": 4,
+      "stem": "为何放大电路必须设置合适的静态工作点？Q点设置过高或过低分别产生什么失真？",
+      "answer": "设置Q点使晶体管工作于放大区且避开截止与饱和，保证信号正负半周都线性放大。Q点过高（IB大、IC大）使UCE偏小→进入饱和区→饱和失真（削顶）；Q点过低（IB小）使信号负半周进入截止区→截止失真（削底）。应通过调整基极偏置电阻使Q点位于负载线中部。",
+      "explain": "考查静态工作点与失真机理。"
+    },
+    {
+      "id": "e-j2",
+      "type": "subjective",
+      "unit": "数字电子技术",
+      "chapter": "逻辑代数",
+      "concept": "卡诺图化简",
+      "difficulty": 4,
+      "stem": "简述卡诺图化简的基本思想，并说明为什么相邻最小项可以合并。",
+      "answer": "卡诺图按格雷码排列使相邻格仅一个变量互为反变量。合并相邻最小项时，互反的变量在或运算中抵消（如 ABC+AB̄C=AC），从而使乘积项变量数减少。圈越大项越简；须圈尽所有1且圈尽可能大、圈数最少。用于快速得最简与或式。",
+      "explain": "考查卡诺图原理。"
+    },
+    {
+      "id": "e-j3",
+      "type": "subjective",
+      "unit": "通信与嵌入式基础",
+      "chapter": "嵌入式系统",
+      "concept": "中断",
+      "difficulty": 3,
+      "stem": "相比查询（轮询）方式，中断机制有哪些优势？什么情况下仍需配合轮询？",
+      "answer": "优势：事件到达才打断CPU，避免空转等待、实时性强、CPU可并行做其它事。需配合轮询的情况：极低频且对实时性无要求事件、共享资源临界区不宜被打断、或外设不支持中断时只能轮询；有时为去抖也会先中断再在ISR中延时轮询状态。",
+      "explain": "考查中断与轮询权衡。"
+    },
+    {
+      "id": "e-c1",
+      "type": "composite",
+      "unit": "电路分析基础",
+      "chapter": "电路定律",
+      "concept": "戴维南定理",
+      "difficulty": 4,
+      "stem": "含源二端网络测得开路电压 Uoc=12V，短路电流 Isc=3A。",
+      "parts": [
+        {
+          "id": "e-c1a",
+          "type": "single",
+          "concept": "戴维南定理",
+          "stem": "其戴维南等效电阻 Req 为（ ）",
+          "choices": [
+            "4Ω",
+            "36Ω",
+            "15Ω",
+            "9Ω"
+          ],
+          "answer": 0,
+          "explain": "Req=Uoc/Isc=12/3=4Ω。"
+        },
+        {
+          "id": "e-c1b",
+          "type": "fill",
+          "concept": "最大功率传输",
+          "stem": "当负载 RL = Req = __ Ω 时获最大功率。",
+          "answer": [
+            "4"
+          ],
+          "explain": "最大功率匹配条件 RL=Req=4Ω。"
+        },
+        {
+          "id": "e-c1c",
+          "type": "subjective",
+          "concept": "最大功率传输",
+          "stem": "若 RL=4Ω，求该负载获得的最大功率。",
+          "answer": "戴维南等效为12V串4Ω。RL=4Ω时电流 I=12/(4+4)=1.5A，PL=I²RL=1.5²×4=9W。此时电源总功率18W，效率50%。",
+          "explain": "考查戴维南+最大功率计算。"
+        }
+      ]
+    },
+    {
+      "id": "e-c2",
+      "type": "composite",
+      "unit": "数字电子技术",
+      "chapter": "组合逻辑电路",
+      "concept": "加法器",
+      "difficulty": 4,
+      "stem": "一位全加器输入：加数A=1、B=1、低位进位Cin=1。",
+      "parts": [
+        {
+          "id": "e-c2a",
+          "type": "fill",
+          "concept": "加法器",
+          "stem": "本位和 S = A⊕B⊕Cin = __，进位 Cout = __。",
+          "answer": [
+            "1",
+            "1"
+          ],
+          "explain": "S=1⊕1⊕1=1；Cout=AB+ACin+BCin=1+1+1→进位1（多数表决）。"
+        },
+        {
+          "id": "e-c2b",
+          "type": "multiple",
+          "concept": "加法器",
+          "stem": "全加器可由下列哪些门构成（ ）",
+          "choices": [
+            "异或门",
+            "与门",
+            "或门",
+            "555定时器"
+          ],
+          "answer": [
+            0,
+            1,
+            2
+          ],
+          "explain": "全加器=异或(和)+与或(进位)，无需555。"
+        }
+      ]
+    }
+  ]
+}
