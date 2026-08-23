@@ -538,14 +538,31 @@ def _migrate(conn: sqlite3.Connection) -> None:
         LOG.info("数据库已迁移到 v23 (concepts.explanation 概念详解)")
 
 
+# 内置三科的中文显示名（title）；user 自定义过的中文 title 不会被覆盖。
+_BUILTIN_SUBJECT_TITLES = {
+    "physics": "物理",
+    "chemistry": "化学",
+    "math": "数学",
+}
+
+
 def register_builtin_subjects() -> None:
-    """启动注册：内置三科 + data/ 下种子文件学科（幂等，已存在不覆盖标题）。"""
+    """启动注册：内置三科 + data/ 下种子文件学科（幂等）。
+
+    内置三科的中文 title 在首次注册时写入；对老库里 title 仍等于英文 id 的记录，
+    也会补成中文（仅当 title 还是英文 id 时才改，避免覆盖用户自定义的中文名）。
+    """
     from config import BUNDLE_ROOT
     with DB_LOCK, db() as conn:
         for sid in ("physics", "chemistry", "math"):
             conn.execute(
                 "INSERT OR IGNORE INTO subjects(id, title, builtin, created_at) VALUES (?, ?, 1, ?)",
-                (sid, sid, now()),
+                (sid, _BUILTIN_SUBJECT_TITLES[sid], now()),
+            )
+            # 老库兼容：title 仍是英文 id 时补成中文（用户已自定义中文名则跳过）
+            conn.execute(
+                "UPDATE subjects SET title = ? WHERE id = ? AND title = ?",
+                (_BUILTIN_SUBJECT_TITLES[sid], sid, sid),
             )
     seed_dir = BUNDLE_ROOT / "data"
     if not seed_dir.is_dir():

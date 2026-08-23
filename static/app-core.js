@@ -28,6 +28,7 @@ function _isExportPath(path) {
 
 // ── 多学科：当前学科上下文（URL ?subject= 优先，其次 localStorage，最后默认 physics）──
 const BUILTIN_SUBJECTS = ['physics', 'chemistry', 'math'];
+const BUILTIN_SUBJECT_TITLES = { physics: '物理', chemistry: '化学', math: '数学' };
 function currentSubject() {
   const fromUrl = new URLSearchParams(location.search).get('subject');
   if (fromUrl) return fromUrl;
@@ -41,7 +42,7 @@ function setSubject(id) {
   location.href = url.toString();
 }
 async function loadSubjectOptions(select, current) {
-  let subjects = BUILTIN_SUBJECTS.map(id => ({ id, title: id, builtin: true }));
+  let subjects = BUILTIN_SUBJECTS.map(id => ({ id, title: BUILTIN_SUBJECT_TITLES[id] || id, builtin: true }));
   try {
     const data = await api('/api/subjects');
     const list = data.subjects || [];
