@@ -529,6 +529,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (22, ?)", (now(),))
         LOG.info("数据库已迁移到 v22 (题库 AI 评分历史 bank_scores)")
 
+    # v23: 概念详解 — concepts.explanation 支持手写概念释义（离线可用，AI 可辅助生成）
+    if current < 23:
+        ccols = {r[1] for r in conn.execute("PRAGMA table_info(concepts)").fetchall()}
+        if "explanation" not in ccols:
+            conn.execute("ALTER TABLE concepts ADD COLUMN explanation TEXT NOT NULL DEFAULT ''")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (23, ?)", (now(),))
+        LOG.info("数据库已迁移到 v23 (concepts.explanation 概念详解)")
+
 
 def register_builtin_subjects() -> None:
     """启动注册：内置三科 + data/ 下种子文件学科（幂等，已存在不覆盖标题）。"""

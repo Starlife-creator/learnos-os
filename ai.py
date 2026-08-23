@@ -1140,6 +1140,40 @@ def local_tags(title: str, content: str, course: str = "", topic: str = "", subj
     return {"tags": found, "confidence": round(confidence, 2), "source": "local"}
 
 
+def explain_concept(
+    name: str,
+    subject: str = "physics",
+    aliases: str = "",
+    prereq: str = "",
+    succ: str = "",
+    contrast: str = "",
+) -> str:
+    """生成概念详解（词条式释义），纯 AI，不落库；由前端编辑后决定是否保存为 explanation。
+
+    失败抛 RuntimeError（上层 handler 捕获降级）；无 AI 配置时调用方应已通过 _ai_quota 拦截。
+    """
+    ctx = []
+    if aliases.strip():
+        ctx.append(f"别名/缩写：{aliases.strip()}")
+    if prereq.strip():
+        ctx.append(f"前置概念：{prereq.strip()}")
+    if succ.strip():
+        ctx.append(f"后继概念：{succ.strip()}")
+    if contrast.strip():
+        ctx.append(f"对比概念：{contrast.strip()}")
+    ctx_block = "\n".join(ctx) if ctx else "（无额外上下文）"
+    prompt = (
+        f"你是{subject}学科助教。请为概念「{name}」写一段简明、准确、面向学生的概念详解"
+        f"（150-300 字）。要求：\n"
+        f"1. 用一句话给出核心定义；\n"
+        f"2. 说明其物理/数学含义与直觉；\n"
+        f"3. 如有典型应用场景或易错点，简要点出。\n"
+        f"不要使用 Markdown 标题，用自然段落。\n"
+        f"已知上下文：\n{ctx_block}"
+    )
+    return call_ai([{"role": "user", "content": prompt}], max_tokens=500, tier="heavy", route="material")
+
+
 def extract_tags(
     title: str,
     content: str,

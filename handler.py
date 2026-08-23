@@ -123,6 +123,7 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         (r"/api/upload/photo", "_handle_upload_photo", True),
         (r"/api/ai/extract-photo", "_handle_extract_photo", True),
         (r"/api/ai/extract-tags", "_handle_extract_tags", True),
+        (r"/api/ai/concept-explanation", "_handle_concept_explanation", True),
         (r"/api/rag/ingest", "_handle_rag_ingest", True),
         (r"/api/rag/doc/(\d+)/restore", "_handle_rag_restore", False),
         (r"/api/exam/papers/(\d+)/questions", "_handle_exam_add_questions", True),
@@ -853,7 +854,13 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
                 return
             match = re.fullmatch(r"/api/graph/concepts/(\d+)", path)
             if match:
-                if not graph.update_aliases(int(match.group(1)), str(data.get("aliases", ""))):
+                cid = int(match.group(1))
+                ok = True
+                if "explanation" in data:
+                    ok = graph.update_explanation(cid, str(data.get("explanation", ""))) and ok
+                if "aliases" in data:
+                    ok = graph.update_aliases(cid, str(data.get("aliases", ""))) and ok
+                if not ok:
                     self.json_response({"error": "概念不存在"}, 404)
                     return
                 self.json_response({"ok": True})

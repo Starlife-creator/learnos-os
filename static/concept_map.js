@@ -493,6 +493,7 @@ async function selectNode(id) {
   document.getElementById('dBar').style.width = Math.round(m * 100) + '%';
   document.getElementById('dLooms').textContent = n.looms_in || 0;
   document.getElementById('dAliases').value = n.aliases || '';
+  document.getElementById('dExplanation').value = n.explanation || '';
   // 单遍扫 links（旧实现三遍 filter + 每次重建 byId Map）
   const prereq = [], succ = [], cont = [];
   for (const l of graphData.links) {
@@ -546,7 +547,53 @@ async function saveAliases() {
       if (n) n.aliases = document.getElementById('dAliases').value;
       alert(t('graph.aliasSaved'));
     } else alert(data.error || 'fail');
+    } catch { alert(t('graph.loadFail')); }
+}
+
+async function saveExplanation() {
+  if (!selectedId) return;
+  const val = document.getElementById('dExplanation').value;
+  try {
+    const resp = await fetch(`/api/graph/concepts/${selectedId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'LearnOS' },
+      body: JSON.stringify({
+        aliases: document.getElementById('dAliases').value,
+        explanation: val,
+      }),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      const n = graphData.nodes.find(x => x.id === selectedId);
+      if (n) { n.explanation = val; n.aliases = document.getElementById('dAliases').value; }
+      toast(t('graph.explainSaved'));
+    } else alert(data.error || 'fail');
   } catch { alert(t('graph.loadFail')); }
+}
+
+async function generateExplanation() {
+  if (!selectedId) return;
+  const n = nodeById.get(selectedId);
+  if (!n) return;
+  const btn = document.getElementById('btnGenExplain');
+  if (btn) { btn.disabled = true; btn.textContent = t('graph.explainGenning'); }
+  try {
+    const resp = await fetch('/api/ai/concept-explanation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'LearnOS' },
+      body: JSON.stringify({
+        name: n.name,
+        subject: graphSubject(),
+        aliases: n.aliases || '',
+      }),
+    });
+    const data = await resp.json();
+    if (data.explanation) {
+      document.getElementById('dExplanation').value = data.explanation;
+      toast(t('graph.explainGenDone'));
+    } else alert(data.error || t('graph.loadFail'));
+  } catch { alert(t('graph.loadFail')); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = t('graph.explainGen'); } }
 }
 
 async function addConcept() {

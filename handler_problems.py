@@ -637,6 +637,29 @@ class ProblemsMixin:
             "解答时应优先基于这些片段给出与教材一致的表述：\n" + "\n".join(frags)
         )}], sources
 
+    def _handle_concept_explanation(self, data: dict[str, Any]) -> None:
+        """生成概念详解（AI，草稿不落库）；前端编辑后通过 PUT /api/graph/concepts/<id> 保存。"""
+        if not self._ai_quota("heavy"):
+            return  # R3：生成属 heavy 档，护 API 额度
+        name = str(data.get("name", "")).strip()
+        if not name:
+            self.json_response({"error": "概念名为空"}, 400)
+            return
+        try:
+            from ai import explain_concept
+            text = explain_concept(
+                name,
+                str(data.get("subject", "physics")),
+                str(data.get("aliases", "")),
+                str(data.get("prereq", "")),
+                str(data.get("succ", "")),
+                str(data.get("contrast", "")),
+            )
+            self.json_response({"explanation": text})
+        except RuntimeError as exc:
+            LOG.warning("概念详解生成失败: %s", exc)
+            self.json_response({"error": str(exc)}, 502)
+
     def _handle_extract_tags(self, data: dict[str, Any]) -> None:
         """B5：AI 自动打标签（草稿，R3 不落库）。返回建议 + 置信度，前端确认后写入。"""
         if not self._ai_quota("fast"):

@@ -158,6 +158,13 @@
         <input id="dAliases" placeholder="N2L,F=ma" data-i18n-ph="graph.aliasPh" style="flex:1">
         <button class="btn" onclick="saveAliases()" data-i18n="graph.aliasSave">保存</button>
       </div>
+      <p class="kv" style="margin-top:10px"><b data-i18n="graph.explanation">详解：</b></p>
+      <textarea id="dExplanation" data-i18n-ph="graph.explanationPh" placeholder="概念释义，可手填或用 AI 生成"
+        rows="4" style="width:100%;resize:vertical;font:inherit"></textarea>
+      <div style="display:flex; gap:8px; margin-top:6px">
+        <button class="btn" onclick="saveExplanation()" data-i18n="graph.explainSave">保存详解</button>
+        <button class="btn btn-primary" id="btnGenExplain" onclick="generateExplanation()" data-i18n="graph.explainGen">AI 生成详解</button>
+      </div>
       <div style="display:flex; gap:8px; margin-top:10px">
         <button class="btn btn-primary" onclick="prereqMode()" data-i18n="graph.prereqBtn">先修模式：看相关错题</button>
       </div>

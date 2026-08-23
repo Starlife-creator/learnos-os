@@ -390,6 +390,15 @@ def update_aliases(concept_id: int, aliases: str) -> bool:
     return cur.rowcount > 0
 
 
+def update_explanation(concept_id: int, explanation: str) -> bool:
+    """更新概念详解（自由文本释义；AI 生成的草稿也经此落库，由用户编辑后保存）。"""
+    text = str(explanation or "").strip()
+    with DB_LOCK, db() as conn:
+        cur = conn.execute(
+            "UPDATE concepts SET explanation = ? WHERE id = ?", (text, concept_id))
+    return cur.rowcount > 0
+
+
 _mentions_cache: dict[str, tuple[str, list[dict[str, Any]]]] = {}
 
 
