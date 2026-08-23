@@ -48,6 +48,9 @@ data/bank_custom_*.json
 # User uploads (runtime content, same class as media/)
 uploads/
 
+# Runtime backup archives (per-environment snapshots, not source)
+backups/
+
 # SQLite databases (generated at runtime, NOT committed)
 *.db
 *.db-wal
