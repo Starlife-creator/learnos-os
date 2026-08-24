@@ -35,8 +35,24 @@ async function bootGraph() {
   await initGraphSubject();
   const lmSel = document.getElementById('graphLayout');
   if (lmSel) lmSel.value = layoutMode;
+  buildEdgeToggles();
   loadGraph();
   loadGraphLearningPath();
+}
+// 边类型开关条（默认只显骨干先修/演进；其余按需开启 → 降噪）
+function buildEdgeToggles() {
+  const wrap = document.getElementById('edgeToggles');
+  if (!wrap) return;
+  wrap.innerHTML = KIND_RELATIONS.map(rel =>
+    '<label class="ln" style="cursor:pointer" data-i18n="graph.rel_' + rel + '">' +
+    '<input type="checkbox" data-rel="' + rel + '" ' + (edgeVis[rel] ? 'checked' : '') +
+    ' onchange="toggleEdgeType(\'' + rel + '\', this.checked)" style="accent-color:var(--accent)">' +
+    '<span>' + t('graph.rel_' + rel, rel) + '</span></label>').join('');
+}
+function toggleEdgeType(rel, on) {
+  if (!(rel in edgeVis)) return;
+  edgeVis[rel] = on;
+  redrawAndFit();
 }
 const svg = document.getElementById('svg');
 const NS = 'http://www.w3.org/2000/svg';
@@ -106,6 +122,9 @@ const LOD_EDGE_SCALE = 0.4;     // 低于此缩放：只保留 prerequisite 先�
 let lodText = true;             // 当前绘制是否含文字（跨阈值时按需重绘）
 let lodHit = true;
 let lodEdge = true;
+// ── 边类型可见性（默认只显"骨干"，其余按需开；用于降噪）──
+const KIND_RELATIONS = ['prerequisite', 'progression', 'inclusion', 'analogy', 'contrast', 'related'];
+const edgeVis = { prerequisite: true, progression: true, inclusion: false, analogy: false, contrast: false, related: false };
 
 function make(tag, attrs, text) {
   const el = document.createElementNS(NS, tag);
@@ -339,6 +358,14 @@ function draw(useSaved = true) {
   descendants = new Map();
   const gMain = make('g');
   svg.appendChild(gMain);
+  // 有向边箭头 marker（先修/演进）
+  const defs = make('defs');
+  defs.innerHTML =
+    '<marker id="arrP" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto" markerUnits="strokeWidth">' +
+    '<path d="M0,0 L9,4.5 L0,9 Z" fill="#3b82f6"/></marker>' +
+    '<marker id="arrProg" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto" markerUnits="strokeWidth">' +
+    '<path d="M0,0 L9,4.5 L0,9 Z" fill="#f97316"/></marker>';
+  gMain.appendChild(defs);
   const gEdges = make('g');
   const gNodes = make('g');
   gMain.appendChild(gEdges);
@@ -367,18 +394,18 @@ function draw(useSaved = true) {
   // 边（曲线，只画两端可见的；LOD 缩小时省略次要边）
   edges = [];
   edgeByNode = new Map();
-  // A3：边曲率错开——先收集可见边 → 按"高连度端(hub)"分组并按角度排序 → 给每条边一个
-  // 垂直(相对 chord)偏移量，使同一 hub 连出的近平行边错开成扇，避免重叠成一团。
+  // ── 边路由：chain=正交化（横干竖端）；hier=跨章束带 + 章内 A3 曲率扇 ──
   const dat = [];
   const deg = new Map();
   for (const l of graphData.links) {
-    if (!lodEdge && l.relation !== 'prerequisite') continue;
+    if (!edgeVis[l.relation]) continue;      // 显隐由用户边类型开关决定
     if (!positions.has(l.concept_a) || !positions.has(l.concept_b)) continue;
     dat.push({ a: l.concept_a, b: l.concept_b, rel: l.relation });
     deg.set(l.concept_a, (deg.get(l.concept_a) || 0) + 1);
     deg.set(l.concept_b, (deg.get(l.concept_b) || 0) + 1);
   }
   const hubOf = dat.map(e => (deg.get(e.a) >= deg.get(e.b) ? e.a : e.b));
+  // A3 曲率错开（章内 quad 边用）：按高连度端分组、按角度排序，给垂直偏移
   const off = new Map();
   const groups = new Map();
   dat.forEach((e, i) => { if (!groups.has(hubOf[i])) groups.set(hubOf[i], []); groups.get(hubOf[i]).push(i); });
@@ -394,20 +421,39 @@ function draw(useSaved = true) {
     byAng.sort((x, y) => x.ang - y.ang);
     byAng.forEach((row, k) => off.set(row.i, (k - (idxs.length - 1) / 2) * GAP));
   }
-  function edgeCurveD(i) {
-    const e = dat[i], hub = hubOf[i];
-    const other = e.a === hub ? e.b : e.a;
-    const H = positions.get(hub), O = positions.get(other);
-    const dx = O.x - H.x, dy = O.y - H.y, len = Math.hypot(dx, dy) || 1;
-    const m = off.get(i) || 0;
-    const cx = (H.x + O.x) / 2 + (-dy / len) * m, cy = (H.y + O.y) / 2 + (dx / len) * m;
-    return `M ${H.x} ${H.y} Q ${cx} ${cy} ${O.x} ${O.y}`;
+  // 跨章束带：按"章对"分组，同组共享中心 C，控制点都拉向 C → 中途收敛成带
+  const zoneOf = id => { const r = nodeById.get(id); return (r && r.chapter_id) ? r.chapter_id : id; };
+  const bgroups = new Map();
+  dat.forEach((e, i) => {
+    const za = zoneOf(e.a), zb = zoneOf(e.b);
+    if (za === zb || layoutMode === 'chain') return;   // 同章→quad；chain→ortho
+    const key = za < zb ? za + '|' + zb : zb + '|' + za;
+    if (!bgroups.has(key)) bgroups.set(key, []);
+    bgroups.get(key).push(i);
+  });
+  const bundle = new Map();
+  for (const [, idxs] of bgroups) {
+    if (idxs.length < 2) continue;              // 单条跨章边不束（走 quad）
+    let mx = 0, my = 0;
+    for (const i of idxs) { const e = dat[i], pa = positions.get(e.a), pb = positions.get(e.b); mx += (pa.x + pb.x) / 2; my += (pa.y + pb.y) / 2; }
+    const n = idxs.length; mx /= n; my /= n;
+    idxs.forEach((i, k) => bundle.set(i, {
+      ctrl: { x: mx, y: my }, fan: (k - (n - 1) / 2) * 2.5, fan2: -(k - (n - 1) / 2) * 1.2,
+    }));
   }
   dat.forEach((e, i) => {
-    const path = make('path', { d: edgeCurveD(i), class: 'edge edge-' + e.rel, 'stroke-width': 1.2 });
+    let kind = 'quad';
+    if (layoutMode === 'chain') kind = 'ortho';
+    else if (bundle.has(i)) kind = 'bundle';
+    const bd = bundle.get(i) || { ctrl: { x: 0, y: 0 }, fan: 0, fan2: 0 };
+    const desc = { a: e.a, b: e.b, rel: e.rel, kind, hub: hubOf[i], other: e.a === hubOf[i] ? e.b : e.a, off: off.get(i) || 0, ctrl: bd.ctrl, fan: bd.fan, fan2: bd.fan2 };
+    const dirMark = e.rel === 'prerequisite' ? 'url(#arrP)' : e.rel === 'progression' ? 'url(#arrProg)' : null;
+    const attrs = { d: edgeDescD(desc), class: 'edge edge-' + e.rel, 'stroke-width': 1.2 };
+    if (dirMark) attrs['marker-end'] = dirMark;
+    const path = make('path', attrs);
     gEdges.appendChild(path);
     const idx = edges.length;
-    edges.push({ a: e.a, b: e.b, hub: hubOf[i], other: e.a === hubOf[i] ? e.b : e.a, off: off.get(i) || 0, path });
+    edges.push(Object.assign(desc, { path }));
     if (!edgeByNode.has(e.a)) edgeByNode.set(e.a, []);
     if (!edgeByNode.has(e.b)) edgeByNode.set(e.b, []);
     edgeByNode.get(e.a).push(idx);
@@ -454,6 +500,7 @@ function draw(useSaved = true) {
     nodeEls.set(n.id, { hit, circle, label });
   }
   applyView();
+  if (focusedId && nodeEls.has(focusedId)) _dimGraph(focusedId);   // 重绘后保持聚焦态
 }
 
 // LOD 跨阈值重绘：缩放/平移后 scale 变化可能让文字/次要边需要出现或隐藏，
@@ -474,14 +521,15 @@ function scheduleLodRedraw() {
 
 // svg 级 click 委托：N 个节点只挂 1 个监听（旧实现逐 group 挂，2650 节点 = 2650 个闭包）
 svg.addEventListener('click', e => {
-  const g = e.target.closest ? e.target.closest('g[data-id]') : null;
-  if (!g) return;
   if (justDragged) { justDragged = false; return; }
+  const g = e.target.closest ? e.target.closest('g[data-id]') : null;
+  if (!g) { clearFocus(); return; }            // 点空白 → 退出聚焦
   const node = nodeById.get(Number(g.getAttribute('data-id')));
   if (!node) return;
   if (linkMode) { onLinkClick(node.id); return; }
   if (node.level === 1) toggleChapter(node.id);
   selectNode(node.id);
+  if (node.level !== 0) setFocus(node.id);     // 聚焦该节点邻域（单元级略过）
 });
 
 function applyView() {
@@ -532,18 +580,29 @@ function redrawAndFit() {
 function rebindEdge(i) {
   const e = edges[i];
   if (!e) return;
-  // A3：带曲率偏移重算（拖动时保持同一扇状错开）
-  if (e.hub && positions.has(e.hub) && positions.has(e.other)) {
-    const H = positions.get(e.hub), O = positions.get(e.other);
-    const dx = O.x - H.x, dy = O.y - H.y, len = Math.hypot(dx, dy) || 1;
-    const m = e.off || 0;
-    e.path.setAttribute('d', `M ${H.x} ${H.y} Q ${(H.x + O.x) / 2 + (-dy / len) * m} ${(H.y + O.y) / 2 + (dx / len) * m} ${O.x} ${O.y}`);
-    return;
+  e.path.setAttribute('d', edgeDescD(e));   // 拖动时按当前路由方式重算
+}
+
+// 边路径：ortho=正交（横干竖端）；bundle=束带(控制点拉向共享中心)；quad=A3 曲率扇
+function edgeDescD(dd) {
+  const A = positions.get(dd.a), B = positions.get(dd.b);
+  if (!A || !B) return '';
+  if (dd.kind === 'ortho') {
+    const my = (A.y + B.y) / 2;
+    return `M ${A.x} ${A.y} L ${A.x} ${my} L ${B.x} ${my} L ${B.x} ${B.y}`;
   }
-  const a = positions.get(e.a), b = positions.get(e.b);
-  if (!a || !b) return;
-  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-  e.path.setAttribute('d', `M ${a.x} ${a.y} Q ${mx} ${my} ${b.x} ${b.y}`);
+  if (dd.kind === 'bundle') {
+    const C = dd.ctrl;
+    const d1x = C.x - A.x, d1y = C.y - A.y, L1 = Math.hypot(d1x, d1y) || 1;
+    const p1x = A.x + d1x * 0.5 + (-d1y / L1) * dd.fan, p1y = A.y + d1y * 0.5 + (d1x / L1) * dd.fan;
+    const d2x = C.x - B.x, d2y = C.y - B.y, L2 = Math.hypot(d2x, d2y) || 1;
+    const p2x = B.x + d2x * 0.5 + (-d2y / L2) * dd.fan2, p2y = B.y + d2y * 0.5 + (d2x / L2) * dd.fan2;
+    return `M ${A.x} ${A.y} C ${p1x} ${p1y} ${p2x} ${p2y} ${B.x} ${B.y}`;
+  }
+  const H = positions.get(dd.hub), O = positions.get(dd.other);
+  const dx = O.x - H.x, dy = O.y - H.y, len = Math.hypot(dx, dy) || 1;
+  const m = dd.off || 0;
+  return `M ${H.x} ${H.y} Q ${(H.x + O.x) / 2 + (-dy / len) * m} ${(H.y + O.y) / 2 + (dx / len) * m} ${O.x} ${O.y}`;
 }
 
 function fitToView() {
@@ -948,10 +1007,10 @@ async function initGraphSubject() {
   setGraphTitle();
 }
 
-// ── A4 交互降噪：悬停节点 → 高亮其关联边、淡化其余边与无关节点 ──
+// ── A4 交互降噪：悬停/点击节点 → 高亮其关联边、淡化其余边与无关节点 ──
 let _hoverT = 0;
-function hoverNode(id) {
-  clearTimeout(_hoverT);
+let focusedId = null;            // 聚焦节点：点击节点置位，点背景/连线模式清除
+function _dimGraph(id) {
   const conn = new Set(edgeByNode.get(id) || []);
   const near = new Set([id]);
   edges.forEach((e, i) => { if (conn.has(i)) { near.add(e.a); near.add(e.b); } });
@@ -960,25 +1019,31 @@ function hoverNode(id) {
     e.path.classList.toggle('edge-hot', hot);
     e.path.classList.toggle('edge-dim', !hot);
   });
-  nodeEls.forEach((el, nid) => {
-    el.circle.classList.toggle('node-fade', !near.has(nid));
-  });
+  nodeEls.forEach((el, nid) => { el.circle.classList.toggle('node-fade', !near.has(nid)); });
 }
+function hoverNode(id) { clearTimeout(_hoverT); _dimGraph(id); }
 function unhoverNode() {
   clearTimeout(_hoverT);
   edges.forEach(e => e.path.classList.remove('edge-hot', 'edge-dim'));
   nodeEls.forEach(el => el.circle.classList.remove('node-fade'));
 }
+function setFocus(id) { focusedId = id || null; focusedId ? _dimGraph(focusedId) : unhoverNode(); }
+function clearFocus() { focusedId = null; unhoverNode(); }
 svg.addEventListener('mouseover', e => {
+  if (focusedId) return;                              // 聚焦态由点击主导，悬停不再覆盖
   const g = e.target.closest ? e.target.closest('g[data-id]') : null;
   if (!g) return;
   hoverNode(Number(g.getAttribute('data-id')));
 });
-svg.addEventListener('mouseleave', () => { _hoverT = setTimeout(unhoverNode, 150); });
+svg.addEventListener('mouseleave', () => {
+  if (focusedId) return;
+  _hoverT = setTimeout(unhoverNode, 150);
+});
 
 // ── Phase 3：手动删除 + 手动画线（连线模式）──
 let linkMode = false, linkSrc = null, _linkAB = null;
 function toggleLinkMode() {
+  clearFocus();                     // 进入/退出连线都退出聚焦
   linkMode = !linkMode;
   linkSrc = null; _linkAB = null;
   clearLinkHighlight();

@@ -95,9 +95,8 @@
   .label-search { font-weight: 700; fill: var(--accent); }
   .label-chapter { font-size: 12px; font-weight: 600; fill: var(--text); }
   .label-unit { font-size: 14px; font-weight: 700; fill: var(--accent); }
-  .edge { fill: none; opacity: .55; }
-  .edge { transition: opacity .12s; }
-  .edge-hot { opacity: 1 !important; stroke-width: 2; }
+  .edge { fill: none; opacity: .65; transition: opacity .12s; }
+  .edge-hot { opacity: 1 !important; stroke-width: 2.6; }
   .edge-dim { opacity: .12 !important; }
   .node-fade { opacity: .18; transition: opacity .12s; }
   .link-active { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -107,9 +106,13 @@
     background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
     padding: 10px 14px; z-index: 20; box-shadow: 0 4px 18px rgba(0,0,0,.14);
   }
-  .edge-prerequisite { stroke: var(--red); stroke-dasharray: 5 3; }
-  .edge-related { stroke: var(--accent); }
-  .edge-contrast { stroke: var(--amber); stroke-dasharray: 2 2; }
+  /* ── 6 类边：形状 + 颜色 双重编码（有向=先修/演进带箭头）── */
+  .edge-prerequisite { stroke: #3b82f6; stroke-width: 2; }              /* 实线 · 蓝 */
+  .edge-progression { stroke: #f97316; stroke-width: 2.2; }             /* 实线 · 橙 */
+  .edge-inclusion   { stroke: #14b8a6; stroke-width: 1.6; }             /* 实线 · 青 */
+  .edge-analogy     { stroke: #a855f7; stroke-width: 1.2; stroke-dasharray: 0.1 6; stroke-linecap: round; } /* 圆点 · 紫 */
+  .edge-contrast    { stroke: #ec4899; stroke-width: 1.4; stroke-dasharray: 6 3 2 3; } /* 点划线 · 玫红 */
+  .edge-related     { stroke: #94a3b8; stroke-width: 1;   stroke-dasharray: 5 5; }     /* 虚线 · 灰蓝 */
   #zoomHints {
     position: absolute; right: 14px; top: 14px; z-index: 5; display: flex; flex-direction: column; gap: 6px;
   }
@@ -120,9 +123,12 @@
 <header>
   <h1 data-i18n="graph.title">概念知识图谱</h1>
   <div class="legend">
-    <span class="ln"><i style="border-color:var(--red)"></i><span data-i18n="graph.tagPrereq">先修</span></span>
-    <span class="ln"><i style="border-color:var(--accent)"></i><span data-i18n="graph.tagRelated">相关</span></span>
-    <span class="ln"><i style="border-color:var(--amber)"></i><span data-i18n="graph.tagContrast">对比</span></span>
+    <span class="ln"><i style="border-top:2px solid #3b82f6"></i><span data-i18n="graph.tagPrereq">先修</span></span>
+    <span class="ln"><i style="border-top:2.4px solid #f97316"></i><span data-i18n="graph.tagProgression">演进</span></span>
+    <span class="ln"><i style="border-top:1.6px solid #14b8a6"></i><span data-i18n="graph.tagInclusion">包含</span></span>
+    <span class="ln"><i style="border-top:2px dotted #a855f7"></i><span data-i18n="graph.tagAnalogy">类比</span></span>
+    <span class="ln"><i style="border-top:1.4px dashed #ec4899"></i><span data-i18n="graph.tagContrast">易混</span></span>
+    <span class="ln"><i style="border-top:1px dashed #94a3b8"></i><span data-i18n="graph.tagRelated">相关</span></span>
     <span class="ln"><i style="background:var(--gray);width:10px;height:10px;border-radius:50%;border-top:none"></i><span data-i18n="graph.tagMid">未学/薄弱</span></span>
   </div>
   <div class="hint" data-i18n="graph.zoom">点击章节展开/收起概念 · 拖动节点调整位置（自动保存）· 滚轮缩放 · 空白拖拽平移</div>
@@ -141,6 +147,7 @@
   <button class="btn" onclick="autoLayout()" data-i18n="graph.autoLayout">整理布局</button>
   <button class="btn" onclick="resetLayout()" data-i18n="graph.resetLayout">重置布局</button>
   <button class="btn" id="btnLink" onclick="toggleLinkMode()" data-i18n="graph.linkButton">✎ 连线</button>
+  <span class="legend" id="edgeToggles"></span>
 </header>
 <div id="wrap">
   <div id="canvasBox">
@@ -213,8 +220,11 @@
 <div id="linkChooser">
   <span class="muted" data-i18n="graph.chooseRelation">选择关系类型</span>
   <button class="btn" onclick="doLink('prerequisite')" data-i18n="graph.relationP">先修 ▸</button>
+  <button class="btn" onclick="doLink('progression')" data-i18n="graph.relationProg">演进 ▸</button>
+  <button class="btn" onclick="doLink('inclusion')" data-i18n="graph.relationI">包含 —</button>
+  <button class="btn" onclick="doLink('analogy')" data-i18n="graph.relationA">类比 ··</button>
+  <button class="btn" onclick="doLink('contrast')" data-i18n="graph.relationC">易混 ⃒</button>
   <button class="btn" onclick="doLink('related')" data-i18n="graph.relationR">相关 —</button>
-  <button class="btn" onclick="doLink('contrast')" data-i18n="graph.relationC">对比 ⇄</button>
   <button class="btn" onclick="cancelLink()" data-i18n="graph.linkCancel">取消</button>
 </div>
 <script src="concept_map.js"></script>

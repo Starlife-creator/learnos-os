@@ -774,7 +774,9 @@ def delete_concept(concept_id: int) -> bool:
 
 
 # Phase 3：手动画线（概念↔概念建边）。relation 与 DB CHECK 白名单一致。
-_LINK_RELATIONS = {"prerequisite", "related", "contrast"}
+_LINK_RELATIONS = {"prerequisite", "related", "contrast", "analogy", "inclusion", "progression"}
+# 有方向语义的关系（先修/演进）：a 是 b 的前提/由 a 演进到 b（保留方向）
+_LINK_DIRECTED = {"prerequisite", "progression"}
 
 
 def link_concepts(a: int, b: int, relation: str, subject: str = "physics") -> tuple[bool, str]:
@@ -800,7 +802,7 @@ def link_concepts(a: int, b: int, relation: str, subject: str = "physics") -> tu
             return False, "跨学科的概念不能连线"
         if na["subject"] != subject:
             return False, "概念不属于当前学科"
-        if relation == "prerequisite":
+        if relation in _LINK_DIRECTED:
             ca, cb = a, b
         else:
             ca, cb = (a, b) if a < b else (b, a)

@@ -593,6 +593,27 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (25, ?)", (now(),))
         LOG.info("数据库已迁移到 v25 (概念闪卡 cards/card_reviews)")
 
+    # v26: 边关系扩展 3 → 6 种（先修/演进/包含/类比/易混/相关）— 重建 concept_links 的 CHECK
+    if current < 26:
+        sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='concept_links'").fetchone()
+        if sql and "analogy" not in str(sql["sql"]):
+            conn.execute("ALTER TABLE concept_links RENAME TO concept_links_old")
+            conn.execute("""
+                CREATE TABLE concept_links (
+                    concept_a INTEGER NOT NULL,
+                    concept_b INTEGER NOT NULL,
+                    relation TEXT NOT NULL CHECK (relation IN
+                        ('prerequisite','related','contrast','analogy','inclusion','progression')),
+                    PRIMARY KEY (concept_a, concept_b, relation)
+                )
+            """)
+            conn.execute("INSERT INTO concept_links(concept_a, concept_b, relation) "
+                         "SELECT concept_a, concept_b, relation FROM concept_links_old")
+            conn.execute("DROP TABLE concept_links_old")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (26, ?)", (now(),))
+        LOG.info("数据库已迁移到 v26 (边关系扩展为 6 种 concept_links)")
+
 
 # 内置三科的中文显示名（title）；user 自定义过的中文 title 不会被覆盖。
 _BUILTIN_SUBJECT_TITLES = {
