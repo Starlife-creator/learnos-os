@@ -18,7 +18,13 @@ function applyGraphI18n(root) {
   scope.querySelectorAll('[data-i18n-ph]').forEach(el => {
     el.setAttribute('placeholder', t(el.getAttribute('data-i18n-ph')));
   });
-  if (scope === document) document.title = t('graph.title') + ' - Physics';
+  if (scope === document) document.title = t('graph.title');
+}
+// 标题跟随当前学科显示名（学科下拉已载入外文名/别名）
+function setGraphTitle() {
+  const sel = document.getElementById('graphSubject');
+  const lab = sel && sel.selectedOptions && sel.selectedOptions[0] ? sel.selectedOptions[0].textContent : graphSubject();
+  document.title = t('graph.title') + ' - ' + String(lab || '').trim();
 }
 async function bootGraph() {
   const lang = _curLang();
@@ -27,7 +33,10 @@ async function bootGraph() {
   } catch { _dict = {}; }
   applyGraphI18n(document);
   await initGraphSubject();
+  const lmSel = document.getElementById('graphLayout');
+  if (lmSel) lmSel.value = layoutMode;
   loadGraph();
+  loadGraphLearningPath();
 }
 const svg = document.getElementById('svg');
 const NS = 'http://www.w3.org/2000/svg';
@@ -44,9 +53,27 @@ let view = { x: 40, y: 30, scale: 1 };
 let nodeById = new Map();         // id -> node
 let kidsOf = new Map();           // parent_id -> [child nodes]
 let byLevel = { unit: [], chapter: [], concept: [] };
+// A2 章内 hub 扇出：度数/邻接索引（一张图只算一次，切换学科后重置）
+let _fanDeg = null, _fanLink = null;
+function fanIndex() {
+  if (_fanLink) return { link: _fanLink, deg: _fanDeg };
+  const deg = new Map(), link = new Map();
+  for (const n of graphData.nodes) deg.set(n.id, 0);
+  for (const l of graphData.links) {
+    deg.set(l.concept_a, (deg.get(l.concept_a) || 0) + 1);
+    deg.set(l.concept_b, (deg.get(l.concept_b) || 0) + 1);
+    if (!link.has(l.concept_a)) link.set(l.concept_a, new Set());
+    if (!link.has(l.concept_b)) link.set(l.concept_b, new Set());
+    link.get(l.concept_a).add(l.concept_b);
+    link.get(l.concept_b).add(l.concept_a);
+  }
+  _fanDeg = deg; _fanLink = link;
+  return { link, deg };
+}
 function indexGraph() {
   nodeById = new Map(graphData.nodes.map(n => [n.id, n]));
   kidsOf = new Map();
+  _fanLink = null; _fanDeg = null;   // 图谱/学科切换后重建 A2 索引
   byLevel = { unit: [], chapter: [], concept: [] };
   for (const n of graphData.nodes) {
     if (n.level === 0) byLevel.unit.push(n);
@@ -58,7 +85,18 @@ function indexGraph() {
     }
   }
 }
-const SAVE_KEY = 'conceptMapPositions.v1';
+const SAVE_KEY = 'conceptMapPositions.v1';      // 目录视图（沿用旧键，保留用户拖拽）
+const LAYOUT_MODES = ['hier', 'chain', 'mastery', 'difficulty'];
+function saveKeyForMode(mode) {
+  return mode === 'hier' ? 'conceptMapPositions.v1' : `conceptMapPositions.${mode}.v1`;
+}
+// 当前布局预设（本地持久化；每个预设独立记忆拖拽位置）
+let layoutMode = (() => {
+  try {
+    const m = localStorage.getItem('graphLayoutMode');
+    return LAYOUT_MODES.includes(m) ? m : 'hier';
+  } catch { return 'hier'; }
+})();
 // ── LOD 分级渲染：2650 节点学科下全量 paint 是卡顿主因（14522 元素）──
 // 缩放过小 (<0.55) 时节点在屏幕上只是几个像素的点，文字/次要边/大点击圈都不可读，
 // 跳过它们能砍掉 ~60% 的 SVG 元素；放大到阈值以上再补齐。
@@ -104,7 +142,50 @@ function visibleNodeIds() {
 }
 
 // ── 布局：单元分列，章节堆叠，展开的章节在下方平铺概念 ──
-function layoutNodes() {
+// A2：章内 hub 扇出——用占用栅格把高连度概念放章节中线列，并把它在本章内的邻居
+// 环绕其上下/左右错开排布（扇出）；其余概念按行优先补进空位。全程占用栅格保证不重叠。
+function placeChapterKids(kids, cols, startX, startY, colW, rowH) {
+  const rows = Math.max(1, Math.ceil(kids.length / cols));
+  const { link, deg } = fanIndex();
+  const K = 4;
+  const hubs = kids
+    .filter(k => (deg.get(k.id) || 0) >= K)
+    .sort((a, b) => (deg.get(b.id) || 0) - (deg.get(a.id) || 0));
+  const posOut = new Map(), occ = new Set(), placed = new Set();
+  const isFree = (r, c) => r >= 0 && r < rows && c >= 0 && c < cols && !occ.has(r + ':' + c);
+  const take = (id, r, c) => {
+    if (!isFree(r, c)) return false;
+    occ.add(r + ':' + c);
+    posOut.set(id, { x: startX + c * colW, y: startY + r * rowH });
+    return true;
+  };
+  const centerC = Math.max(0, Math.floor((cols - 1) / 2));
+  // 1) hub 放章节中线列
+  for (const h of hubs)
+    for (let r = 0; r < rows; r++) if (take(h.id, r, centerC)) { placed.add(h.id); break; }
+  // 2) 每个 hub 的本章内邻居环绕其八邻域错开局位
+  const RING = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]];
+  for (const h of hubs) {
+    const hp = posOut.get(h.id);
+    if (!hp) continue;
+    const hr = Math.round((hp.y - startY) / rowH), hc = Math.round((hp.x - startX) / colW);
+    const nbrs = link.get(h.id)
+      ? Array.from(link.get(h.id)).filter(nid => !placed.has(nid) && kids.some(k => k.id === nid))
+      : [];
+    for (const nid of nbrs) {
+      for (const [dr, dc] of RING) if (take(nid, hr + dr, hc + dc)) { placed.add(nid); break; }
+    }
+  }
+  // 3) 其余按行优先补满
+  for (const kk of kids) {
+    if (placed.has(kk.id)) continue;
+    outer: for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++)
+      if (take(kk.id, r, c)) { placed.add(kk.id); break outer; }
+  }
+  return posOut;
+}
+
+function layoutNodes(sortKids) {
   const pos = new Map();
   const TOP = 46, ROW_H = 46, COL_W = 118, CH_GAP = 26, UNIT_GAP = 90;
   let x = 60;
@@ -113,17 +194,18 @@ function layoutNodes() {
     let y = TOP + 40;
     let colW = 0;
     for (const ch of chs) {
-      const kids = expanded.has(ch.id) ? (kidsOf.get(ch.id) || []) : [];
+      let kids = expanded.has(ch.id) ? (kidsOf.get(ch.id) || []) : [];
+      if (sortKids) kids = kids.slice().sort(sortKids);
       const rows = Math.max(1, Math.ceil(kids.length / 5));
       const cols = Math.min(5, Math.max(1, kids.length));
       const startKX = x + 190;
       const startKY = y + 52;
       const conceptW = kids.length ? 190 + (cols - 1) * COL_W : 0;
       pos.set(ch.id, { x: x + 90, y: y + 16 });
-      kids.forEach((k, i) => {
-        const r = Math.floor(i / cols), c = i % cols;
-        pos.set(k.id, { x: startKX + c * COL_W, y: startKY + r * ROW_H });
-      });
+      if (kids.length) {
+        const cmap = placeChapterKids(kids, cols, startKX, startKY, COL_W, ROW_H);
+        cmap.forEach((p, id) => pos.set(id, p));
+      }
       colW = Math.max(colW, conceptW);
       y += (kids.length ? 52 + rows * ROW_H : 40) + CH_GAP;
     }
@@ -133,22 +215,112 @@ function layoutNodes() {
   return pos;
 }
 
-function loadSavedPositions() {
+// ── 多视图预设分发：hier=目录 / chain=先修链(Sugiyama) / mastery·difficulty=属性排序 ──
+function computeLayout(mode) {
+  if (mode === 'chain') return chainLayout();
+  if (mode === 'mastery') return layoutNodes((a, b) => (b.mastery_est || 0) - (a.mastery_est || 0));
+  if (mode === 'difficulty') return layoutNodes((a, b) => (b.difficulty || 0) - (a.difficulty || 0));
+  return layoutNodes();
+}
+
+// 先修链视图：按先修 DAG「最长路径分层」+ 层内 barycenter 最小交叉。
+// 概念左→右按先修顺流（先修总在左），同层按 barycenter 往复重排减交叉。
+// 章/单元只作"分组点"画在其子概念质心，保留三级身份（不破坏模型）。
+function chainLayout() {
+  expanded = new Set(byLevel.chapter.map(c => c.id)); // 先修链视图展开全部概念
+  const pos = new Map();
+  const set = byLevel.concept;
+  if (!set.length) return pos;
+  const pred = new Map(), succ = new Map();
+  for (const l of graphData.links) {
+    if (l.relation !== 'prerequisite') continue;
+    const a = nodeById.get(l.concept_a), b = nodeById.get(l.concept_b);
+    if (!a || !b || a.level !== 2 || b.level !== 2) continue; // 仅概念参与分层
+    if (!pred.has(l.concept_b)) pred.set(l.concept_b, []);
+    pred.get(l.concept_b).push(l.concept_a);
+    if (!succ.has(l.concept_a)) succ.set(l.concept_a, []);
+    succ.get(l.concept_a).push(l.concept_b);
+  }
+  const ids = set.map(c => c.id);
+  // 最长路径分层：ranks 0..max（连续）
+  const rank = new Map(ids.map(i => [i, 0]));
+  let changed = true;
+  for (let pass = 0; changed && pass < 300; pass++) {
+    changed = false;
+    for (const id of ids) {
+      const ps = pred.get(id) || [];
+      const m = ps.length ? Math.max(...ps.map(p => rank.get(p) || 0)) + 1 : 0;
+      if (m !== (rank.get(id) || 0)) { rank.set(id, m); changed = true; }
+    }
+  }
+  // 分组成层
+  const groups = new Map();
+  for (const id of ids) {
+    const r = rank.get(id);
+    if (!groups.has(r)) groups.set(r, []);
+    groups.get(r).push(id);
+  }
+  // 层内 barycenter 排序（6 轮往复，关键：减交叉）
+  const centered = new Map();
+  for (const [r, layer] of groups) centered.set(r, new Map(layer.map((id, i) => [id, i])));
+  for (let pass = 0; pass < 6; pass++) {
+    const ranks = [...groups.keys()].sort((a, b) => a - b);
+    for (const r of ranks) {
+      if (groups.get(r).length < 2) continue;
+      const toSucc = pass % 2 === 0; // 奇偶轮交替以邻居层取向
+      const idx = new Map();
+      for (const id of groups.get(r)) {
+        const nb = (toSucc ? succ.get(id) : pred.get(id)) || [];
+        const vals = [];
+        for (const n of nb) {
+          const nr = rank.get(n);
+          const cm = centered.get(nr);
+          if (nr !== r && cm && cm.has(n)) vals.push(cm.get(n));
+        }
+        idx.set(id, vals.length ? vals.reduce((x, y) => x + y, 0) / vals.length : (centered.get(r).get(id) || 0));
+      }
+      groups.get(r).sort((x, y) => (idx.get(x) || 0) - (idx.get(y) || 0));
+      centered.set(r, new Map(groups.get(r).map((id, i) => [id, i])));
+    }
+  }
+  // 坐标：x=rank 列，y=层内序；每列纵向居中使画布紧凑
+  const colW = 196, rowH = 40;
+  const y0 = new Map();
+  for (const [r, layer] of groups) y0.set(r, -((layer.length - 1) * rowH) / 2);
+  for (const [r, layer] of groups)
+    for (let i = 0; i < layer.length; i++) pos.set(layer[i], { x: r * colW, y: y0.get(r) + i * rowH });
+  // 章/单元 = 其子节点质心（层级身份点）
+  const agg = (parents) => {
+    for (const p of parents) {
+      const kids = (kidsOf.get(p.id) || []).filter(k => pos.has(k.id));
+      if (kids.length) {
+        pos.set(p.id, {
+          x: kids.reduce((s, k) => s + pos.get(k.id).x, 0) / kids.length,
+          y: kids.reduce((s, k) => s + pos.get(k.id).y, 0) / kids.length,
+        });
+      }
+    }
+  };
+  agg(byLevel.chapter); agg(byLevel.unit);
+  return pos;
+}
+
+function loadSavedPositions(mode) {
   try {
-    const raw = localStorage.getItem(SAVE_KEY);
+    const raw = localStorage.getItem(saveKeyForMode(mode || layoutMode));
     return raw ? JSON.parse(raw) : {};
   } catch { return {}; }
 }
-function savePositions() {
+function savePositions(mode) {
   const obj = {};
   positions.forEach((p, id) => { obj[id] = { x: Math.round(p.x), y: Math.round(p.y) }; });
-  try { localStorage.setItem(SAVE_KEY, JSON.stringify(obj)); } catch {}
+  try { localStorage.setItem(saveKeyForMode(mode || layoutMode), JSON.stringify(obj)); } catch {}
 }
 
 // ── 绘制 ──
 function draw(useSaved = true) {
-  const saved = useSaved ? loadSavedPositions() : {};
-  const auto = layoutNodes();
+  const saved = useSaved ? loadSavedPositions(layoutMode) : {};
+  const auto = computeLayout(layoutMode);
   const vis = visibleNodeIds();
   positions = new Map();
   for (const n of graphData.nodes) {
@@ -195,23 +367,52 @@ function draw(useSaved = true) {
   // 边（曲线，只画两端可见的；LOD 缩小时省略次要边）
   edges = [];
   edgeByNode = new Map();
+  // A3：边曲率错开——先收集可见边 → 按"高连度端(hub)"分组并按角度排序 → 给每条边一个
+  // 垂直(相对 chord)偏移量，使同一 hub 连出的近平行边错开成扇，避免重叠成一团。
+  const dat = [];
+  const deg = new Map();
   for (const l of graphData.links) {
     if (!lodEdge && l.relation !== 'prerequisite') continue;
     if (!positions.has(l.concept_a) || !positions.has(l.concept_b)) continue;
-    const a = positions.get(l.concept_a), b = positions.get(l.concept_b);
-    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-    const path = make('path', {
-      d: `M ${a.x} ${a.y} Q ${mx} ${my} ${b.x} ${b.y}`,
-      class: 'edge edge-' + l.relation, 'stroke-width': 1.2,
+    dat.push({ a: l.concept_a, b: l.concept_b, rel: l.relation });
+    deg.set(l.concept_a, (deg.get(l.concept_a) || 0) + 1);
+    deg.set(l.concept_b, (deg.get(l.concept_b) || 0) + 1);
+  }
+  const hubOf = dat.map(e => (deg.get(e.a) >= deg.get(e.b) ? e.a : e.b));
+  const off = new Map();
+  const groups = new Map();
+  dat.forEach((e, i) => { if (!groups.has(hubOf[i])) groups.set(hubOf[i], []); groups.get(hubOf[i]).push(i); });
+  const GAP = 5;
+  for (const [hub, idxs] of groups) {
+    if (idxs.length < 2) { idxs.forEach(i => off.set(i, 0)); continue; }
+    const sp = positions.get(hub);
+    const byAng = idxs.map(i => {
+      const e = dat[i];
+      const o = positions.get(e.a === hub ? e.b : e.a);
+      return { i, ang: Math.atan2(o.y - sp.y, o.x - sp.x) };
     });
+    byAng.sort((x, y) => x.ang - y.ang);
+    byAng.forEach((row, k) => off.set(row.i, (k - (idxs.length - 1) / 2) * GAP));
+  }
+  function edgeCurveD(i) {
+    const e = dat[i], hub = hubOf[i];
+    const other = e.a === hub ? e.b : e.a;
+    const H = positions.get(hub), O = positions.get(other);
+    const dx = O.x - H.x, dy = O.y - H.y, len = Math.hypot(dx, dy) || 1;
+    const m = off.get(i) || 0;
+    const cx = (H.x + O.x) / 2 + (-dy / len) * m, cy = (H.y + O.y) / 2 + (dx / len) * m;
+    return `M ${H.x} ${H.y} Q ${cx} ${cy} ${O.x} ${O.y}`;
+  }
+  dat.forEach((e, i) => {
+    const path = make('path', { d: edgeCurveD(i), class: 'edge edge-' + e.rel, 'stroke-width': 1.2 });
     gEdges.appendChild(path);
     const idx = edges.length;
-    edges.push({ a: l.concept_a, b: l.concept_b, path });
-    if (!edgeByNode.has(l.concept_a)) edgeByNode.set(l.concept_a, []);
-    if (!edgeByNode.has(l.concept_b)) edgeByNode.set(l.concept_b, []);
-    edgeByNode.get(l.concept_a).push(idx);
-    edgeByNode.get(l.concept_b).push(idx);
-  }
+    edges.push({ a: e.a, b: e.b, hub: hubOf[i], other: e.a === hubOf[i] ? e.b : e.a, off: off.get(i) || 0, path });
+    if (!edgeByNode.has(e.a)) edgeByNode.set(e.a, []);
+    if (!edgeByNode.has(e.b)) edgeByNode.set(e.b, []);
+    edgeByNode.get(e.a).push(idx);
+    edgeByNode.get(e.b).push(idx);
+  })
 
   // 节点（单元色每轮只取一次样式变量；点击走 svg 级事件委托，不再逐节点挂监听）
   const unitIdx = new Map(byLevel.unit.map((u, i) => [u.id, i]));
@@ -278,6 +479,7 @@ svg.addEventListener('click', e => {
   if (justDragged) { justDragged = false; return; }
   const node = nodeById.get(Number(g.getAttribute('data-id')));
   if (!node) return;
+  if (linkMode) { onLinkClick(node.id); return; }
   if (node.level === 1) toggleChapter(node.id);
   selectNode(node.id);
 });
@@ -330,6 +532,14 @@ function redrawAndFit() {
 function rebindEdge(i) {
   const e = edges[i];
   if (!e) return;
+  // A3：带曲率偏移重算（拖动时保持同一扇状错开）
+  if (e.hub && positions.has(e.hub) && positions.has(e.other)) {
+    const H = positions.get(e.hub), O = positions.get(e.other);
+    const dx = O.x - H.x, dy = O.y - H.y, len = Math.hypot(dx, dy) || 1;
+    const m = e.off || 0;
+    e.path.setAttribute('d', `M ${H.x} ${H.y} Q ${(H.x + O.x) / 2 + (-dy / len) * m} ${(H.y + O.y) / 2 + (dx / len) * m} ${O.x} ${O.y}`);
+    return;
+  }
   const a = positions.get(e.a), b = positions.get(e.b);
   if (!a || !b) return;
   const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
@@ -361,8 +571,15 @@ function autoLayout() {
   toast(t('graph.autoLayout') + ' ✓');
 }
 function resetLayout() {
-  try { localStorage.removeItem(SAVE_KEY); } catch {}
+  try { localStorage.removeItem(saveKeyForMode(layoutMode)); } catch {}
   autoLayout();
+}
+function switchLayoutMode(mode) {
+  if (!LAYOUT_MODES.includes(mode) || mode === layoutMode) return;
+  savePositions();                       // 离开前保存当前预设的位置
+  layoutMode = mode;
+  try { localStorage.setItem('graphLayoutMode', mode); } catch {}
+  autoLayout();                          // 用新模式自动布局 + 适配视口
 }
 function zoomBy(factor) {
   const rect = svg.getBoundingClientRect();
@@ -511,7 +728,23 @@ async function selectNode(id) {
   if (succ.length) dPrereq.innerHTML += `<p class="kv"><b>${t('graph.succ')}</b>${succ.map(s => s.name).join('、')}</p>`;
   if (cont.length) dPrereq.innerHTML += `<p class="kv"><b>${t('graph.contrast')}</b>${cont.map(c => c.name).join('、')}</p>`;
   document.getElementById('dProblems').innerHTML = '';
+  // 做闪卡：仅为章/概念级显示（单元级不在闪卡概念下拉内）
+  const mk = document.getElementById('btnMakeCardWrap');
+  if (mk) mk.style.display = n.level === 0 ? 'none' : 'flex';
+  const delBtn = document.getElementById('btnDeleteConcept');
+  if (delBtn) {
+    const blocked = (descendants.get(id) || []).length > 0 || (n.looms_in || 0) > 0;
+    delBtn.disabled = blocked;
+    delBtn.title = blocked ? t('graph.deleteBlocked') : '';
+  }
   if (n.level === 2) loadRelatedProblems(id);
+}
+
+// 图谱选中概念 → 跳转闪卡页并自动为该概念建卡（深链，含学科对齐）
+function goMakeCard() {
+  if (!selectedId) return;
+  try { localStorage.setItem('subject', graphSubject()); } catch (e) {}
+  location.href = 'index.html#cards?concept=' + selectedId;
 }
 
 async function loadRelatedProblems(id) {
@@ -626,6 +859,41 @@ function graphSubject() {
   return String(raw || '').trim().toLowerCase();
 }
 
+// ── 学习路径（按先修链，Phase 3）——本页自包含（无 app-core/api 依赖）──
+function _escGraphLP(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+async function loadGraphLearningPath() {
+  const el = document.getElementById('graphLP');
+  if (!el) return;
+  let d;
+  try {
+    d = await (await fetch('/api/learn/path?subject=' + encodeURIComponent(graphSubject()), { cache: 'no-cache' })).json();
+  } catch { el.textContent = '—'; return; }
+  let html = '';
+  if (d.now) {
+    const isPrereq = d.now.reason === 'prerequisite';
+    html += `<div style="border:1px solid var(--accent);border-radius:8px;padding:8px 10px;margin-bottom:8px">
+      <div class="muted">${isPrereq ? '先补先修「' + _escGraphLP(d.now.for || '') + '」' : '现在就学'}</div>
+      <b>${_escGraphLP(d.now.name)}</b>
+      <span class="tag ${d.now.mastery < 40 ? 'tag-mid' : 'tag-warn'}">掌握 ${d.now.mastery}%</span>
+    </div>`;
+  }
+  const rw = (d.ready_weak || []).slice(0, 6);
+  if (rw.length) {
+    html += `<div class="muted" style="margin:4px 0">可立即强化（${d.ready_weak.length}）：</div>`;
+    html += rw.map(w => `<div style="padding:2px 0">${_escGraphLP(w.name)} <span class="tag tag-warn">${w.mastery}%</span></div>`).join('');
+  } else if (!d.now) {
+    html += '<span class="muted">当前概念掌握度都不错 🎉</span>';
+  }
+  const bl = (d.blocked || []).slice(0, 4);
+  if (bl.length) {
+    html += `<div class="muted" style="margin:4px 0">被先修卡住待补（${d.blocked.length}）：</div>`;
+    html += bl.map(b => `<div style="padding:2px 0">${_escGraphLP(b.name)} → 需 <b>${_escGraphLP((b.missing || []).join('、') || '')}</b></div>`).join('');
+  }
+  el.innerHTML = html || '<span class="muted">—</span>';
+}
+
 async function loadGraph() {
   const resp = await fetch('/api/graph/concepts?subject=' + encodeURIComponent(graphSubject()));
   graphData = await resp.json();
@@ -633,8 +901,8 @@ async function loadGraph() {
   indexGraph();
   // 先算布局+适应视口，再 draw——保证首帧就按最终 scale 走 LOD，
   // 避免先全量渲染 14522 元素再精简（2650 节点下省一次数百 ms 的重绘）
-  const saved = loadSavedPositions();
-  const auto = layoutNodes();
+  const saved = loadSavedPositions(layoutMode);
+  const auto = computeLayout(layoutMode);
   const vis = visibleNodeIds();
   positions = new Map();
   for (const n of graphData.nodes) {
@@ -665,16 +933,117 @@ function switchGraphSubject(id) {
 async function initGraphSubject() {
   const sel = document.getElementById('graphSubject');
   const subjects = ['physics', 'chemistry', 'math'];
+  const titles = {};
   try {
     const data = await (await fetch('/api/subjects?subject=' + encodeURIComponent(graphSubject()))).json();
     for (const s of data.subjects || []) {
       if (!subjects.includes(s.id)) subjects.push(s.id);
+      if (s.title) titles[s.id] = s.title;
     }
   } catch (e) { /* 内置三科兜底 */ }
   const cur = graphSubject();
-  sel.innerHTML = subjects.map(s => `<option value="${s}">${s}</option>`).join('');
+  sel.innerHTML = subjects.map(s => `<option value="${s}">${titles[s] || s}</option>`).join('');
   if (subjects.includes(cur)) sel.value = cur;
   else sel.value = subjects[0];
+  setGraphTitle();
 }
+
+// ── A4 交互降噪：悬停节点 → 高亮其关联边、淡化其余边与无关节点 ──
+let _hoverT = 0;
+function hoverNode(id) {
+  clearTimeout(_hoverT);
+  const conn = new Set(edgeByNode.get(id) || []);
+  const near = new Set([id]);
+  edges.forEach((e, i) => { if (conn.has(i)) { near.add(e.a); near.add(e.b); } });
+  edges.forEach((e, i) => {
+    const hot = conn.has(i);
+    e.path.classList.toggle('edge-hot', hot);
+    e.path.classList.toggle('edge-dim', !hot);
+  });
+  nodeEls.forEach((el, nid) => {
+    el.circle.classList.toggle('node-fade', !near.has(nid));
+  });
+}
+function unhoverNode() {
+  clearTimeout(_hoverT);
+  edges.forEach(e => e.path.classList.remove('edge-hot', 'edge-dim'));
+  nodeEls.forEach(el => el.circle.classList.remove('node-fade'));
+}
+svg.addEventListener('mouseover', e => {
+  const g = e.target.closest ? e.target.closest('g[data-id]') : null;
+  if (!g) return;
+  hoverNode(Number(g.getAttribute('data-id')));
+});
+svg.addEventListener('mouseleave', () => { _hoverT = setTimeout(unhoverNode, 150); });
+
+// ── Phase 3：手动删除 + 手动画线（连线模式）──
+let linkMode = false, linkSrc = null, _linkAB = null;
+function toggleLinkMode() {
+  linkMode = !linkMode;
+  linkSrc = null; _linkAB = null;
+  clearLinkHighlight();
+  const chooser = document.getElementById('linkChooser');
+  if (chooser) chooser.style.display = 'none';
+  const btn = document.getElementById('btnLink');
+  if (btn) btn.classList.toggle('link-active', linkMode);
+  if (linkMode) toast(t('graph.linkHint'));
+}
+function linkPick(id) {
+  linkSrc = id;
+  highlightLinkSrc(id);
+}
+async function onLinkClick(id) {
+  if (!linkSrc) { linkPick(id); return; }
+  if (id === linkSrc) { linkSrc = null; clearLinkHighlight(); return; }
+  _linkAB = { a: linkSrc, b: id };          // a=先点 → 作为先修方向
+  const chooser = document.getElementById('linkChooser');
+  if (chooser) chooser.style.display = 'flex';
+}
+function cancelLink() {
+  const chooser = document.getElementById('linkChooser');
+  if (chooser) chooser.style.display = 'none';
+  linkMode = false; linkSrc = null; _linkAB = null;
+  clearLinkHighlight();
+  const btn = document.getElementById('btnLink');
+  if (btn) btn.classList.remove('link-active');
+}
+async function doLink(relation) {
+  const { a, b } = _linkAB || {};
+  cancelLink();
+  if (!a || !b) return;
+  try {
+    const resp = await fetch(`/api/graph/concepts/${a}/link?subject=${encodeURIComponent(graphSubject())}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'LearnOS' },
+      body: JSON.stringify({ b, relation }),
+    });
+    const j = await resp.json().catch(() => ({}));
+    if (!resp.ok) { toast(j.error || t('graph.linkFail')); return; }
+    toast(t('graph.linkOk'));
+    draw(); savePositions();
+  } catch (e) { toast(t('graph.linkFail')); }
+}
+function highlightLinkSrc(id) { const el = nodeEls.get(id); if (el) el.circle.classList.add('link-src'); }
+function clearLinkHighlight() { if (nodeEls) nodeEls.forEach(el => el.circle.classList.remove('link-src')); }
+
+async function deleteConcept() {
+  if (!selectedId) return;
+  if (!confirm(t('graph.deleteConfirm'))) return;
+  try {
+    const resp = await fetch(`/api/graph/concepts/${selectedId}?subject=${encodeURIComponent(graphSubject())}`, {
+      method: 'DELETE', headers: { 'X-Requested-With': 'LearnOS' },
+    });
+    const j = await resp.json().catch(() => ({}));
+    if (!resp.ok) { toast(j.error || t('graph.deleteFail')); return; }
+    toast(t('graph.deleteOk'));
+    document.getElementById('detail').classList.add('hidden');
+    document.getElementById('welcome').classList.remove('hidden');
+    selectedId = null;
+    await loadGraph();
+  } catch (e) { toast(t('graph.deleteFail')); }
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && linkMode) toggleLinkMode();
+});
 
 bootGraph();

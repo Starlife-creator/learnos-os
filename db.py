@@ -552,6 +552,47 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (24, ?)", (now(),))
         LOG.info("数据库已迁移到 v24 (concepts.source + seed_versions)")
 
+    # v25: 概念闪卡（主动回忆）— 卡片 + 独立评分日志，与 problems/reviews 解耦
+    #      卡片自带 FSRS 调度状态（复用 fsrs_bridge），不污染题目掌握度统计。
+    if current < 25:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS cards (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subject TEXT NOT NULL DEFAULT 'physics',
+                concept_id INTEGER NOT NULL DEFAULT 0,
+                kind TEXT NOT NULL DEFAULT 'qa',
+                cue TEXT NOT NULL,
+                answer TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                source TEXT NOT NULL DEFAULT 'manual',
+                created_at TEXT NOT NULL,
+                ease_factor REAL NOT NULL DEFAULT 2.5,
+                repetition INTEGER NOT NULL DEFAULT 0,
+                state INTEGER NOT NULL DEFAULT 0,
+                stability REAL NOT NULL DEFAULT 0.0,
+                difficulty REAL NOT NULL DEFAULT 0.0,
+                due_date TEXT NOT NULL DEFAULT '',
+                interval_days INTEGER NOT NULL DEFAULT 1,
+                last_review TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS card_reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                card_id INTEGER NOT NULL,
+                due_date TEXT NOT NULL DEFAULT '',
+                interval_days INTEGER NOT NULL DEFAULT 1,
+                rating INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(card_id) REFERENCES cards(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_cards_subject_due ON cards(subject, status, due_date)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_cards_concept ON cards(concept_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_card_reviews_card ON card_reviews(card_id)")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (25, ?)", (now(),))
+        LOG.info("数据库已迁移到 v25 (概念闪卡 cards/card_reviews)")
+
 
 # 内置三科的中文显示名（title）；user 自定义过的中文 title 不会被覆盖。
 _BUILTIN_SUBJECT_TITLES = {

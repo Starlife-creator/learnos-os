@@ -291,15 +291,50 @@ def _linked_ids(concept_id: int, relation: str, reverse: bool = False) -> list[i
     )]
 
 
-def _self_mastery(conn: Any, concept_id: int) -> tuple[float, int]:
-    """该概念被绑定题目的平均掌握度（0-1）与绑定题数。"""
+def _self_mastery(conn: Any, concept_id: int, card_signal: tuple[float, int] | None = None) -> tuple[float, int]:
+    """该概念被绑定题目的平均掌握度（0-1）与绑定题数。
+
+    card_signal=(卡驱动掌握度, 卡样本数)：Phase 2 双驱动——当该概念存在已复习的
+    概念闪卡时，把卡片评分信号与题目掌握度按样本数融合，使掌握度同时反映主动回忆表现。
+    """
     subj = conn.execute("SELECT subject FROM concepts WHERE id = ?", (concept_id,)).fetchone()
     subject = subj["subject"] if subj else "physics"
     r = conn.execute("""
         SELECT AVG(mastery) / 5.0 AS m, COUNT(*) AS c FROM problems
         WHERE subject = ? AND concept_ids LIKE ?
     """, (subject, f"%,{concept_id},%")).fetchone()
-    return float(r["m"] or 0.0), int(r["c"] or 0)
+    m = float(r["m"] or 0.0)
+    count = int(r["c"] or 0)
+    if card_signal:
+        val, cnt = card_signal
+        if cnt > 0:
+            denom = count + cnt
+            m = (m * count + val * cnt) / denom if denom > 0 else val
+    return m, count
+
+
+def card_mastery_signal(conn: Any, subject: str) -> dict[int, tuple[float, int]]:
+    """Phase 2：统计该学科每概念的「闪卡驱动掌握度」——(0-1 均值, 卡样本数)。
+
+    对每张 active 卡取最近 3 次评分的均值 / 4 作为该卡掌握度；再对同一概念下
+    这些卡取平均。仅纳入已有 ≥1 次评分的卡（新卡未回忆前不拉低掌握度）。
+    """
+    rows_ = conn.execute(
+        "SELECT c.concept_id AS cid, c.id AS card_id, cr.rating AS rating "
+        "FROM cards c JOIN card_reviews cr ON cr.card_id = c.id "
+        "WHERE c.subject = ? AND c.status = 'active' "
+        "ORDER BY c.id DESC, cr.id DESC", (subject,)).fetchall()
+    per_card: dict[int, list[int]] = {}
+    for r_ in rows_:
+        per_card.setdefault((r_["cid"], r_["card_id"]), []).append(int(r_["rating"]))
+    acc: dict[int, list[float]] = {}
+    for (cid, _card), ratings in per_card.items():
+        val = sum(ratings[:3]) / len(ratings[:3]) / 4.0
+        acc.setdefault(cid, []).append(val)
+    out: dict[int, tuple[float, int]] = {}
+    for cid, vals in acc.items():
+        out[cid] = (round(sum(vals) / len(vals), 3), len(vals))
+    return out
 
 
 def concept_ids_to_list(raw: str) -> list[int]:
@@ -352,9 +387,11 @@ def update_progress(subject: str = "physics", force: bool = False) -> None:
         ids = [r["id"] for r in conn.execute(
             "SELECT id FROM concepts WHERE parent_id <> 0 AND subject = ?", (subject,)
         ).fetchall()]
+        # Phase 2：本学科概念的闪卡驱动掌握度（双驱动融合）
+        card_m = card_mastery_signal(conn, subject)
         self_m: dict[int, float] = {}
         for cid in ids:
-            m, cnt = _self_mastery(conn, cid)
+            m, cnt = _self_mastery(conn, cid, card_m.get(cid))
             self_m[cid] = m
             conn.execute(
                 "INSERT OR REPLACE INTO concept_progress(concept_id, mastery, reviews, updated_at) "
@@ -385,6 +422,104 @@ def update_progress(subject: str = "physics", force: bool = False) -> None:
             conn.execute(
                 "UPDATE concept_progress SET mastery = ? WHERE concept_id = ?", (round(val, 3), cid),
             )
+
+
+# Phase 3：按先修链的主动学习路径。掌握度 < 该阈值视为「待学/待补」。
+LEARN_THRESHOLD = 0.6
+_PATH_LIMIT = 20
+
+
+def learning_path(subject: str = "physics", threshold: float = 0.6) -> dict[str, Any]:
+    """主动学习路径：现在该学 / 该补的概念推荐（区别于到期复习队列）。
+
+    规则（先修链）：
+      - 概念「可学（ready）」= 其全部直接先修概念掌握度 ≥ threshold；
+      - 弱概念 = 掌握度 < threshold 的叶子概念；
+      - 推荐顺序：可学的弱概念按掌握度升序 → 若无可学弱概念，则取最弱被卡概念，
+        并进一步推荐它最弱的那个未达标先修（先补底盘）。
+    只读，不落库；掌握度已由题目+闪卡双驱动（Phase 2）给出。
+    """
+    from db import normalize_subject
+    subject = normalize_subject(subject)
+    ensure_seed(subject)
+    threshold = 0.6 if not (0.3 <= float(threshold) <= 0.9) else float(threshold)
+    with DB_LOCK, db() as conn:
+        nodes = {n["id"]: dict(n) for n in conn.execute(
+            "SELECT id, name, parent_id, chapter_id, difficulty, mastery_est "
+            "FROM concepts WHERE subject = ? AND parent_id <> 0", (subject,)).fetchall()}
+        prog = {r["concept_id"]: float(r["mastery"] or 0.0) for r in conn.execute(
+            "SELECT cp.concept_id, cp.mastery FROM concept_progress cp "
+            "JOIN concepts c ON c.id = cp.concept_id WHERE c.subject = ?", (subject,)).fetchall()}
+
+        def master(cid: int) -> float:
+            if cid in prog:
+                return prog[cid]
+            return float(nodes.get(cid, {}).get("mastery_est") or 0.0)
+
+        # 叶子概念（无子节点的概念，排除空章）
+        parent_ids = {n["parent_id"] for n in nodes.values()}
+        leaf = [cid for cid in nodes if nodes[cid]["parent_id"] != 0 and cid not in parent_ids]
+
+        # 先修边（仅限本学科节点）
+        prereq_of: dict[int, list[int]] = {}
+        for l in conn.execute("SELECT concept_a, concept_b FROM concept_links "
+                              "WHERE relation = 'prerequisite'").fetchall():
+            a, b = int(l["concept_a"]), int(l["concept_b"])
+            if b in nodes and a in nodes:
+                prereq_of.setdefault(b, []).append(a)
+
+        def chapter_name(cid: int) -> str:
+            ch = nodes.get(int(nodes[cid]["chapter_id"] or 0))
+            return ch["name"] if ch else ""
+
+        ready_weak, blocked = [], []
+        learned = 0
+        for cid in leaf:
+            missing = [p for p in prereq_of.get(cid, []) if master(p) < threshold]
+            val = master(cid)
+            if val >= threshold:
+                learned += 1
+                continue
+            entry = {"concept_id": cid, "name": nodes[cid]["name"],
+                     "chapter": chapter_name(cid), "mastery": round(val * 100),
+                     "difficulty": float(nodes[cid]["difficulty"] or 0.5)}
+            if missing:
+                entry["missing"] = [nodes[p]["name"] for p in missing]
+                blocked.append(entry)
+            else:
+                ready_weak.append(entry)
+        ready_weak.sort(key=lambda e: e["mastery"])
+        blocked.sort(key=lambda e: e["mastery"])
+
+        now = None
+        if ready_weak:
+            now = {**ready_weak[0], "reason": "ready"}  # 先学最弱且未被先修卡住的
+        elif blocked and blocked[0]["missing"]:
+            # 被卡（最弱）→ 指出应先补的未达标先修
+            weak_blocked = blocked[0]
+            gap_entries = sorted(
+                [(p, master(p)) for p in prereq_of.get(weak_blocked["concept_id"], [])
+                 if master(p) < threshold],
+                key=lambda kv: kv[1])
+            if gap_entries:
+                p = gap_entries[0][0]
+                now = {"concept_id": p, "name": nodes[p]["name"],
+                       "chapter": chapter_name(p), "mastery": round(master(p) * 100),
+                       "difficulty": float(nodes[p].get("difficulty") or 0.5),
+                       "reason": "prerequisite", "for": weak_blocked["name"]}
+    return {
+        "subject": subject,
+        "threshold": threshold,
+        "now": now,
+        "ready_weak": ready_weak[:_PATH_LIMIT],
+        "blocked": blocked[:_PATH_LIMIT],
+        "stats": {
+            "total": len(leaf),
+            "weak_ready": len(ready_weak),
+            "weak_blocked": len(blocked),
+            "learned": learned,
+        },
+    }
 
 
 def _concept_ids_of(problem: dict[str, Any]) -> list[int]:
@@ -636,3 +771,42 @@ def delete_concept(concept_id: int) -> bool:
             conn.execute("DELETE FROM concept_progress WHERE concept_id = ?", (concept_id,))
             conn.execute("DELETE FROM concepts WHERE id = ?", (concept_id,))
         return True
+
+
+# Phase 3：手动画线（概念↔概念建边）。relation 与 DB CHECK 白名单一致。
+_LINK_RELATIONS = {"prerequisite", "related", "contrast"}
+
+
+def link_concepts(a: int, b: int, relation: str, subject: str = "physics") -> tuple[bool, str]:
+    """在两个概念间建一条 relation 边（幂等）。
+
+    - prerequisite 保留方向：a 是 b 的先修（供学习路径/先修门正确读取）；
+    - related/contrast 对称：规整为 (min, max) 防反向重复；
+    - 校验关系白名单、两端存在且同学科、禁自环；`INSERT OR IGNORE` 幂等；
+    - 建先修边后重算掌握度传播，使学习路径/进度即时反映。
+    返回 (成功?, 错误信息)。
+    """
+    relation = str(relation or "").strip()
+    if relation not in _LINK_RELATIONS:
+        return False, "不支持的关系类型（须为 prerequisite/related/contrast）"
+    if a == b:
+        return False, "不能与自身连线"
+    with DB_LOCK, db() as conn:
+        na = conn.execute("SELECT subject FROM concepts WHERE id = ?", (a,)).fetchone()
+        nb = conn.execute("SELECT subject FROM concepts WHERE id = ?", (b,)).fetchone()
+        if not na or not nb:
+            return False, "概念不存在"
+        if na["subject"] != nb["subject"]:
+            return False, "跨学科的概念不能连线"
+        if na["subject"] != subject:
+            return False, "概念不属于当前学科"
+        if relation == "prerequisite":
+            ca, cb = a, b
+        else:
+            ca, cb = (a, b) if a < b else (b, a)
+        conn.execute(
+            "INSERT OR IGNORE INTO concept_links(concept_a, concept_b, relation) VALUES (?, ?, ?)",
+            (ca, cb, relation))
+    if relation == "prerequisite":
+        update_progress(subject, force=True)
+    return True, ""

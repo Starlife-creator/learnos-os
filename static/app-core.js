@@ -613,7 +613,7 @@ function confirmDialog(message) {
 }
 
 // ── 导航 + 深链 ──
-const PAGES = ['dashboard', 'bank', 'problems', 'review', 'oral', 'rag', 'exam', 'help', 'settings'];
+const PAGES = ['dashboard', 'bank', 'problems', 'review', 'oral', 'cards', 'rag', 'exam', 'help', 'settings'];
 function parseHash() {
   const h = (location.hash || '').replace('#', '');
   const [page, query] = h.split('?');
@@ -630,10 +630,15 @@ function switchPage(page, {push=true}={}) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.getElementById('page-' + page).classList.add('active');
   if (push) history.pushState(null, '', '#' + page);
-  if (page === 'dashboard') loadDashboard();
+  if (page === 'dashboard') { loadDashboard(); loadLearningPath('lpContent'); }
   if (page === 'bank') { loadBankUnits(); loadBank(); }
   if (page === 'problems') loadProblems(1);
   if (page === 'review') loadReviews();
+  if (page === 'cards') {
+    loadCards(); loadLearningPath();
+    const _pc = window.__pendingCardConcept;
+    if (_pc) { window.__pendingCardConcept = null; makeCardForPath(_pc); }
+  }
   if (page === 'settings') { loadSettings(); loadFsrsStatus(); }
   if (page === 'rag') { loadRagDocs(); loadRagSearch(''); }
   if (page === 'exam') loadExam();

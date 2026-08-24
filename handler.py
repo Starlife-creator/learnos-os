@@ -40,6 +40,7 @@ from handler_reviews import ReviewsMixin
 from handler_reports import ReportsMixin
 from handler_oral import OralMixin
 from handler_social import SocialMixin
+from handler_cards import CardsMixin
 import fsrs_bridge
 from fsrs_bridge import next_interval_days
 from handler_base import (X_HEADER, X_VALUE, _IDEMPOTENCY, _IDEMPOTENCY_TTL,
@@ -48,7 +49,7 @@ from resp import error_counts
 
 
 class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
-             ReportsMixin, SocialMixin, SimpleHTTPRequestHandler):
+             CardsMixin, ReportsMixin, SocialMixin, SimpleHTTPRequestHandler):
     server_version = "LearnOS/0.5.0"
 
     # 路由表：(正则模式, 处理方法名, 是否需要请求体)。路径数字组自动转 int 传入。
@@ -71,6 +72,9 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         (r"/api/report/monthly", "_handle_monthly_report"),
         (r"/api/reviews", "_handle_list_reviews"),
         (r"/api/reviews/summary/today", "_handle_today_summary"),
+        (r"/api/cards/due", "_handle_list_due_cards"),
+        (r"/api/cards", "_handle_list_cards"),
+        (r"/api/learn/path", "_handle_learning_path"),
         (r"/api/settings", "_handle_settings"),
         (r"/api/trend", "_handle_trend"),
         (r"/api/analytics", "_handle_analytics"),
@@ -130,6 +134,7 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         (r"/api/exam/papers/(\d+)/questions", "_handle_exam_add_questions", True),
         (r"/api/exam/papers", "_handle_exam_create", True),
         (r"/api/graph/concepts", "_handle_graph_add", True),
+        (r"/api/graph/concepts/(\d+)/link", "_handle_graph_link", True),
         (r"/api/graph/bind", "_handle_graph_bind", True),
         (r"/api/ocr/extract", "_handle_ocr_extract", True),
         (r"/api/import", "_handle_import", True),
@@ -152,6 +157,10 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         (r"/api/material/apply", "_handle_material_apply", True),
         (r"/api/social/checkin", "_handle_social_checkin", True),
         (r"/api/render-config", "_handle_set_render_config", True),
+        (r"/api/cards", "_handle_create_card", True),
+        (r"/api/cards/generate", "_handle_generate_card_drafts", True),
+        (r"/api/cards/(\d+)/review", "_handle_review_card", True),
+        (r"/api/cards/(\d+)/delete", "_handle_delete_card", False),
     ]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:

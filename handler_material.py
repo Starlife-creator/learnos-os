@@ -299,3 +299,21 @@ class MaterialMixin:
             self.json_response({"error": "题目或概念不存在"}, 404)
             return
         self.json_response({"ok": True})
+
+    def _handle_graph_link(self, a: int, data: dict[str, Any]) -> None:
+        """Phase 3：手动画线 — 在概念 a 与 data[b] 间建 relation 边（幂等）。"""
+        try:
+            b = int(data.get("b", 0))
+        except (TypeError, ValueError):
+            self.json_response({"error": "参数不合法"}, 400)
+            return
+        ok, err = graph.link_concepts(a, b, str(data.get("relation", "")), self.subject)
+        if not ok:
+            self.json_response({"error": err}, 400)
+            return
+        try:
+            from auth import audit
+            audit("graph_link", ip=self._client_ip(), detail=f"{a}-{b}-{data.get('relation','')}")
+        except Exception as exc:
+            LOG.debug("连线审计失败（可忽略）: %s", exc)
+        self.json_response({"ok": True})

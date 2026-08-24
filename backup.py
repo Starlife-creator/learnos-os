@@ -39,6 +39,8 @@ BACKUP_TABLES = [
     "bank_problems",      # 多题型改造的题库错题建档
     "mastery_log",        # 掌握度日志（报告数据源）
     "gamification",       # 成就 / 积分
+    "cards",              # v25 概念闪卡（主动回忆）
+    "card_reviews",       # v25 闪卡评分日志
 ]
 
 

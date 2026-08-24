@@ -96,6 +96,17 @@
   .label-chapter { font-size: 12px; font-weight: 600; fill: var(--text); }
   .label-unit { font-size: 14px; font-weight: 700; fill: var(--accent); }
   .edge { fill: none; opacity: .55; }
+  .edge { transition: opacity .12s; }
+  .edge-hot { opacity: 1 !important; stroke-width: 2; }
+  .edge-dim { opacity: .12 !important; }
+  .node-fade { opacity: .18; transition: opacity .12s; }
+  .link-active { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .link-src { stroke: var(--accent); stroke-width: 3; }
+  #linkChooser {
+    display: none; position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 10px 14px; z-index: 20; box-shadow: 0 4px 18px rgba(0,0,0,.14);
+  }
   .edge-prerequisite { stroke: var(--red); stroke-dasharray: 5 3; }
   .edge-related { stroke: var(--accent); }
   .edge-contrast { stroke: var(--amber); stroke-dasharray: 2 2; }
@@ -118,10 +129,18 @@
   <div class="spacer"></div>
   <label for="graphSubject" data-i18n="nav.subject" style="margin-right:6px;font-size:14px">学科</label>
   <select id="graphSubject" onchange="switchGraphSubject(this.value)" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:14px;margin-right:10px"></select>
+  <label for="graphLayout" data-i18n="graph.layoutLabel" style="margin-right:6px;font-size:14px">布局</label>
+  <select id="graphLayout" onchange="switchLayoutMode(this.value)" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:14px;margin-right:10px">
+    <option value="hier" data-i18n="graph.mode_hier">按目录</option>
+    <option value="chain" data-i18n="graph.mode_chain">按先修链</option>
+    <option value="mastery" data-i18n="graph.mode_mastery">按掌握度</option>
+    <option value="difficulty" data-i18n="graph.mode_difficulty">按难度</option>
+  </select>
   <button class="btn" onclick="collapseAll()" data-i18n="graph.collapseAll">全部收起</button>
   <button class="btn" onclick="expandAll()" data-i18n="graph.expandAll">全部展开</button>
   <button class="btn" onclick="autoLayout()" data-i18n="graph.autoLayout">整理布局</button>
   <button class="btn" onclick="resetLayout()" data-i18n="graph.resetLayout">重置布局</button>
+  <button class="btn" id="btnLink" onclick="toggleLinkMode()" data-i18n="graph.linkButton">✎ 连线</button>
 </header>
 <div id="wrap">
   <div id="canvasBox">
@@ -137,6 +156,10 @@
     <svg id="svg"></svg>
   </div>
   <div id="side">
+    <div class="card" style="margin-bottom:12px">
+      <h3>🎯 <span data-i18n="cards.pathTitle">学习路径（按先修链）</span></h3>
+      <div id="graphLP" class="muted">…</div>
+    </div>
     <div id="welcome" class="card">
       <h3 data-i18n="graph.usageTitle">使用说明</h3>
       <p class="kv" data-i18n="graph.usage">默认显示单元与章节：点击章节展开其下概念，再次点击收起。节点颜色表示掌握度：</p>
@@ -168,6 +191,12 @@
       <div style="display:flex; gap:8px; margin-top:10px">
         <button class="btn btn-primary" onclick="prereqMode()" data-i18n="graph.prereqBtn">先修模式：看相关错题</button>
       </div>
+      <div style="display:flex; gap:8px; margin-top:10px" id="btnMakeCardWrap">
+        <button class="btn btn-primary" onclick="goMakeCard()" data-i18n="graph.makeCard">➕ 为此概念做闪卡</button>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:10px">
+        <button class="btn" id="btnDeleteConcept" onclick="deleteConcept()" data-i18n="graph.deleteConcept">🗑 删除此概念</button>
+      </div>
       <div id="dProblems"></div>
     </div>
     <div class="card" style="margin-top:12px">
@@ -180,6 +209,13 @@
       <button class="btn" style="margin-top:8px" onclick="addConcept()" data-i18n="graph.add">添加</button>
     </div>
   </div>
+</div>
+<div id="linkChooser">
+  <span class="muted" data-i18n="graph.chooseRelation">选择关系类型</span>
+  <button class="btn" onclick="doLink('prerequisite')" data-i18n="graph.relationP">先修 ▸</button>
+  <button class="btn" onclick="doLink('related')" data-i18n="graph.relationR">相关 —</button>
+  <button class="btn" onclick="doLink('contrast')" data-i18n="graph.relationC">对比 ⇄</button>
+  <button class="btn" onclick="cancelLink()" data-i18n="graph.linkCancel">取消</button>
 </div>
 <script src="concept_map.js"></script>
 </body>

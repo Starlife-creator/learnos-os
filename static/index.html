@@ -13,6 +13,7 @@
 <script defer src="/app-dashboard.js"></script>
 <script defer src="/app-problems.js"></script>
 <script defer src="/app-review.js"></script>
+<script defer src="/app-cards.js"></script>
 <script defer src="/app-oral.js"></script>
 <script defer src="/app-rag.js"></script>
 <script defer src="/app-exam.js"></script>
@@ -45,6 +46,7 @@
     <button class="nav-item nav-more-toggle" id="moreToggle" aria-haspopup="true" aria-expanded="false" data-i18n="nav.more">更多 ▾</button>
     <div class="nav-more-menu" role="menu">
       <button class="nav-item" data-page="oral" role="menuitem"><span data-i18n="nav.oral">口试</span></button>
+      <button class="nav-item" data-page="cards" role="menuitem"><span data-i18n="nav.cards">闪卡</span></button>
       <a class="nav-item" href="concept_map.html" role="menuitem" style="text-decoration:none"><span data-i18n="nav.graph">图谱</span></a>
       <button class="nav-item" data-page="rag" role="menuitem"><span data-i18n="nav.rag">教材库</span></button>
       <button class="nav-item" data-page="exam" role="menuitem"><span data-i18n="nav.exam">考试</span></button>
@@ -132,6 +134,11 @@
     <div class="card">
       <div class="card-title" data-i18n="plan.title">今日学习计划</div>
       <div id="planCard" class="hint-text">—</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">🎯 <span data-i18n="cards.pathTitle">学习路径</span></div>
+      <div id="lpContent" class="text-sm text-muted">—</div>
     </div>
 
     <div class="card" id="topicsCard">
@@ -338,6 +345,30 @@
     <div id="reviewList"></div>
   </div>
 
+  <!-- ── 闪卡页（概念主动回忆）── -->
+  <div id="page-cards" class="page">
+    <div class="flex-between mb-8" style="align-items:center">
+      <h2 style="font-size:18px" data-i18n="cards.title">概念闪卡</h2>
+      <div class="flex gap-8" id="cardsStats" style="font-size:13px;color:var(--text-muted)"></div>
+    </div>
+    <div class="flex gap-12 mb-8" style="align-items:center;flex-wrap:wrap">
+      <button class="btn btn-primary btn-sm" onclick="openCardModal()" data-i18n="cards.add">＋ 新建卡片</button>
+      <button class="btn btn-secondary btn-sm" onclick="generateCardDrafts()" data-i18n="cards.fromConcept">🧠 从概念生成</button>
+      <button class="btn btn-secondary btn-sm" onclick="startCardFlash()" data-i18n="cards.flash">⚡ 闪卡复习</button>
+    </div>
+    <div class="card mb-8">
+      <p class="text-sm text-muted" data-i18n="cards.hint">把概念做成「先合上资料、自己在脑中作答」的闪卡，答过用 FSRS 调度间隔复习——
+      比反复翻看更有效（主动回忆 vs 被动识别）。答对计入重复次数，到期自动进入队列。</p>
+    </div>
+    <div class="card mb-8" id="learningPathCard">
+      <div class="card-title">🎯 <span data-i18n="cards.pathTitle">学习路径</span>
+        <button class="btn btn-link btn-sm" onclick="loadLearningPath()" data-i18n="cards.pathRefresh">刷新</button>
+      </div>
+      <div id="learningPathContent" class="text-sm">…</div>
+    </div>
+    <div id="cardsList"></div>
+  </div>
+
   <!-- ── 全局搜索（Ctrl+K）── -->
   <div class="modal-overlay" id="searchModal">
     <div class="modal" role="dialog" aria-modal="true" style="max-width:560px">
@@ -377,6 +408,78 @@
         <button class="btn btn-danger" onclick="flashRate(1)" data-i18n="review.forgot">😖 忘了</button>
         <button class="btn btn-primary" onclick="flashRate(4)" data-i18n="review.remember">😎 记得</button>
         <button class="btn btn-secondary" data-action="close-modal" data-modal-id="flashModal" data-i18n="review.pause">暂停</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 闪卡编辑/生成弹窗 ── -->
+  <div class="modal-overlay" id="cardModal">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="cardModalTitle" style="max-width:620px">
+      <div class="modal-header">
+        <h3 id="cardModalTitle" data-i18n="cards.editTitle">编辑卡片</h3>
+        <button class="modal-close" data-action="close-modal" data-modal-id="cardModal" data-i18n-aria="common.closeAria">&times;</button>
+      </div>
+      <div class="modal-body" style="padding:16px">
+        <div class="form-row">
+          <div class="form-group">
+            <label data-i18n="cards.concept">关联概念</label>
+            <select id="cardConcept" class="form-input"></select>
+          </div>
+          <div class="form-group">
+            <label data-i18n="cards.kind">卡型</label>
+            <select id="cardKind" class="form-input">
+              <option value="qa" data-i18n="cards.qa">问答</option>
+              <option value="cloze" data-i18n="cards.cloze">填空</option>
+              <option value="note" data-i18n="cards.note">注解</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label data-i18n="cards.cue">正面（问题/题干）</label>
+          <textarea id="cardCue" rows="2" style="width:100%" data-i18n-ph="cards.cuePh"></textarea>
+        </div>
+        <div class="form-group">
+          <label data-i18n="cards.answer">背面（答案/自检要点）</label>
+          <textarea id="cardAnswer" rows="4" style="width:100%" data-i18n-ph="cards.answerPh"></textarea>
+        </div>
+        <div class="flex gap-12 mt-12" style="align-items:center">
+          <button class="btn btn-secondary" type="button" onclick="doGenerateCardDrafts()" data-i18n="cards.genBtn">AI / 离线生成草稿</button>
+          <span class="text-sm text-muted" id="cardGenStatus"></span>
+        </div>
+        <div id="cardDrafts" class="mt-12"></div>
+        <div class="flex gap-12 mt-12" style="justify-content:flex-end">
+          <button class="btn btn-primary" onclick="saveCard()" data-i18n="cards.save">保存卡片</button>
+          <button class="btn btn-secondary" data-action="close-modal" data-modal-id="cardModal" data-i18n="cards.cancel">取消</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 闪卡复习（翻卡）── -->
+  <div class="modal-overlay" id="cardFlashModal">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="cardFlashTitle" style="max-width:640px">
+      <div class="modal-header">
+        <h3 id="cardFlashTitle" data-i18n="cards.flashTitle">⚡ 闪卡复习</h3>
+        <button class="modal-close" data-action="close-modal" data-modal-id="cardFlashModal" data-i18n-aria="common.closeAria">&times;</button>
+      </div>
+      <div class="flash-body" id="cardFlashBody" onclick="cardFlashFlip()">
+        <div class="flash-count text-sm text-muted mb-8" id="cardFlashCount"></div>
+        <div class="flash-front">
+          <div class="text-muted text-sm mb-8" id="cardFlashMeta"></div>
+          <pre class="flash-content" id="cardFlashCue">加载中...</pre>
+        </div>
+        <div class="flash-back hidden" id="cardFlashBack">
+          <div class="print-hdr" data-i18n="cards.answer">答案</div>
+          <pre class="flash-content" id="cardFlashAnswer"></pre>
+        </div>
+        <p class="hint-text text-center" data-i18n="cards.flashHint">点击卡片翻面；键盘 ←忘 / ↑模糊 / ↓基本对 / →记得</p>
+      </div>
+      <div class="modal-footer flex gap-12">
+        <button class="btn btn-danger" onclick="cardFlashRate(1)" data-i18n="cards.rForgot">😖 忘了</button>
+        <button class="btn btn-secondary" onclick="cardFlashRate(2)" data-i18n="cards.rHard">😅 模糊</button>
+        <button class="btn btn-secondary" onclick="cardFlashRate(3)" data-i18n="cards.rGood">🙂 基本对</button>
+        <button class="btn btn-primary" onclick="cardFlashRate(4)" data-i18n="cards.rEasy">😎 记得</button>
+        <button class="btn btn-secondary" data-action="close-modal" data-modal-id="cardFlashModal" data-i18n="cards.pause">暂停</button>
       </div>
     </div>
   </div>

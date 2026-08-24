@@ -1,6 +1,12 @@
 // 初始化（必须最后加载）：首次渲染 / SW 注册
 // ── 初始化 ──
-const initial = (location.hash || '').replace('#', '').split('?')[0];
+const _initHash = location.hash || '';
+const initial = _initHash.replace('#', '').split('?')[0];
+// 深链：闪卡页 #cards?concept=ID（由图谱页跳转）→ 切换后自动为该概念建卡
+if (initial === 'cards') {
+  const _cq = parseInt(new URLSearchParams(_initHash.split('?')[1] || '').get('concept'), 10);
+  if (_cq) window.__pendingCardConcept = _cq;
+}
 (async () => {
   await loadLocale(currentLang());
   applyI18n(document);
