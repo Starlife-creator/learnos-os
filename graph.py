@@ -101,7 +101,8 @@ def ensure_seed(subject: str = "physics") -> None:
                 for chapter in unit.get("chapters", []):
                     ch_id = _insert_concept(conn, chapter["name"], unit_id, unit_id, 0.2, name_to_id, subject, "seed")
                     for c in chapter.get("concepts", []):
-                        cid = _insert_concept(conn, c["n"], ch_id, ch_id, float(c.get("d", 0.5)), name_to_id, subject, "seed")
+                        cid = _insert_concept(conn, c["n"], ch_id, ch_id, float(c.get("d", 0.5)),
+                                              name_to_id, subject, "seed", str(c.get("desc", "") or ""))
                         name_to_id.setdefault(c["n"], cid)
             # 第二遍：建先修边（不依赖出现顺序）
             for unit in seed.get("units", []):
@@ -154,16 +155,16 @@ def seed_status(subject: str = "physics") -> dict[str, Any]:
 
 def _insert_concept(conn: Any, name: str, parent_id: int, chapter_id: int,
                     difficulty: float, name_to_id: dict[str, int], subject: str = "physics",
-                    source: str = "unknown") -> int:
+                    source: str = "unknown", explanation: str = "") -> int:
     cur = conn.execute(
         "SELECT id FROM concepts WHERE subject = ? AND name = ?", (subject, name)
     ).fetchone()
     if cur:
         return int(cur["id"])
     cursor = conn.execute(
-        "INSERT INTO concepts(name, parent_id, chapter_id, difficulty, subject, created_at, source) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (name, parent_id, chapter_id, difficulty, subject, now(), source),
+        "INSERT INTO concepts(name, parent_id, chapter_id, difficulty, subject, created_at, source, explanation) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (name, parent_id, chapter_id, difficulty, subject, now(), source, explanation),
     )
     cid = int(cursor.lastrowid)
     name_to_id[name] = cid
@@ -254,6 +255,9 @@ def export_seed(subject: str, target_path: Path | None = None) -> Path:
             unit_name = nodes.get(n["parent_id"], {}).get("name") or "未分类"
             ch_name = "概念"
         concept_obj: dict[str, Any] = {"n": n["name"], "d": n["difficulty"]}
+        exp = (n.get("explanation") or "").strip()
+        if exp:
+            concept_obj["desc"] = exp
         pres = prereq_of.get(n["id"], [])
         if pres:
             concept_obj["p"] = [id_to_name[p] for p in pres if p in id_to_name]
