@@ -877,6 +877,17 @@ async function generateExplanation() {
   const btn = document.getElementById('btnGenExplain');
   if (btn) { btn.disabled = true; btn.textContent = t('graph.explainGenning'); }
   try {
+    // 收集真实先修/后继/易混，发往 AI 使其生成与种子一致的「定义+结构」分块风格
+    const pre = [], suc = [], con = [];
+    for (const l of graphData.links) {
+      if (l.relation === 'prerequisite') {
+        if (l.concept_b === selectedId) { const x = nodeById.get(l.concept_a); if (x) pre.push(x.name); }
+        else if (l.concept_a === selectedId) { const x = nodeById.get(l.concept_b); if (x) suc.push(x.name); }
+      } else if (l.relation === 'contrast' && (l.concept_a === selectedId || l.concept_b === selectedId)) {
+        const x = nodeById.get(l.concept_a === selectedId ? l.concept_b : l.concept_a);
+        if (x) con.push(x.name);
+      }
+    }
     const resp = await fetch('/api/ai/concept-explanation', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'LearnOS' },
@@ -884,6 +895,9 @@ async function generateExplanation() {
         name: n.name,
         subject: graphSubject(),
         aliases: n.aliases || '',
+        prereq: pre.join('、'),
+        succ: suc.join('、'),
+        contrast: con.join('、'),
       }),
     });
     const data = await resp.json();
@@ -1159,5 +1173,61 @@ async function deleteConcept() {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && linkMode) toggleLinkMode();
 });
+
+// 可拖拽侧边栏：在左侧分隔条上拖动调整 #side 宽度（pointer events + 键盘可达 + 持久化）
+(function initSideResizer() {
+  const side = document.getElementById('side');
+  const rz = document.getElementById('sideResizer');
+  if (!side || !rz) return;
+  const MIN = 260, MAX = 680, KEY = 'learnos.sideWidth';
+  const clamp = w => Math.max(MIN, Math.min(MAX, w));
+  function apply(w) {
+    const v = clamp(w);
+    side.style.width = v + 'px';
+    rz.setAttribute('aria-valuemin', String(MIN));
+    rz.setAttribute('aria-valuemax', String(MAX));
+    rz.setAttribute('aria-valuenow', String(v));
+  }
+  try { const s = parseInt(localStorage.getItem(KEY), 10); if (s) apply(s); } catch (_) {}
+  let dragging = false, startX = 0, startW = 0;
+  function onMove(e) { if (!dragging) return; apply(startW + (startX - e.clientX)); }
+  function onUp() {
+    if (!dragging) return;
+    dragging = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    try { localStorage.setItem(KEY, parseInt(side.style.width, 10)); } catch (_) {}
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+  }
+  rz.addEventListener('pointerdown', e => {
+    dragging = true;
+    startX = e.clientX;
+    startW = parseInt(getComputedStyle(side).width, 10) || 360;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    try { rz.setPointerCapture(e.pointerId); } catch (_) {}
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    e.preventDefault();
+  });
+  rz.addEventListener('keydown', e => {
+    let w = parseInt(side.style.width, 10) || 360;
+    const step = 16;
+    if (e.key === 'ArrowLeft') w += step;
+    else if (e.key === 'ArrowRight') w -= step;
+    else if (e.key === 'Home') w = MIN;
+    else if (e.key === 'End') w = MAX;
+    else return;
+    apply(w);
+    try { localStorage.setItem(KEY, parseInt(side.style.width, 10)); } catch (_) {}
+    e.preventDefault();
+  });
+  window.addEventListener('resize', () => {
+    const w = parseInt(side.style.width, 10) || 360;
+    const cap = Math.round(window.innerWidth * 0.6);
+    if (w > cap) apply(cap);
+  });
+})();
 
 bootGraph();

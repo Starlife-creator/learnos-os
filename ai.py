@@ -1163,12 +1163,13 @@ def explain_concept(
         ctx.append(f"对比概念：{contrast.strip()}")
     ctx_block = "\n".join(ctx) if ctx else "（无额外上下文）"
     prompt = (
-        f"你是{subject}学科助教。请为概念「{name}」写一段简明、准确、面向学生的概念详解"
-        f"（150-300 字）。要求：\n"
-        f"1. 用一句话给出核心定义；\n"
-        f"2. 说明其物理/数学含义与直觉；\n"
-        f"3. 如有典型应用场景或易错点，简要点出。\n"
-        f"不要使用 Markdown 标题，用自然段落。\n"
+        f"你是{subject}学科助教。请为概念「{name}」写一段极简、准确、面向学生的概念详解。\n"
+        f"硬性要求：\n"
+        f"1. 禁止复述它属于哪个学科/章节/单元（界面已显示，复述是冗余，反而干扰学习）；\n"
+        f"2. 禁止说教口吻（如「如果你是初学者…」「入门阶段…」「建议先…」），直接给知识；\n"
+        f"3. 用清晰短句，可分 2-4 行：第一行给核心定义；若上下文给出了前置/后继概念，"
+        f"用一行点出关系；如有典型直觉或易错点，用一行简要点出；\n"
+        f"4. 总字数控制在 80-160 字，不要 Markdown 标题，纯文本换行即可。\n"
         f"已知上下文：\n{ctx_block}"
     )
     return call_ai([{"role": "user", "content": prompt}], max_tokens=500, tier="heavy", route="material")
