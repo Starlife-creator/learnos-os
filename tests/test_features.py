@@ -132,6 +132,26 @@ class TestBorrowedFeatures(unittest.TestCase):
         status, data = self._request("GET", "/api/graph/unlinked")
         self.assertFalse([m for m in data["items"] if m["problem_id"] == pid and m["concept_id"] == cid])
 
+    # ── 概念详解回档端点：DELETE 清空用户覆盖层，落回种子基线 ──
+    def test_revert_explanation_endpoint(self):
+        _, add = self._request("POST", "/api/graph/concepts",
+                               {"name": "回档测试概念", "aliases": "", "subject": "physics"})
+        cid = add["id"]
+        # 写入用户覆盖层
+        status, _ = self._request("PUT", f"/api/graph/concepts/{cid}",
+                                  {"aliases": "", "explanation": "用户覆盖"})
+        self.assertEqual(status, 200)
+        # 专用回档端点：DELETE 清空 explanation_user（落回种子基线）
+        status, data = self._request("DELETE", f"/api/graph/concepts/{cid}/explanation-override")
+        self.assertEqual(status, 200)
+        self.assertTrue(data.get("ok"))
+        row = db.row("SELECT explanation_user, explanation FROM concepts WHERE id=?", (cid,))
+        self.assertIsNone(row["explanation_user"], "回档后用户层应为空")
+        # 再次 DELETE 幂等，仍返回 ok
+        status, data = self._request("DELETE", f"/api/graph/concepts/{cid}/explanation-override")
+        self.assertEqual(status, 200)
+        self.assertTrue(data.get("ok"))
+
     # ── 温度空串修复：float('') 曾导致所有 AI 调用崩溃 ──
     def test_temperature_empty_string_safe(self):
         from ai import _safe_temperature

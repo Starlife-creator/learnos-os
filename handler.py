@@ -1010,6 +1010,14 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
                 auth.audit("delete_problem", ip=self._client_ip(), detail=match.group(1))  # R5 审计
                 self.json_response({"ok": True})
                 return
+            match = re.fullmatch(r"/api/graph/concepts/(\d+)/explanation-override", path)
+            if match:
+                if not graph.revert_explanation(int(match.group(1))):
+                    self.json_response({"error": "概念不存在"}, 404)
+                    return
+                auth.audit("revert_explanation", ip=self._client_ip(), detail=match.group(1))  # R5 审计
+                self.json_response({"ok": True})
+                return
             match = re.fullmatch(r"/api/graph/concepts/(\d+)", path)
             if match:
                 if not graph.delete_concept(int(match.group(1))):

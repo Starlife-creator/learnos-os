@@ -689,6 +689,15 @@ def update_explanation(concept_id: int, explanation: str) -> bool:
     return cur.rowcount > 0
 
 
+def revert_explanation(concept_id: int) -> bool:
+    """清空用户覆盖层，显示值回档到种子基线（等价于用户保存空串）。
+
+    与 update_explanation("") 同路径，但语义更明确，专供「回退到种子」按钮调用，
+    不修改 explanation_seed，故可安全重复调用。
+    """
+    return update_explanation(concept_id, "")
+
+
 _mentions_cache: dict[str, tuple[str, list[dict[str, Any]]]] = {}
 
 

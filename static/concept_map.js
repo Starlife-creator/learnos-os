@@ -770,6 +770,7 @@ async function selectNode(id) {
   document.getElementById('dLooms').textContent = n.looms_in || 0;
   document.getElementById('dAliases').value = n.aliases || '';
   document.getElementById('dExplanation').value = n.explanation || '';
+  updateExplanationBadge(n);
   // 单遍扫 links（旧实现三遍 filter + 每次重建 byId Map）
   const prereq = [], succ = [], cont = [];
   for (const l of graphData.links) {
@@ -857,7 +858,13 @@ async function saveExplanation() {
     const data = await resp.json();
     if (data.ok) {
       const n = graphData.nodes.find(x => x.id === selectedId);
-      if (n) { n.explanation = val; n.aliases = document.getElementById('dAliases').value; }
+      if (n) {
+        n.aliases = document.getElementById('dAliases').value;
+        const edited = !!(val && val.trim());
+        n.explanation_user = edited ? val : null;
+        n.explanation = edited ? val : (n.explanation_seed || '');
+      }
+      updateExplanationBadge(n);
       toast(t('graph.explainSaved'));
     } else alert(data.error || 'fail');
   } catch { alert(t('graph.loadFail')); }
@@ -886,6 +893,48 @@ async function generateExplanation() {
     } else alert(data.error || t('graph.loadFail'));
   } catch { alert(t('graph.loadFail')); }
   finally { if (btn) { btn.disabled = false; btn.textContent = t('graph.explainGen'); } }
+}
+
+// 详解徽标：有用户覆盖层显示「已编辑」并可回退，否则显示「默认(种子)」
+function updateExplanationBadge(n) {
+  const badge = document.getElementById('dExplanationBadge');
+  const revertBtn = document.getElementById('btnRevertExplain');
+  if (!badge || !revertBtn || !n) return;
+  const hasOverride = !!(n.explanation_user && String(n.explanation_user).trim());
+  if (hasOverride) {
+    badge.textContent = t('graph.explainEdited');
+    badge.className = 'tag tag-warn';
+    badge.style.display = '';
+    revertBtn.style.display = '';
+  } else {
+    badge.textContent = t('graph.explainSeedDefault');
+    badge.className = 'tag';
+    badge.style.display = '';
+    revertBtn.style.display = 'none';
+  }
+}
+
+// 回退到种子：清空用户覆盖层，显示值落回种子基线
+async function revertExplanation() {
+  if (!selectedId) return;
+  const n = nodeById.get(selectedId);
+  if (!n) return;
+  const seed = (n.explanation_seed != null && String(n.explanation_seed) !== '')
+    ? n.explanation_seed : (n.explanation || '');
+  try {
+    const resp = await fetch(`/api/graph/concepts/${selectedId}/explanation-override`, {
+      method: 'DELETE',
+      headers: { 'X-Requested-With': 'LearnOS' },
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      n.explanation_user = null;
+      n.explanation = seed;
+      document.getElementById('dExplanation').value = seed;
+      updateExplanationBadge(n);
+      toast(t('graph.explainReverted'));
+    } else alert(data.error || 'fail');
+  } catch { alert(t('graph.loadFail')); }
 }
 
 async function addConcept() {
