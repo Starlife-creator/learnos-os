@@ -1470,8 +1470,6 @@ _REVIEW_PROMPT = (
     "\"comment\": \"题目整体合格，仅个别选项需打磨。\"}}"
 )
 
-_ai_available: bool | None = None
-
 
 def ai_configured() -> bool:
     """AI 是否真正可用（能拿到有效密钥或本地端点），而非只看密钥文件是否存在。
@@ -1498,15 +1496,12 @@ def review_bank_question(question: dict[str, Any], subject: str = "") -> dict[st
     返回 {verdict, issues, comment, revised?, ai_available}。
     AI 不可用/异常时降级为 {verdict: "pass", ai_available: False}，不阻断出题流程。
     """
-    global _ai_available
     try:
         q = dict(question or {})
         q.setdefault("type", q.get("type") or "single")
         if not ai_configured():
-            _ai_available = False
             return {"verdict": "pass", "issues": [], "comment": "", "ai_available": False}
     except Exception:
-        _ai_available = False
         return {"verdict": "pass", "issues": [], "comment": "", "ai_available": False}
     payload = json.dumps(q, ensure_ascii=False)
     # 结果缓存：同题同学科审题结果稳定 → 命中直接返回（省 token）
@@ -1540,7 +1535,6 @@ def review_bank_question(question: dict[str, Any], subject: str = "") -> dict[st
         LOG.warning("AI 审题校验失败，降级: %s", exc)
     except Exception as exc:
         LOG.warning("AI 审题失败，降级: %s", exc)
-    _ai_available = False
     return {"verdict": "pass", "issues": [], "comment": "", "ai_available": False}
 
 

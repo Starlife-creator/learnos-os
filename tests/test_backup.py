@@ -47,6 +47,7 @@ class TestBackup(unittest.TestCase):
     def tearDownClass(cls):
         cls.server.shutdown()
         cls.server.server_close()
+        db.close_all_connections()  # 释放备份库句柄，否则 Windows cleanup 被文件锁挡住
         db.DB_PATH = cls._orig_db
         config.DB_PATH = cls._orig_db
         config.APP_DIR = cls._orig_app
@@ -173,6 +174,7 @@ class TestBackupNewTablesRoundtrip(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        db.close_all_connections()  # 释放 nt.db 句柄，否则 Windows cleanup 被文件锁挡住
         db.DB_PATH = cls._orig_db
         config.DB_PATH = cls._orig_db
         config.APP_DIR = cls._orig_app
@@ -189,6 +191,63 @@ class TestBackupNewTablesRoundtrip(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT problem_id FROM bank_problems WHERE qid='q1'").fetchone()[0], 7)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM mastery_log").fetchone()[0], 1)
             self.assertEqual(conn.execute("SELECT xp FROM gamification").fetchone()[0], 250)
+
+
+class TestRestoreConcurrency(unittest.TestCase):
+    """A1（P2）回归：并发还原必须被 DB_LOCK 串行化（swap+refill 全程持锁），
+    不得出现 database is locked / 半替换状态，最终库完整等于单份备份。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.temp_dir = tempfile.TemporaryDirectory(prefix="backup_conc_", dir=_TMP)
+        cls._orig_db = config.DB_PATH
+        config.DB_PATH = Path(cls.temp_dir.name) / "conc.db"
+        db.DB_PATH = config.DB_PATH
+        cls._orig_app = config.APP_DIR
+        config.APP_DIR = Path(cls.temp_dir.name) / "app"
+        config.APP_DIR.mkdir(parents=True, exist_ok=True)
+        backup.APP_DIR = config.APP_DIR
+        db.init_db()
+        from db import now
+        with db.db() as conn:
+            for i in range(5):
+                conn.execute(
+                    "INSERT INTO problems(title, course, topic, content, mastery, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (f"并发题{i}", "力学", "动量", "内容", 1, now(), now()),
+                )
+        cls.payload = json.dumps(backup.export_backup())
+
+    @classmethod
+    def tearDownClass(cls):
+        db.close_all_connections()  # 释放 conc.db 句柄，否则 Windows cleanup 被文件锁挡住
+        db.DB_PATH = cls._orig_db
+        config.DB_PATH = cls._orig_db
+        config.APP_DIR = cls._orig_app
+        cls.temp_dir.cleanup()
+
+    def test_concurrent_restore_serialized(self):
+        errors: list[Exception] = []
+        barrier = threading.Barrier(4)
+
+        def do_restore():
+            try:
+                barrier.wait(timeout=5)
+                backup.restore_backup(self.payload)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=do_restore) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+        self.assertEqual(errors, [], f"并发还原出现异常: {errors}")
+        with db.db() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM problems").fetchone()[0]
+        self.assertEqual(count, 5)
+        # 每次还原都会把旧库 rename 为 .bak —— 至少留下 1 份中间态备份
+        self.assertGreaterEqual(len(list(Path(self.temp_dir.name).glob("*.bak"))), 1)
 
 
 if __name__ == "__main__":

@@ -217,7 +217,9 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
     def _metrics_authorized(self) -> bool:
         """/api/metrics 自管鉴权：仅本机回环或携带有效导出令牌可访问。"""
         ra = self.client_address[0] if self.client_address else ""
-        if ra in ("127.0.0.1", "::1", "localhost", "0.0.0.0"):
+        # 仅真实回环地址（B2）："0.0.0.0" 是监听通配符、"localhost" 是主机名，
+        # 均不可能出现在 client_address[0]（恒为对端 IP），属死代码，已移除
+        if ra in ("127.0.0.1", "::1"):
             return True
         return self._export_token_ok()
 
@@ -865,7 +867,10 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
             self.json_response({"ok": True, "reply": reply})
         except Exception as exc:
             # reasoner 模型/AI 异常时给出可读错误而非 500 崩溃
-            self.json_response({"ok": False, "error": str(exc)}, 200)
+            # B3：暴露模式脱敏——provider 原始异常（模型名/端点/栈片段）只留日志，不回传客户端
+            LOG.warning("AI 连接测试失败: %s", exc)
+            msg = "AI 连接失败" if auth.is_exposed() else str(exc)
+            self.json_response({"ok": False, "error": msg}, 200)
 
     def _handle_fsrs_optimal(self) -> None:
         """CMRR 式最优保持率估算：基于本学科卡量与平均稳定度的解析模拟。"""
@@ -1019,6 +1024,7 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
                 if not rag.delete_doc(int(match.group(1))):
                     self.json_response({"error": "文档不存在"}, 404)
                     return
+                auth.audit("delete_rag_doc", ip=self._client_ip(), detail=match.group(1))  # R5 审计
                 self.json_response({"ok": True})
                 return
             match = re.fullmatch(r"/api/exam/papers/(\d+)", path)
@@ -1027,6 +1033,7 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
                 if not exam.delete_paper(int(match.group(1))):
                     self.json_response({"error": "试卷不存在"}, 404)
                     return
+                auth.audit("delete_exam_paper", ip=self._client_ip(), detail=match.group(1))  # R5 审计
                 self.json_response({"ok": True})
                 return
             match = re.fullmatch(r"/api/subjects/([A-Za-z][A-Za-z0-9_]{0,19})", path)

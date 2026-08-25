@@ -167,48 +167,51 @@ def restore_backup(raw: str) -> dict[str, Any]:
     from db import DB_PATH as _db_path
     # R4：还原是整库级操作，必须关闭**所有线程**的连接（本 handler 线程 + 并发 worker），
     # 否则 Windows 上 rename 被任一打开的连接锁住会失败；同时 checkpoint 落盘 WAL。
-    close_all_connections()
-    if _db_path.is_file():
-        bak = _db_path.with_name(
-            f"{_db_path.stem}_restore_{int(time.time())}.bak")
-        os.replace(_db_path, bak)  # 旧库 rename 为 .bak，腾出真实路径给新库
-        # WAL/SHM 一并 rename 到 .bak 旁，避免 unlink
-        for ext in (".db-wal", ".db-shm"):
-            p = Path(str(_db_path) + ext)
-            if p.is_file():
-                try:
-                    os.replace(p, Path(str(bak) + ext))
-                except OSError:
-                    pass
-        LOG.info("还原前已备份现库: %s", bak.name)
-
-    # 2) 重建空库（SCHEMA + 全部迁移 + 索引）：connect 会新建文件，无需 unlink
-    from db import init_db
-    init_db()
-    _prune_trash()
-
-    # 3) 按 FK 顺序回填
+    # A1（P2 修复）：swap + refill 全程持 DB_LOCK，串行化并发还原/写入，
+    # 消除「已 rename / 未 init_db」半替换态与 Windows 文件柄锁冲突。
     counts: dict[str, int] = {}
-    with DB_LOCK, db() as conn:
-        conn.execute("PRAGMA foreign_keys = OFF")
-        for t in BACKUP_TABLES:
-            rows_in = tables.get(t, [])
-            if not rows_in:
-                continue
-            sql = _table_sql(conn, t)
-            if not sql:
-                continue
-            cols = [c for c in rows_in[0].keys() if c in {r[1] for r in conn.execute(f'PRAGMA table_info("{t}")')}]
-            if not cols:
-                continue
-            conn.execute("DELETE FROM " + t)
-            placeholders = ",".join("?" for _ in cols)
-            col_sql = ",".join(f'"{c}"' for c in cols)
-            conn.executemany(
-                f'INSERT INTO "{t}" ({col_sql}) VALUES ({placeholders})',
-                [tuple(r.get(c) for c in cols) for r in rows_in],
-            )
-            counts[t] = len(rows_in)
-        conn.execute("PRAGMA foreign_keys = ON")
+    with DB_LOCK:
+        close_all_connections()
+        if _db_path.is_file():
+            bak = _db_path.with_name(
+                f"{_db_path.stem}_restore_{int(time.time())}.bak")
+            os.replace(_db_path, bak)  # 旧库 rename 为 .bak，腾出真实路径给新库
+            # WAL/SHM 一并 rename 到 .bak 旁，避免 unlink
+            for ext in (".db-wal", ".db-shm"):
+                p = Path(str(_db_path) + ext)
+                if p.is_file():
+                    try:
+                        os.replace(p, Path(str(bak) + ext))
+                    except OSError:
+                        pass
+            LOG.info("还原前已备份现库: %s", bak.name)
+
+        # 2) 重建空库（SCHEMA + 全部迁移 + 索引）：connect 会新建文件，无需 unlink
+        from db import init_db
+        init_db()
+        _prune_trash()
+
+        # 3) 按 FK 顺序回填（嵌套 db()：depth==0 负责事务边界，RLock 重入安全）
+        with db() as conn:
+            conn.execute("PRAGMA foreign_keys = OFF")
+            for t in BACKUP_TABLES:
+                rows_in = tables.get(t, [])
+                if not rows_in:
+                    continue
+                sql = _table_sql(conn, t)
+                if not sql:
+                    continue
+                cols = [c for c in rows_in[0].keys() if c in {r[1] for r in conn.execute(f'PRAGMA table_info("{t}")')}]
+                if not cols:
+                    continue
+                conn.execute("DELETE FROM " + t)
+                placeholders = ",".join("?" for _ in cols)
+                col_sql = ",".join(f'"{c}"' for c in cols)
+                conn.executemany(
+                    f'INSERT INTO "{t}" ({col_sql}) VALUES ({placeholders})',
+                    [tuple(r.get(c) for c in cols) for r in rows_in],
+                )
+                counts[t] = len(rows_in)
+            conn.execute("PRAGMA foreign_keys = ON")
     LOG.info("还原完成: %s", counts)
     return {"restored": counts}

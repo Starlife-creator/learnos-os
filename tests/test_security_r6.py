@@ -293,5 +293,72 @@ class TestR5Audit(unittest.TestCase):
             target.unlink(missing_ok=True)
 
 
+class TestR5DeleteEndpointsAudit(unittest.TestCase):
+    """A2（R5 一致性）：DELETE /api/rag/doc 与 /api/exam/papers 成功分支必须写 audit.log。"""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory(prefix="audit_del_", dir=Path(__file__).resolve().parent / ".tmp")
+        Path(self.tmp.name, "data").mkdir(parents=True)
+        self._orig_db = config.DB_PATH
+        config.DB_PATH = Path(self.tmp.name) / "del.db"
+        db.DB_PATH = config.DB_PATH
+        self._orig_app = config.APP_DIR
+        config.APP_DIR = Path(self.tmp.name) / "app"
+        config.APP_DIR.mkdir(parents=True, exist_ok=True)
+        import backup
+        backup.APP_DIR = config.APP_DIR
+        db.init_db()
+        from db import now
+        with db.db() as conn:
+            conn.execute(
+                "INSERT INTO rag_docs(source_path, file_type, pages, chunk_count, ingested_at) VALUES (?,?,?,?,?)",
+                ("m.txt", "txt", 1, 2, now()))
+            conn.execute(
+                "INSERT INTO exam_papers(name, exam_date, target, created_at) VALUES (?,?,?,?)",
+                ("A2审计卷", "2026-09-01", 80, now()))
+        self._orig_audit = auth._AUDIT_PATH
+        auth._AUDIT_PATH = Path(self.tmp.name) / "data" / "audit.log"
+
+    def tearDown(self):
+        auth._AUDIT_PATH = self._orig_audit
+        db.close_all_connections()
+        db.DB_PATH = self._orig_db
+        config.DB_PATH = self._orig_db
+        config.APP_DIR = self._orig_app
+        self.tmp.cleanup()
+
+    def _do_delete(self, path):
+        from handler import Handler
+        captured = {}
+
+        class _Cap:
+            def json_response(self, data, status=200):
+                captured["data"] = data
+                captured["status"] = status
+
+        h = Handler.__new__(Handler)
+        h.path = path
+        h.client_address = ("127.0.0.1", 12345)
+        h.headers = {"X-Requested-With": "LearnOS"}
+        h.json_response = _Cap().json_response
+        h.do_DELETE()
+        return captured
+
+    def test_rag_doc_delete_writes_audit(self):
+        r = self._do_delete("/api/rag/doc/1")
+        self.assertEqual(r["status"], 200)
+        self.assertTrue(r["data"].get("ok"))
+        self.assertTrue(auth._AUDIT_PATH.is_file())
+        self.assertIn("delete_rag_doc", auth._AUDIT_PATH.read_text(encoding="utf-8"))
+
+    def test_exam_paper_delete_writes_audit(self):
+        r = self._do_delete("/api/exam/papers/1")
+        self.assertEqual(r["status"], 200)
+        self.assertTrue(r["data"].get("ok"))
+        self.assertTrue(auth._AUDIT_PATH.is_file())
+        self.assertIn("delete_exam_paper", auth._AUDIT_PATH.read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()

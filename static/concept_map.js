@@ -783,9 +783,9 @@ async function selectNode(id) {
   }
   const dPrereq = document.getElementById('dPrereq');
   dPrereq.innerHTML = '';
-  if (prereq.length) dPrereq.innerHTML += `<p class="kv"><b>${t('graph.prereq')}</b>${prereq.map(p => p.name).join('、')}</p>`;
-  if (succ.length) dPrereq.innerHTML += `<p class="kv"><b>${t('graph.succ')}</b>${succ.map(s => s.name).join('、')}</p>`;
-  if (cont.length) dPrereq.innerHTML += `<p class="kv"><b>${t('graph.contrast')}</b>${cont.map(c => c.name).join('、')}</p>`;
+  if (prereq.length) dPrereq.innerHTML += `<p class="kv"><b>${t('graph.prereq')}</b>${prereq.map(p => _escGraphLP(p.name)).join('、')}</p>`;
+  if (succ.length) dPrereq.innerHTML += `<p class="kv"><b>${t('graph.succ')}</b>${succ.map(s => _escGraphLP(s.name)).join('、')}</p>`;
+  if (cont.length) dPrereq.innerHTML += `<p class="kv"><b>${t('graph.contrast')}</b>${cont.map(c => _escGraphLP(c.name)).join('、')}</p>`;
   document.getElementById('dProblems').innerHTML = '';
   // 做闪卡：仅为章/概念级显示（单元级不在闪卡概念下拉内）
   const mk = document.getElementById('btnMakeCardWrap');
@@ -815,7 +815,7 @@ async function loadRelatedProblems(id) {
     const items = Array.isArray(data) ? data : (data.items || []);  // 后端返回 {items, chain_count}
     el.innerHTML = items.length
       ? '<p class="muted">' + t('graph.relatedLabel') + '</p><ul id="problemList">' + items.map(p =>
-          `<li>${p.title}（${t('graph.masteryOf')} ${p.mastery}/5）</li>`).join('') + '</ul>'
+          `<li>${_escGraphLP(p.title)}（${t('graph.masteryOf')} ${p.mastery}/5）</li>`).join('') + '</ul>'
       : '<p class="muted">' + t('graph.noRelated') + '</p>';
   } catch { el.innerHTML = '<p class="muted">' + t('graph.loadFail') + '</p>'; }
 }
@@ -1001,7 +1001,7 @@ async function initGraphSubject() {
     }
   } catch (e) { /* 内置三科兜底 */ }
   const cur = graphSubject();
-  sel.innerHTML = subjects.map(s => `<option value="${s}">${titles[s] || s}</option>`).join('');
+  sel.innerHTML = subjects.map(s => `<option value="${_escGraphLP(s)}">${_escGraphLP(titles[s] || s)}</option>`).join('');
   if (subjects.includes(cur)) sel.value = cur;
   else sel.value = subjects[0];
   setGraphTitle();

@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 # 集中错误码 → (HTTP 状态, 中文文案)。新增错误码在此登记一处即可全站一致。
@@ -23,6 +24,7 @@ ERRORS: dict[str, tuple[int, str]] = {
 }
 
 _error_counts: dict[str, int] = {}
+_ERR_LOCK = threading.Lock()  # C1a：保护 _error_counts 读写（ThreadingHTTPServer 并发下计数不丢）
 
 
 def api_ok(handler: Any, data: Any = None, status: int = 200) -> None:
@@ -41,15 +43,18 @@ def api_err(handler: Any, code: str, status: int | None = None, **extra: Any) ->
     ERRORS 元组约定为 (HTTP 状态, 中文文案)，故此处解包为 st, msg（顺序不可反）。
     """
     st, msg = ERRORS.get(code, (500, "未知错误"))
-    _error_counts[code] = _error_counts.get(code, 0) + 1
+    with _ERR_LOCK:
+        _error_counts[code] = _error_counts.get(code, 0) + 1
     handler.json_response({"error": code, "message": msg, **extra}, status or st)
 
 
 def error_counts() -> dict[str, int]:
     """供 /api/metrics 读取（返回副本，避免外部修改内部计数）。"""
-    return dict(_error_counts)
+    with _ERR_LOCK:
+        return dict(_error_counts)
 
 
 def reset_error_counts() -> None:
     """供测试隔离使用。"""
-    _error_counts.clear()
+    with _ERR_LOCK:
+        _error_counts.clear()

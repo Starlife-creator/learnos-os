@@ -15,8 +15,14 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from collections import defaultdict
+
+# C1b：两把独立锁——失败限流（鉴权热路径）与 AI 配额互不串行；
+# 均在对应状态读写处加锁，避免滑动窗口 append+重赋值并发丢计数。
+_fail_lock = threading.Lock()
+_ai_lock = threading.Lock()
 
 
 def _env_int(name: str, default: int) -> int:
@@ -61,28 +67,39 @@ _failures: dict[str, list[float]] = defaultdict(list)
 
 
 def register_failure(ip: str) -> bool:
-    """记录一次失败校验；返回 True 表示已超过阈值、应返 429。"""
-    now = time.time()
-    recent = _prune(ip, now)
-    recent.append(now)
-    _failures[ip] = recent
-    return len(recent) > _limit_for(ip)
+    """记录一次失败校验；返回 True 表示已超过阈值、应返 429。
+
+    C1b：加锁防并发丢计数；fail-open——限流器自身异常不阻断鉴权（与 ai_quota_ok 一致）。
+    """
+    try:
+        now = time.time()
+        with _fail_lock:
+            recent = _prune(ip, now)
+            recent.append(now)
+            _failures[ip] = recent
+        return len(recent) > _limit_for(ip)
+    except Exception:
+        return False
 
 
 def is_blocked(ip: str) -> bool:
     """该客户端当前是否处于限流状态（不发失败也可见）。"""
-    return len(_prune(ip, time.time())) > _limit_for(ip)
+    with _fail_lock:
+        return len(_prune(ip, time.time())) > _limit_for(ip)
 
 
 def clear(ip: str) -> None:
     """正确令牌后清零该客户端失败计数。"""
-    _failures.pop(ip, None)
+    with _fail_lock:
+        _failures.pop(ip, None)
 
 
 def clear_all() -> None:
     """供测试隔离。"""
-    _failures.clear()
-    _ai_calls.clear()
+    with _fail_lock:
+        _failures.clear()
+    with _ai_lock:
+        _ai_calls.clear()
 
 
 # ── R3：AI 调用配额（滑动窗口，按 IP + 档位）──
@@ -107,11 +124,12 @@ def ai_quota_ok(ip: str, tier: str = "fast") -> bool:
         now = time.time()
         window = _window()
         key = (ip, tier)
-        recent = _prune_calls(key, now, window)
-        if len(recent) >= _ai_limit_for(tier):
-            return False
-        recent.append(now)
-        _ai_calls[key] = recent
+        with _ai_lock:
+            recent = _prune_calls(key, now, window)
+            if len(recent) >= _ai_limit_for(tier):
+                return False
+            recent.append(now)
+            _ai_calls[key] = recent
         return True
     except Exception:
         return True

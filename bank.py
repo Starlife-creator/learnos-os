@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ from db import DB_LOCK, db, now, rows
 CUSTOM_FILE = Path(__file__).resolve().parent / "data" / "bank_custom.json"
 _BANK: dict[str, dict[str, Any]] = {}
 """学科 -> 题库缓存（内置 + 用户自定义）。"""
+_BANK_LOCK = threading.RLock()  # C1e：双端保护 _BANK（load/import 写 + judge 迭代读），RLock 防未来嵌套
 
 # 所有学科（含内置三科）统一使用 seed_questions_<id>.json；physics 旧用 seed_questions.json，保留兼容读取。
 SUBJECT_BANKS: dict[str, str] = {
@@ -83,7 +85,8 @@ def load_bank(subject: str = "physics") -> dict[str, Any]:
             q.setdefault("subject", subject)
             by_id[str(q.get("id"))] = q  # 自定义题覆盖同 id 的内置题
         merged["questions"] = list(by_id.values())
-        _BANK[subject] = merged
+        with _BANK_LOCK:
+            _BANK[subject] = merged
     return _BANK[subject]
 
 
@@ -162,7 +165,8 @@ def import_questions(items: Any, subject: str = "physics") -> dict[str, Any]:
         except ValueError as exc:
             errors.append(f"第 {idx} 条: {exc}")
     _write_custom(list(by_id.values()), subject)
-    _BANK.pop(subject, None)
+    with _BANK_LOCK:
+        _BANK.pop(subject, None)
     return {"imported": imported, "errors": errors}
 
 
@@ -543,10 +547,12 @@ def judge(qid: str, answer: Any, subject: str = "physics") -> dict[str, Any]:
     item = next((q for q in bank["questions"] if q["id"] == qid), None)
     if not item:
         # 学科不匹配时回退：全学科查找（qid 全局唯一）
-        for s, bk in _BANK.items():
-            item = next((q for q in bk["questions"] if q["id"] == qid), None)
-            if item:
-                break
+        # C1e：迭代持 _BANK_LOCK，防并发 import_questions 重建 _BANK 时 RuntimeError
+        with _BANK_LOCK:
+            for s, bk in _BANK.items():
+                item = next((q for q in bk["questions"] if q["id"] == qid), None)
+                if item:
+                    break
     if not item:
         raise ValueError("题目不存在")
     result = grade_item(item, answer)

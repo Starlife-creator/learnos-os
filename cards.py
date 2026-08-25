@@ -206,6 +206,8 @@ def review_card(card_id: int, rating: int) -> dict[str, Any]:
     prev = card["interval_days"] or 1
     result = compute_review(rating, prev, float(card["ease_factor"] or 2.5), int(card["repetition"] or 0))
     # FSRS 可用 → 使用 FSRS 间隔；否则 SM-2 间隔
+    # C2b：只算一次并复用（原实现双算 compute_fsrs_review，参数完全相同）
+    fs = None
     if fsrs_bridge.fsrs_available():
         try:
             fs = fsrs_bridge.compute_fsrs_review(
@@ -230,14 +232,8 @@ def review_card(card_id: int, rating: int) -> dict[str, Any]:
         result.interval_days = max(1, result.interval_days // 2)
     next_due = (date.today() + timedelta(days=result.interval_days)).isoformat()
     fs_state, fs_stability, fs_difficulty = 0, 0.0, 0.0
-    if fsrs_bridge.fsrs_available() and overdue < 21:
-        try:
-            fs = fsrs_bridge.compute_fsrs_review(
-                rating, prev, int(card["state"] or 0), float(card["stability"] or 0),
-                float(card["difficulty"] or 0))
-            fs_state, fs_stability, fs_difficulty = fs.state, fs.stability, fs.difficulty
-        except Exception:
-            pass
+    if fs is not None and overdue < 21:
+        fs_state, fs_stability, fs_difficulty = fs.state, fs.stability, fs.difficulty
     with DB_LOCK, db() as conn:
         conn.execute("INSERT INTO card_reviews(card_id, due_date, interval_days, rating, created_at) "
                      "VALUES (?, ?, ?, ?, ?)",

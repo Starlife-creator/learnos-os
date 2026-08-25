@@ -68,28 +68,33 @@ def _retention_key(subject: str = "") -> str:
 
 _PARAM_CACHE: dict[str, object] | None = None
 _TRAIN_STATE: dict[str, object] = {"running": False, "result": None, "error": None}
+_PARAM_LOCK = threading.Lock()  # C1c：保护 _PARAM_CACHE（双重检查，避免并发重复解析）
 
 
 def _invalidate() -> None:
     global _PARAM_CACHE
-    _PARAM_CACHE = None
+    with _PARAM_LOCK:
+        _PARAM_CACHE = None
 
 
 def _load_params() -> dict[str, object] | None:
     global _PARAM_CACHE
     if _PARAM_CACHE is not None:
         return _PARAM_CACHE
-    try:
-        if _PARAM_FILE.is_file():
-            data = json.loads(_PARAM_FILE.read_text("utf-8"))
-            params = [float(x) for x in data.get("parameters", [])]
-            if len(params) == len(DEFAULT_PARAMETERS):
-                _PARAM_CACHE = {"parameters": params, "trained_at": data.get("trained_at", "")}
-                return _PARAM_CACHE  # type: ignore[return-value]
-    except Exception as exc:
-        LOG.warning("FSRS 参数文件读取失败（用默认参数）: %s", exc)
-    _PARAM_CACHE = None
-    return None
+    with _PARAM_LOCK:  # 双重检查：避免并发首读时重复解析参数文件
+        if _PARAM_CACHE is not None:
+            return _PARAM_CACHE
+        try:
+            if _PARAM_FILE.is_file():
+                data = json.loads(_PARAM_FILE.read_text("utf-8"))
+                params = [float(x) for x in data.get("parameters", [])]
+                if len(params) == len(DEFAULT_PARAMETERS):
+                    _PARAM_CACHE = {"parameters": params, "trained_at": data.get("trained_at", "")}
+                    return _PARAM_CACHE  # type: ignore[return-value]
+        except Exception as exc:
+            LOG.warning("FSRS 参数文件读取失败（用默认参数）: %s", exc)
+        _PARAM_CACHE = None
+        return None
 
 
 def _desired_retention(subject: str = "") -> float:

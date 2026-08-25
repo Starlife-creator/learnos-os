@@ -491,9 +491,9 @@ def learning_path(subject: str = "physics", threshold: float = 0.6) -> dict[str,
         ready_weak.sort(key=lambda e: e["mastery"])
         blocked.sort(key=lambda e: e["mastery"])
 
-        now = None
+        next_item = None
         if ready_weak:
-            now = {**ready_weak[0], "reason": "ready"}  # 先学最弱且未被先修卡住的
+            next_item = {**ready_weak[0], "reason": "ready"}  # 先学最弱且未被先修卡住的
         elif blocked and blocked[0]["missing"]:
             # 被卡（最弱）→ 指出应先补的未达标先修
             weak_blocked = blocked[0]
@@ -503,14 +503,14 @@ def learning_path(subject: str = "physics", threshold: float = 0.6) -> dict[str,
                 key=lambda kv: kv[1])
             if gap_entries:
                 p = gap_entries[0][0]
-                now = {"concept_id": p, "name": nodes[p]["name"],
-                       "chapter": chapter_name(p), "mastery": round(master(p) * 100),
-                       "difficulty": float(nodes[p].get("difficulty") or 0.5),
-                       "reason": "prerequisite", "for": weak_blocked["name"]}
+                next_item = {"concept_id": p, "name": nodes[p]["name"],
+                             "chapter": chapter_name(p), "mastery": round(master(p) * 100),
+                             "difficulty": float(nodes[p].get("difficulty") or 0.5),
+                             "reason": "prerequisite", "for": weak_blocked["name"]}
     return {
         "subject": subject,
         "threshold": threshold,
-        "now": now,
+        "now": next_item,
         "ready_weak": ready_weak[:_PATH_LIMIT],
         "blocked": blocked[:_PATH_LIMIT],
         "stats": {
