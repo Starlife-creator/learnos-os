@@ -108,6 +108,52 @@ class TestApplySeedContent(unittest.TestCase):
             ).fetchone()["c"]
         self.assertEqual(after, 0)
 
+    def test_overlay_user_priority_and_revert(self):
+        # v27 分层：用户保存覆盖种子、回档回到种子基线，且 apply 不冲掉用户层
+        graph.ensure_seed("biology")
+        asc.apply_subject("biology", commit=True)
+        with db.db() as conn:
+            # 取一个已带种子详解的概念
+            row = conn.execute(
+                "SELECT id, name, explanation_seed, explanation_user, explanation "
+                "FROM concepts WHERE subject='biology' AND explanation_seed<>'' LIMIT 1"
+            ).fetchone()
+        self.assertIsNotNone(row, "biology 应有带种子详解的概念")
+        cid, cname, seed_val, user_val, disp = (
+            row["id"], row["name"], row["explanation_seed"], row["explanation_user"], row["explanation"])
+        # 基线刚 apply 完：用户层为空，显示值 == 种子值
+        self.assertIsNone(user_val)
+        self.assertEqual(disp, seed_val)
+
+        # 用户保存覆盖层
+        override = "用户覆盖层_测试值_" + cname
+        self.assertTrue(graph.update_explanation(cid, override))
+        with db.db() as conn:
+            r = conn.execute(
+                "SELECT explanation_seed, explanation_user, explanation FROM concepts WHERE id=?",
+                (cid,)).fetchone()
+        self.assertEqual(r["explanation_seed"], seed_val, "种子基线不可被用户保存修改")
+        self.assertEqual(r["explanation_user"], override)
+        self.assertEqual(r["explanation"], override, "显示值应优先用户层")
+
+        # 重跑 apply 不应冲掉用户覆盖层
+        asc.apply_subject("biology", commit=True)
+        with db.db() as conn:
+            r2 = conn.execute(
+                "SELECT explanation_seed, explanation_user, explanation FROM concepts WHERE id=?",
+                (cid,)).fetchone()
+        self.assertEqual(r2["explanation_user"], override, "apply 后用户层应保留")
+        self.assertEqual(r2["explanation"], override)
+
+        # 回档：保存空串 -> 落回种子基线，用户层清空
+        self.assertTrue(graph.update_explanation(cid, ""))
+        with db.db() as conn:
+            r3 = conn.execute(
+                "SELECT explanation_seed, explanation_user, explanation FROM concepts WHERE id=?",
+                (cid,)).fetchone()
+        self.assertIsNone(r3["explanation_user"], "回档后用户层应为空")
+        self.assertEqual(r3["explanation"], seed_val, "回档后显示值应等于种子基线")
+
 
 class TestCloseAllConnections(unittest.TestCase):
     """close_all_connections 是 R4 连接复用的关键：还原前释放文件锁 + 递增 epoch。"""

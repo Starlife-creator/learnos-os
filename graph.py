@@ -162,9 +162,10 @@ def _insert_concept(conn: Any, name: str, parent_id: int, chapter_id: int,
     if cur:
         return int(cur["id"])
     cursor = conn.execute(
-        "INSERT INTO concepts(name, parent_id, chapter_id, difficulty, subject, created_at, source, explanation) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (name, parent_id, chapter_id, difficulty, subject, now(), source, explanation),
+        "INSERT INTO concepts(name, parent_id, chapter_id, difficulty, subject, created_at, "
+        "source, explanation_seed, explanation_user, explanation) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)",
+        (name, parent_id, chapter_id, difficulty, subject, now(), source, explanation, explanation),
     )
     cid = int(cursor.lastrowid)
     name_to_id[name] = cid
@@ -668,11 +669,23 @@ def update_aliases(concept_id: int, aliases: str) -> bool:
 
 
 def update_explanation(concept_id: int, explanation: str) -> bool:
-    """更新概念详解（自由文本释义；AI 生成的草稿也经此落库，由用户编辑后保存）。"""
+    """更新概念详解（用户覆盖层 explanation_user）。
+
+    - 非空串：写入用户层，显示值 explanation 同时等于该覆盖值。
+    - 空串：清空用户层（explanation_user=NULL），显示值回档到种子基线
+      （explanation 落回 explanation_seed）。用于「回退到种子」语义。
+    种子基线 explanation_seed 永不被本函数修改，故重跑 apply 不会冲掉用户编辑。
+    """
     text = str(explanation or "").strip()
     with DB_LOCK, db() as conn:
-        cur = conn.execute(
-            "UPDATE concepts SET explanation = ? WHERE id = ?", (text, concept_id))
+        if text == "":
+            cur = conn.execute(
+                "UPDATE concepts SET explanation_user = NULL, explanation = explanation_seed "
+                "WHERE id = ?", (concept_id,))
+        else:
+            cur = conn.execute(
+                "UPDATE concepts SET explanation_user = ?, explanation = ? WHERE id = ?",
+                (text, text, concept_id))
     return cur.rowcount > 0
 
 

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""种子内容应用工具：把 seed_explanations_<id>.json 的详解写入库 concepts.explanation。
+"""种子内容应用工具：把 seed_explanations_<id>.json 的详解写入库 concepts.explanation_seed（种子基线）。
+
+显示值 concepts.explanation 恒等于 COALESCE(explanation_user, explanation_seed)：仅当概念无用户覆盖层时
+才回退到本脚本写入的种子值，因此重跑本脚本不会冲掉用户在界面保存的个性化详解。
 
 用法:
   python scripts/apply_seed_content.py <subject> [--commit]
@@ -66,9 +69,12 @@ def apply_subject(subject: str, commit: bool) -> int:
         cur.execute("BEGIN")
         written = 0
         for name, text in expl.items():
+            # 只写种子基线 explanation_seed；显示值 explanation = 用户层(若有) 否则 种子。
+            # 因此重跑 apply 不会冲掉用户已保存的覆盖层。
             cur.execute(
-                "UPDATE concepts SET explanation=? WHERE subject=? AND name=?",
-                (text, subject, name))
+                "UPDATE concepts SET explanation_seed=?, explanation=COALESCE(explanation_user, ?) "
+                "WHERE subject=? AND name=?",
+                (text, text, subject, name))
             written += cur.rowcount
         conn.commit()
         cnt = conn.execute(

@@ -614,6 +614,23 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (26, ?)", (now(),))
         LOG.info("数据库已迁移到 v26 (边关系扩展为 6 种 concept_links)")
 
+    # v27: 概念详解分层 — 种子基线(explanation_seed) + 用户覆盖层(explanation_user)，
+    #      显示值 explanation 恒等于 COALESCE(explanation_user, explanation_seed)。
+    #      种子加载(apply/ensure_seed)只写 explanation_seed，不触碰 explanation_user；
+    #      用户保存只写 explanation_user；回档即清空 explanation_user 落回种子基线。
+    #      如此区分后，重跑 apply 不会冲掉用户编辑（免费修复克隆风险），且支持单概念一键回档。
+    if current < 27:
+        ccols = {r[1] for r in conn.execute("PRAGMA table_info(concepts)").fetchall()}
+        if "explanation_seed" not in ccols:
+            conn.execute("ALTER TABLE concepts ADD COLUMN explanation_seed TEXT NOT NULL DEFAULT ''")
+        if "explanation_user" not in ccols:
+            conn.execute("ALTER TABLE concepts ADD COLUMN explanation_user TEXT")
+        # 历史数据：当前 explanation 视为基线种子值，用户层初始为空（无覆盖）
+        conn.execute(
+            "UPDATE concepts SET explanation_seed = COALESCE(explanation, ''), explanation_user = NULL")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (27, ?)", (now(),))
+        LOG.info("数据库已迁移到 v27 (概念详解分层 explanation_seed/explanation_user)")
+
 
 # 内置三科的中文显示名（title）；user 自定义过的中文 title 不会被覆盖。
 _BUILTIN_SUBJECT_TITLES = {
