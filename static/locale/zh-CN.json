@@ -113,6 +113,7 @@
   "bank.statusTodo": "未做",
   "bank.statusWrong": "答错",
   "bank.statusDone": "已掌握",
+  "bank.statusPending": "待评阅",
   "bank.practice": "开始练习",
   "bank.submit": "提交答案",
   "bank.close": "完成",

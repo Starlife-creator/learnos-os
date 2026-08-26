@@ -310,25 +310,33 @@ def _attempt_stats() -> dict[str, list[tuple[int, str]]]:
 
 
 def _status_of(qid: str, stats: dict[str, list[tuple[int, str]]]) -> str:
-    """状态：todo 未做 / wrong 答错（已入错题库） / done 最近答对。"""
+    """状态：todo 未做 / wrong 答错（已入错题库） / pending 待评阅（主观题已提交） /
+    done 最近答对。correct 取值：0 错 / 1 对 / 2 待评阅（C6 第三态）。"""
     recs = stats.get(qid)
     if not recs:
         return "todo"
-    return "done" if recs[-1][0] else "wrong"
+    last = recs[-1][0]
+    if last == 2:
+        return "pending"
+    return "done" if last else "wrong"
 
 
 def stats(subject: str = "physics") -> dict[str, int]:
     bank = load_bank(subject)
     st = _attempt_stats()
     total = len(bank["questions"])
-    done = wrong = 0
+    done = wrong = pending = 0
     for q in bank["questions"]:
         s = _status_of(q["id"], st)
         if s == "done":
             done += 1
         elif s == "wrong":
             wrong += 1
-    return {"total": total, "done": done, "wrong": wrong, "todo": max(0, total - done - wrong)}
+        elif s == "pending":
+            pending += 1
+    # todo 不再包含待评阅：主观题提交过即不再虚高「未做」计数
+    return {"total": total, "done": done, "wrong": wrong, "pending": pending,
+            "todo": max(0, total - done - wrong - pending)}
 
 
 def units(subject: str = "physics") -> list[dict[str, Any]]:
@@ -338,13 +346,15 @@ def units(subject: str = "physics") -> list[dict[str, Any]]:
     groups: dict[str, dict[str, int]] = {}
     for q in bank["questions"]:
         u = q.get("unit") or "未分类"
-        g = groups.setdefault(u, {"count": 0, "done": 0, "wrong": 0})
+        g = groups.setdefault(u, {"count": 0, "done": 0, "wrong": 0, "pending": 0})
         g["count"] += 1
         s = _status_of(q["id"], st)
         if s == "done":
             g["done"] += 1
         elif s == "wrong":
             g["wrong"] += 1
+        elif s == "pending":
+            g["pending"] += 1
     return [{"unit": k, **v} for k, v in groups.items()]
 
 
@@ -364,6 +374,8 @@ def list_questions(unit: str = "", status: str = "all", q: str = "",
         if status == "wrong" and s != "wrong":
             continue
         if status == "done" and s != "done":
+            continue
+        if status == "pending" and s != "pending":
             continue
         if kw:
             hay = (item.get("stem", "") + item.get("chapter", "") + item.get("concept", "")).lower()
@@ -557,8 +569,9 @@ def judge(qid: str, answer: Any, subject: str = "physics") -> dict[str, Any]:
         raise ValueError("题目不存在")
     result = grade_item(item, answer)
     correct = result["correct"]
-    # correct=None（主观待评阅）视为已作答，不计入错题
-    cval = 1 if correct is None else (1 if correct else 0)
+    # C6 第三态：correct=None（主观待评阅）落 correct=2，状态机记 pending；
+    # 不再冒充「答对」，题库 done/todo 统计不再虚高。仍不入错题库（未判对错）。
+    cval = 2 if correct is None else (1 if correct else 0)
     problem_id = 0
     with DB_LOCK, db() as conn:
         conn.execute(
@@ -578,6 +591,35 @@ def judge(qid: str, answer: Any, subject: str = "physics") -> dict[str, Any]:
     else:
         resp["answer"] = item["answer"]
     return resp
+
+
+# AI 评分及格线：≥60 记对（done），否则记错（wrong 并入错题库）
+AI_PASS_SCORE = 60
+
+
+def record_review_outcome(qid: str, subject: str = "physics",
+                          score: int | None = None, needs_review: bool = False) -> str:
+    """C6 决策落地：AI 评分给出确定结果后，回写一条 bank_attempts，使 pending 流转。
+
+    返回 "pass"（score>=及格线，追加 correct=1）/ "fail"（追加 correct=0 且与 judge()
+    同路径入错题库）/ "skipped"（score=None 或仍需人工复核，不写——保持 pending）。
+    """
+    if score is None or needs_review:
+        return "skipped"
+    passed = int(score) >= AI_PASS_SCORE
+    with DB_LOCK, db() as conn:
+        conn.execute(
+            "INSERT INTO bank_attempts(qid, correct, attempted_at) VALUES (?, ?, ?)",
+            (qid, 1 if passed else 0, now()),
+        )
+        if not passed:
+            try:
+                item = find_question(qid, subject)
+            except ValueError:
+                item = None
+            if item:
+                _ensure_problem(conn, item)
+    return "pass" if passed else "fail"
 
 
 def save_score_history(qid: str, subject: str, result: dict[str, Any]) -> int:

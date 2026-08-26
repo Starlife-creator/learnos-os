@@ -196,6 +196,65 @@ class TestBankJudgeDB(unittest.TestCase):
         self.assertTrue(res["needs_review"])
         self.assertEqual(res["problem_id"], 0)  # 主观不自动入错题库
 
+    def test_subjective_pending_third_state(self):
+        """C6 第三态回归：主观题待评阅落 correct=2，状态记 pending，
+        不再冒充 done；stats/units 的 todo 不被虚高。"""
+        it = bank._normalize_question(
+            {"type": "subjective", "id": "q-pend1", "stem": "题干足够长内容", "answer": "参考",
+             "unit": "测试单元"},
+            1, set(), "physics")
+        self._inject(it)
+        res = bank.judge("q-pend1", "我的答案", "physics")
+        self.assertIsNone(res["correct"])
+        with db.db() as conn:
+            cval = conn.execute(
+                "SELECT correct FROM bank_attempts WHERE qid='q-pend1' ORDER BY id DESC LIMIT 1"
+            ).fetchone()[0]
+        self.assertEqual(cval, 2, "主观待评阅应落第三态 2")
+        st = bank.stats("physics")
+        self.assertEqual(st["pending"], 1)
+        self.assertEqual(st["done"], 0, "待评阅不得计入已掌握")
+        self.assertEqual(st["todo"], max(0, st["total"] - st["done"] - st["wrong"] - st["pending"]))
+        for u in bank.units("physics"):
+            if u["unit"] == "测试单元":
+                self.assertEqual(u["pending"], 1)
+                break
+        else:
+            self.fail("未找到注入单元")
+        items = bank.list_questions(status="pending", subject="physics")
+        self.assertTrue(any(x["id"] == "q-pend1" for x in items), "pending 筛选应命中该题")
+        # 状态机：末次记录决定状态（2→pending，随后答对 1→done）
+        self.assertEqual(bank._status_of("q-pend1", {"q-pend1": [(2, "t1"), (1, "t2")]}), "done")
+        self.assertEqual(bank._status_of("q-pend1", {"q-pend1": [(1, "t1"), (2, "t2")]}), "pending")
+
+    def test_record_review_outcome_transitions(self):
+        """C6 决策：AI 评分确定结果回写 attempts——≥60 记 done，<60 记 wrong 并入错题库，
+        score=None / needs_review 跳过（保持 pending）。"""
+        it = bank._normalize_question(
+            {"type": "subjective", "id": "q-rev1", "stem": "题干足够长内容", "answer": "参考",
+             "unit": "测试单元"},
+            1, set(), "physics")
+        self._inject(it)
+        bank.judge("q-rev1", "我的答案", "physics")   # 落 pending（correct=2）
+        self.assertEqual(bank._status_of("q-rev1", bank._attempt_stats()), "pending")
+        # skip：AI 离线（score=None）
+        self.assertEqual(bank.record_review_outcome("q-rev1", "physics", None, False), "skipped")
+        self.assertEqual(bank._status_of("q-rev1", bank._attempt_stats()), "pending")
+        # fail：45 分 → correct=0 且入错题库
+        self.assertEqual(bank.record_review_outcome("q-rev1", "physics", 45, False), "fail")
+        st = bank._attempt_stats()["q-rev1"]
+        self.assertEqual(st[-1][0], 0)
+        with db.db() as conn:
+            archived = conn.execute(
+                "SELECT problem_id FROM bank_problems WHERE qid='q-rev1'").fetchone()
+        self.assertIsNotNone(archived, "评不及格应与 judge 同路径入错题库")
+        self.assertEqual(bank._status_of("q-rev1", bank._attempt_stats()), "wrong")
+        # pass：85 分 → correct=1，末次记录优先转 done
+        self.assertEqual(bank.record_review_outcome("q-rev1", "physics", 85, False), "pass")
+        st = bank._attempt_stats()["q-rev1"]
+        self.assertEqual(st[-1][0], 1)
+        self.assertEqual(bank._status_of("q-rev1", bank._attempt_stats()), "done")
+
     def test_judge_composite_wrong_archives_full_content(self):
         # P1：composite 答错建档须含完整题面（引导语+子题），标题不空
         it = bank._normalize_question(

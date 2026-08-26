@@ -36,8 +36,13 @@ async function loadBank() {
       return;
     }
     el.innerHTML = _bankItems.map(item => {
-      const cls = item.status === 'done' ? 'tag tag-green' : item.status === 'wrong' ? 'tag tag-amber' : 'tag tag-gray';
-      const label = item.status === 'done' ? t('bank.statusDone') : item.status === 'wrong' ? t('bank.statusWrong') : t('bank.statusTodo');
+      // C6：pending = 主观题已提交待 AI/人工评阅（第四种展示态，不计入 done/todo）
+      const cls = item.status === 'done' ? 'tag tag-green'
+        : item.status === 'wrong' ? 'tag tag-amber'
+        : item.status === 'pending' ? 'tag tag-blue' : 'tag tag-gray';
+      const label = item.status === 'done' ? t('bank.statusDone')
+        : item.status === 'wrong' ? t('bank.statusWrong')
+        : item.status === 'pending' ? t('bank.statusPending') : t('bank.statusTodo');
       return `<div class="card mb-8">
         <div class="flex-between mb-8">
           <div class="text-sm text-muted">${escapeHtml(item.unit)} · ${escapeHtml(item.chapter)} · <b>${escapeHtml(item.concept)}</b></div>

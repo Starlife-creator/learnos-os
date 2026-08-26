@@ -118,10 +118,10 @@ async function respondOral() {
       document.getElementById('oralAnswer').focus();
     }
   } catch(e) {
-    const t = document.getElementById('oralThinking');
-    if (t) t.remove();
+    const box = document.getElementById('oralThinking');
+    if (box) box.remove();
     if (e && e.name === 'AbortError') {
-      // 用户主动取消：不视为错误，仅提示
+      // 用户主动取消：不视为错误，仅提示（局部变量不得遮蔽全局 i18n 函数 t）
       toast(t('oral.cancelled'), 'info');
     } else {
       toast(e.message, 'error');

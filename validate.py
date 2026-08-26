@@ -222,6 +222,7 @@ def _check_value(value: Any, rule: dict[str, Any], path: str) -> None:
             if not isinstance(value, str) or not re.search(val, value):
                 _fail(path, f"字符串不匹配 {val}")
         elif key == "min_length":
+            # C9 约定：长度规则仅约束字符串；非字符串值由 type 规则兜底，此处不做隐式 str 化
             if not isinstance(value, str) or len(value) < val:
                 _fail(path, f"字符串长度小于 {val}")
         elif key == "max_length":

@@ -32,6 +32,13 @@ def _fetch_problems(subject: str) -> list[dict[str, Any]]:
     return out
 
 
+def _csv_safe(v: Any) -> Any:
+    """CSV 公式注入防护：= + - @ \t 开头的单元格在 Excel/WPS 中会被当公式执行（OWASP 惯例加 ' 前缀）。"""
+    if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t"):
+        return "'" + v
+    return v
+
+
 def export_csv(subject: str, include_answers: bool = True) -> str:
     """返回带 BOM 的 CSV 文本。"""
     problems = _fetch_problems(subject)
@@ -50,7 +57,7 @@ def export_csv(subject: str, include_answers: bool = True) -> str:
             row_out["fix_action"] = ""
         if isinstance(row_out["tags"], list):
             row_out["tags"] = ";".join(row_out["tags"])
-        writer.writerow(row_out)
+        writer.writerow({k: _csv_safe(v) for k, v in row_out.items()})
     return buf.getvalue()
 
 

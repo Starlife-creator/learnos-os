@@ -60,6 +60,8 @@ def _sign(nonce: str, exp: int, ip: str) -> str:
 
 def issue_export_challenge(ip: str = "") -> tuple[str, float]:
     """签发一次性、短 TTL、绑定客户端 IP 的 HMAC 挑战令牌。返回 (token, ttl_seconds)。"""
+    # 签发前顺带回收过期未消费的挑战（此前该函数从未被调用 → 过期项永久驻留内存）
+    _prune_challenges()
     nonce = secrets.token_hex(16)
     exp = int(time.time()) + int(_CHALLENGE_TTL)
     sig = _sign(nonce, exp, ip)

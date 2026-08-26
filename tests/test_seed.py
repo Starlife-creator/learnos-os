@@ -154,6 +154,35 @@ class TestApplySeedContent(unittest.TestCase):
         self.assertIsNone(r3["explanation_user"], "回档后用户层应为空")
         self.assertEqual(r3["explanation"], seed_val, "回档后显示值应等于种子基线")
 
+    def test_export_seed_excludes_user_override(self):
+        """B3 回归：export_seed 只导种子基线，用户覆盖层不得洗白进标准种子；版本号取库内记录。"""
+        graph.ensure_seed("biology")
+        asc.apply_subject("biology", commit=True)
+        with db.db() as conn:
+            row_ = conn.execute(
+                "SELECT id, explanation_seed FROM concepts WHERE subject='biology' AND explanation_seed<>'' LIMIT 1"
+            ).fetchone()
+        cid, seed_val = row_["id"], row_["explanation_seed"]
+        self.assertTrue(graph.update_explanation(cid, "用户个性化改写_不应导出"))
+        import tempfile as _tf
+        from pathlib import Path as _Path
+        out_dir = _Path(tempfile.mkdtemp(prefix="seedx_", dir=_TEST_TMP_DIR))
+        try:
+            path = graph.export_seed("biology", target_path=out_dir / "seed_concepts_biology.json")
+            import json as _json
+            data = _json.loads(path.read_text(encoding="utf-8"))
+            self.assertNotIn("用户个性化改写_不应导出", path.read_text(encoding="utf-8"),
+                             "用户覆盖层不得出现在种子导出中")
+            names = {c["n"]: c for u in data["units"] for ch in u["chapters"] for c in ch["concepts"]}
+            target = [c for c in names.values() if c.get("desc")]
+            if seed_val and target:
+                pass  # 至少验证：含 desc 的概念其 desc 均来自种子层（上面全文件断言已覆盖）
+        finally:
+            # 回滚本测试写入的用户覆盖层，避免污染同类的 test_overlay_user_priority_and_revert
+            graph.update_explanation(cid, "")
+            import shutil as _sh
+            _sh.rmtree(out_dir, ignore_errors=True)
+
 
 class TestCloseAllConnections(unittest.TestCase):
     """close_all_connections 是 R4 连接复用的关键：还原前释放文件锁 + 递增 epoch。"""

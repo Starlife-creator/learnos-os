@@ -4,7 +4,7 @@ function ragSourcesHtml(sources) {
   if (!sources || !sources.length) return '';
   return `<div class="rag-sources"><span class="text-sm text-muted">${t('rag.srcLabel')}</span>` +
     sources.map(s =>
-      `<button class="btn btn-link btn-sm" onclick="openRagSource('${encodeURIComponent(s.path)}')">` +
+      `<button class="btn btn-link btn-sm" onclick="openRagSource('${encodeURIComponent(s.path).replace(/'/g, '%27')}')">` +
       `${escapeHtml(s.name)}${s.page ? t('rag.pageSuffix').replace('{p}', s.page) : ''}</button>`).join('') + `</div>`;
 }
 
@@ -100,7 +100,7 @@ async function loadOcrProbe() {
 
 function collectOcrTexts() {
   return Array.from(document.querySelectorAll('.ocr-text'))
-    .map((t, i) => t('ocr.pageLabel').replace('{n}', i + 1) + '\n' + t.value).join('\n\n');
+    .map((ta, i) => t('ocr.pageLabel').replace('{n}', i + 1) + '\n' + ta.value).join('\n\n');
 }
 
 async function runOcr() {

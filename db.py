@@ -88,6 +88,9 @@ def close_thread_conn() -> None:
     连接复用后打开的连接会：① 锁住库文件导致 Windows rename/copy 失败；
     ② 未 checkpoint 的 WAL 数据仍在 -wal 文件中，直接拷 .db 会漏数据。
     """
+    if getattr(_TLS, "depth", 0):
+        # 嵌套 db() 内关闭连接会让最外层 with conn: 对已关连接 commit 抛错，且 finally 会掩盖深度失衡
+        raise RuntimeError("close_thread_conn 不能在嵌套 db() 事务内调用（depth != 0）")
     conn = getattr(_TLS, "conn", None)
     if conn is not None:
         try:
@@ -748,8 +751,11 @@ def init_db() -> None:
 
 
 def rows(query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-    with db() as conn:
-        return [dict(row) for row in conn.execute(query, params).fetchall()]
+    # 持 DB_LOCK（RLock，重入安全）：防止与 close_all_connections/close_thread_conn
+    # 并发时 execute 命中已关闭连接；代价是读串行化，单用户场景可接受。
+    with DB_LOCK:
+        with db() as conn:
+            return [dict(row) for row in conn.execute(query, params).fetchall()]
 
 
 def row(query: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:

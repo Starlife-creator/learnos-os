@@ -66,7 +66,7 @@ def compute_review(
         mastery = clamp_mastery(prev_repetition + rating)
 
     return ReviewResult(
-        interval_days=max(1, new_interval),
+        interval_days=max(1, min(new_interval, 730)),  # 工程上限两年：防异常大值按 ease 指数放大永不收敛
         ease_factor=new_ease,
         repetition=new_repetition,
         mastery=mastery,

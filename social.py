@@ -87,7 +87,8 @@ def export_social(subject: str | None = None) -> dict[str, Any]:
 
     仅含聚合指标与主题级薄弱点，**不包含任何题目内容或答案**。
     """
-    where = "WHERE subject = ?" if subject else ""
+    # 无 subject 时用恒真条件兜底：weak 查询拼接 `AND topic <> ''`，空 where 会产生非法 SQL
+    where = "WHERE subject = ?" if subject else "WHERE 1=1"
     params = (subject,) if subject else ()
     stats = row(
         f"SELECT COUNT(*) AS total, COALESCE(AVG(mastery), 0) AS avg_mastery, "

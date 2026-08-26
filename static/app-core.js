@@ -225,9 +225,11 @@ async function searchPaletteRun(q) {
 
 function highlight(text, q) {
   const s = escapeHtml(text);
-  const i = s.toLowerCase().indexOf(escapeHtml(q).toLowerCase());
+  // 切片必须用转义后的 needle 长度：原始 q 含 & < > 等时转义变长，用 q.length 会截断实体
+  const needle = escapeHtml(q).toLowerCase();
+  const i = s.toLowerCase().indexOf(needle);
   if (i < 0) return s;
-  return s.slice(0, i) + '<mark>' + s.slice(i, i + q.length) + '</mark>' + s.slice(i + q.length);
+  return s.slice(0, i) + '<mark>' + s.slice(i, i + needle.length) + '</mark>' + s.slice(i + needle.length);
 }
 
 function searchPaletteGo(idx) { const it = _searchItems[idx]; if (it) it.go(); }
@@ -341,10 +343,30 @@ function errLabel(et) {
 }
 
 function escapeHtml(s) {
-  const d = document.createElement('div');
-  d.textContent = s || '';
-  return d.innerHTML;
+  // 字符替换式转义：textContent 序列化不转义引号，放进属性/onclick 单引号上下文会被逃逸
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
+
+// C7：localStorage 安全收口——隐私模式/配额满/脏 JSON 均兜底，不再打断主流程
+const store = {
+  get(k, fb) {
+    try { const v = localStorage.getItem(k); return v === null ? fb : v; } catch (_) { return fb; }
+  },
+  getJSON(k, fb) {
+    try {
+      const v = localStorage.getItem(k);
+      if (v === null) return fb;
+      const parsed = JSON.parse(v);
+      return parsed === null || parsed === undefined ? fb : parsed;
+    } catch (_) {
+      try { localStorage.removeItem(k); } catch (_) {}  // 脏数据直接清掉
+      return fb;
+    }
+  },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (_) {} },
+};
 
 let _katexLoading = null;
 function loadKatex() {

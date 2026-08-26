@@ -113,6 +113,7 @@
   "bank.statusTodo": "Not Started",
   "bank.statusWrong": "Wrong",
   "bank.statusDone": "Mastered",
+  "bank.statusPending": "Pending Review",
   "bank.practice": "Practice",
   "bank.submit": "Submit Answer",
   "bank.close": "Done",

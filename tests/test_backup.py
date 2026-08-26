@@ -109,6 +109,20 @@ class TestBackup(unittest.TestCase):
         with self.assertRaises(ValueError):
             backup.restore_backup(json.dumps({"version": 99}))
 
+    def test_restore_reenables_foreign_keys(self):
+        """B1 回归：还原后同线程连接的 FK 必须恢复为 ON（事务内 PRAGMA 是静默 no-op）。"""
+        status, r = self.request(f"/api/export/backup?token={self._challenge_token()}")
+        raw = json.dumps(r)
+        backup.restore_backup(raw)
+        try:
+            with db.db() as conn:
+                fk = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+            self.assertEqual(fk, 1, "还原完成后当前线程连接的外键约束必须为 ON")
+        finally:
+            # 清理本次还原生成的 .bak，避免影响 test_restore_roundtrip 的 .bak 计数断言
+            for b in Path(self.temp_dir.name).glob("*.bak"):
+                b.unlink(missing_ok=True)
+
     def test_auto_backup_idempotent_and_prune(self):
         """C7：自动备份每天一次幂等，且最多保留 7 份。"""
         from datetime import date as _date

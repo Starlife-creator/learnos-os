@@ -74,6 +74,12 @@ class TestStudyCheckins(unittest.TestCase):
         for banned in ("content", "my_attempt", "answer", "hint"):
             self.assertNotIn(banned, json.dumps(payload, ensure_ascii=False).lower())
 
+    def test_export_social_all_subjects(self):
+        # subject=None 分支：weak 查询拼 `WHERE 1=1 AND topic <> ''`，此前空 where 会产生非法 SQL
+        payload = self.social.export_social(None)
+        self.assertIn("streak_days", payload)
+        self.assertIsInstance(payload.get("weak_topics"), list)
+
 
 class TestExamPrediction(unittest.TestCase):
     @classmethod

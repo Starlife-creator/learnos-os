@@ -64,8 +64,8 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         (r"/api/problems/(\d+)/related", "_handle_related_problems"),
         (r"/api/problems/duplicates", "_handle_duplicates"),
         (r"/api/problems/(\d+)", "_handle_get_problem"),
-        (r"/api/fsrs/train", "_handle_fsrs_train"),
-        (r"/api/fsrs/reset", "_handle_fsrs_reset"),
+        # train/reset 有副作用（启动训练 / 重置参数），已迁至 POST_ROUTES：
+        # do_GET 无 CSRF 校验，挂 GET 可被跨站 <img> 触发
         (r"/api/fsrs/status", "_handle_fsrs_status"),
         (r"/api/gamification", "_handle_gamification"),
         (r"/api/report/weekly", "_handle_weekly_report"),
@@ -143,6 +143,7 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         (r"/api/export/seed", "_handle_export_seed", True),
         (r"/api/settings/test", "_handle_settings_test", True),
         (r"/api/fsrs/train", "_handle_fsrs_train", False),
+        (r"/api/fsrs/reset", "_handle_fsrs_reset", False),
         (r"/api/fsrs/retention", "_handle_fsrs_retention", True),
         (r"/api/keystore/unlock", "_handle_keystore_unlock", True),
         (r"/api/keystore/clear", "_handle_keystore_clear", True),
@@ -175,6 +176,8 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
             "style-src 'self' 'unsafe-inline'; script-src 'self'; "
             "script-src-attr 'unsafe-inline'; connect-src 'self'",
         )
+        # C3：禁 MIME 嗅探（media 对未知扩展回退 octet-stream，纵深防御）
+        self.send_header("X-Content-Type-Options", "nosniff")
         # P5：静态资源缓存策略。API 响应已自带 Cache-Control（no-store 等），此处跳过避免重复；
         # 仅对未显式设置缓存头的响应（静态文件）按路径补缓存策略。
         # 注：Python 3.13 响应头存于 self._headers_buffer（字节元组列表），无 self._headers 响应对象。
@@ -249,6 +252,8 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
 
     def read_json(self, max_bytes: int = 1_000_000) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))
+        if length < 0:
+            raise ValueError("无效的 Content-Length")  # 负数会使 read(-1) 阻塞到对端关闭
         if length > max_bytes:
             raise ValueError("请求内容过大")
         raw = self.rfile.read(length)
@@ -262,7 +267,9 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
             self.json_response({"error": "服务器内部错误，请查看日志"}, status)
             return
         if isinstance(exc, (ValueError, json.JSONDecodeError)):
-            self.json_response({"error": str(exc)}, 400)
+            # C2：校验类消息可回显，但抹掉其中可能带出的本地路径（OSError 等被上层包装进 ValueError 时）
+            msg = re.sub(r"[A-Za-z]:[\\/][^\s\"'，。]*", "<path>", str(exc))
+            self.json_response({"error": msg}, 400)
         else:
             LOG.error("请求处理异常: %s", exc, exc_info=True)
             self.json_response({"error": "服务器内部错误，请查看日志"}, status)
@@ -837,6 +844,10 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
             return
         # 持久化评分历史（含待评阅记录）；AI 离线（未评分）也记录以便展示
         bank.save_score_history(qid, self._subject_of(data), result)
+        # C6 决策：AI 评分给出确定结果（score 非 None 且无需人工复核）时回写作答状态，
+        # 使 pending 流转为 done（≥60 分）/ wrong（<60 分，并入错题库）；否则保持 pending
+        result["review_outcome"] = bank.record_review_outcome(
+            qid, self._subject_of(data), result.get("score"), result.get("needs_review", False))
         result["history"] = bank.recent_scores(qid, limit=10)
         self.json_response(result)
 
@@ -1002,11 +1013,14 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
             match = re.fullmatch(r"/api/problems/(\d+)", path)
             if match:
                 with DB_LOCK, db() as conn:
+                    # 删除前先取学科：删除后查不到，update_progress 需按实际学科重算
+                    subj_row = conn.execute(
+                        "SELECT subject FROM problems WHERE id = ?", (int(match.group(1)),)).fetchone()
                     cursor = conn.execute("DELETE FROM problems WHERE id = ?", (int(match.group(1)),))
                     if cursor.rowcount == 0:
                         self.json_response({"error": "题目不存在"}, 404)
                         return
-                graph.update_progress(force=True)
+                graph.update_progress((subj_row["subject"] if subj_row else None) or "physics", force=True)
                 auth.audit("delete_problem", ip=self._client_ip(), detail=match.group(1))  # R5 审计
                 self.json_response({"ok": True})
                 return

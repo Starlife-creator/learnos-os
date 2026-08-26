@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ipaddress
+import copy
 import json
 import os
 import re
@@ -69,7 +70,7 @@ def cache_get(key: str) -> dict[str, Any] | None:
         ts, val = mem
         if time.time() - ts < _RESULT_CACHE_TTL:
             _inc_cache(True)
-            return val
+            return copy.deepcopy(val)  # 深拷贝：调用方原地写标记字段不得污染缓存条目
         _result_mem.pop(k, None)
     try:
         from db import DB_LOCK, db
@@ -78,10 +79,21 @@ def cache_get(key: str) -> dict[str, Any] | None:
             row = conn.execute(
                 "SELECT payload, created_at FROM ai_result_cache WHERE cache_key = ?", (k,)).fetchone()
         if row:
+            # TTL 对 DB 层同样生效：created_at 为 db.now() 的 ISO 串，过期即删并按未命中处理
+            from datetime import datetime as _dt
+            try:
+                age = time.time() - _dt.fromisoformat(row["created_at"]).timestamp()
+            except (ValueError, TypeError, OverflowError):
+                age = _RESULT_CACHE_TTL  # 时间戳损坏视同过期
+            if age >= _RESULT_CACHE_TTL:
+                with DB_LOCK, db() as conn:
+                    conn.execute("DELETE FROM ai_result_cache WHERE cache_key = ?", (k,))
+                row = None
+        if row:
             val = json.loads(row["payload"])
             _result_mem[k] = (time.time(), val)
             _inc_cache(True)
-            return val
+            return copy.deepcopy(val)
     except (Exception, _SE) as exc:
         LOG.debug("读结果缓存失败: %s", exc)
     _inc_cache(False)
@@ -298,7 +310,14 @@ def _safe_temperature(config: dict[str, str]) -> float:
         value = float(config.get("temperature", "0.3"))
     except (TypeError, ValueError):
         return 0.3
+    if value != value:  # NaN：比较语义会让 min/max 静默返回边界值，先归掉
+        return 0.3
     return max(0.0, min(2.0, value))
+
+
+def _clamp_temperature(value: Any) -> float:
+    """显式传入的 temperature 兜底：非法/NaN 回落 0.3（复用 _safe_temperature 的容错语义）。"""
+    return _safe_temperature({"temperature": value})
 
 
 # ── 模型预设库（全网调研 2026-08，提供商×模型名双重映射，llm-rosetta 推理行为表校准）──
@@ -405,7 +424,7 @@ def _prepare_ai_request(
         "model": model,
         "messages": messages,
         "temperature": _safe_temperature(config) if temperature is None
-                          else max(0.0, min(2.0, float(temperature))),
+                          else _clamp_temperature(temperature),
         "max_tokens": eff_max_tokens,
         "stream": stream,
     }

@@ -2,7 +2,7 @@
 // ── 错题（真分页 + 搜索 + 排序 + 表格视图 + 保存筛选）──
 let problemPage = 1;
 let problemPages = 1;
-let _searchTimer = null;
+// _searchTimer 复用 app-core.js:150 的全局声明（顶层重复 let 会使本文件整体 SyntaxError）
 
 function problemViewMode() {
   return localStorage.getItem('problemView') === 'table' ? 'table' : 'cards';
@@ -102,8 +102,10 @@ function tableSortBy(key) {
 }
 
 // ── 保存的筛选器（Dataview 式自定义视图，存本机）──
+// C7：走 store.getJSON——脏 JSON 曾致 renderSavedFilters 在每次 loadProblems 同步抛错（列表页白屏）
 function _savedFilters() {
-  return JSON.parse(localStorage.getItem('savedFilters') || '[]');
+  const v = store.getJSON('savedFilters', []);
+  return Array.isArray(v) ? v : [];
 }
 
 function saveCurrentFilter() {
@@ -113,7 +115,7 @@ function saveCurrentFilter() {
   if (!name) return;
   const list = _savedFilters();
   list.push({ name, q, sort: document.getElementById('sortSelect').value });
-  localStorage.setItem('savedFilters', JSON.stringify(list.slice(-20)));
+  store.set('savedFilters', JSON.stringify(list.slice(-20)));
   renderSavedFilters();
   toast(t('prob.filterSaved'));
 }
@@ -129,7 +131,7 @@ function applySavedFilter(i) {
 function deleteSavedFilter(i) {
   const list = _savedFilters();
   list.splice(i, 1);
-  localStorage.setItem('savedFilters', JSON.stringify(list));
+  store.set('savedFilters', JSON.stringify(list));
   renderSavedFilters();
 }
 
@@ -337,6 +339,13 @@ async function getHint(id, level) {
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
     let done = false;
+    // C8：rAF 节流的 KaTeX 渲染——一帧至多一次，done 事件仍强制最终渲染
+    let mathScheduled = false;
+    function scheduleMathRender(card) {
+      if (mathScheduled) return;
+      mathScheduled = true;
+      requestAnimationFrame(() => { mathScheduled = false; renderMath(card); });
+    }
     while (true) {
       let chunk;
       try {
@@ -357,7 +366,8 @@ async function getHint(id, level) {
         const payload = JSON.parse(dataMatch[1]);
         if (event === 'delta') {
           streamText.textContent += payload.delta || '';
-          renderMath(card);
+          // C8：KaTeX 全卡重渲按帧节流（每个 delta 都渲是 O(n²)，长回答流式期间明显卡顿）
+          scheduleMathRender(card);
         } else if (event === 'sources') {
           if (payload.sources && payload.sources.length) {
             card.insertAdjacentHTML('afterbegin', ragSourcesHtml(payload.sources));

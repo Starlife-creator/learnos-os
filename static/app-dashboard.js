@@ -249,20 +249,20 @@ function drawGamification(g) {
 }
 
 // ── C6 AI 遥测 ──
-function drawTelemetry(t) {
+function drawTelemetry(tm) {
   const el = document.getElementById('telemetryCard');
   if (!el) return;
-  if (!t || t.calls === undefined) { el.innerHTML = '<div class="text-muted text-sm">' + t('msg.noData') + '</div>'; return; }
-  const rate = t.fail_rate > 0.3 ? 'tag-red' : t.fail_rate > 0.1 ? 'tag-warn' : 'tag-green';
+  if (!tm || tm.calls === undefined) { el.innerHTML = '<div class="text-muted text-sm">' + t('msg.noData') + '</div>'; return; }
+  const rate = tm.fail_rate > 0.3 ? 'tag-red' : tm.fail_rate > 0.1 ? 'tag-warn' : 'tag-green';
   el.innerHTML = `<div class="flex-between mb-8">
-    <span class="text-sm">${t('stat.calls7')}</span><b>${t.calls}</b>
-    <span class="text-sm">${t('stat.failRate')}</span><span class="tag ${rate}">${(t.fail_rate * 100).toFixed(0)}%</span>
-    <span class="text-sm">${t('stat.avgLatency')}</span><b>${t.avg_latency_ms}ms</b>
-    <span class="text-sm">${t('stat.tokens')}</span><b>${t.tokens}</b>
-    ${t.cached_tokens !== undefined ? `<span class="text-sm">${t('stat.cacheHit')}</span><span class="tag ${t.cache_hit_rate >= 0.3 ? 'tag-green' : 'tag-gray'}">${(t.cache_hit_rate * 100).toFixed(0)}%</span>` : ''}
+    <span class="text-sm">${t('stat.calls7')}</span><b>${tm.calls}</b>
+    <span class="text-sm">${t('stat.failRate')}</span><span class="tag ${rate}">${(tm.fail_rate * 100).toFixed(0)}%</span>
+    <span class="text-sm">${t('stat.avgLatency')}</span><b>${tm.avg_latency_ms}ms</b>
+    <span class="text-sm">${t('stat.tokens')}</span><b>${tm.tokens}</b>
+    ${tm.cached_tokens !== undefined ? `<span class="text-sm">${t('stat.cacheHit')}</span><span class="tag ${tm.cache_hit_rate >= 0.3 ? 'tag-green' : 'tag-gray'}">${(tm.cache_hit_rate * 100).toFixed(0)}%</span>` : ''}
   </div>
-  ${t.cached_tokens ? `<p class="hint-text">${t('stat.cacheNote').replace('{c}', t.cached_tokens)}</p>` : ''}
-  ${t.slow_routes && t.slow_routes.length ? `<p class="hint-text">${t('stat.slowRoutes')}：${t.slow_routes.map(escapeHtml).join('、')}</p>` : ''}`;
+  ${tm.cached_tokens ? `<p class="hint-text">${t('stat.cacheNote').replace('{c}', tm.cached_tokens)}</p>` : ''}
+  ${tm.slow_routes && tm.slow_routes.length ? `<p class="hint-text">${t('stat.slowRoutes')}：${tm.slow_routes.map(escapeHtml).join('、')}</p>` : ''}`;
 }
 
 // ── D5 周报 ──
@@ -327,9 +327,9 @@ function drawTodayTasks(tasks) {
   if (!el) return;
   if (!tasks || !tasks.length) { el.innerHTML = t('msg.noTask'); return; }
   const icons = { review: '📚', error_focus: '🎯', exam: '🏃', done: '✅' };
-  el.innerHTML = tasks.map(t =>
-    `<div class="flex-between mb-8"><span class="text-sm">${icons[t.kind] || ''} ${escapeHtml(t.label)}</span>
-     ${t.kind === 'review' && t.count ? `<a class="btn btn-secondary btn-sm" href="#review">${t('task.goReviewBtn')}</a>` : ''}</div>`
+  el.innerHTML = tasks.map(task =>
+    `<div class="flex-between mb-8"><span class="text-sm">${icons[task.kind] || ''} ${escapeHtml(task.label)}</span>
+     ${task.kind === 'review' && task.count ? `<a class="btn btn-secondary btn-sm" href="#review">${t('task.goReviewBtn')}</a>` : ''}</div>`
   ).join('');
 }
 
@@ -357,14 +357,14 @@ function drawErrorTrend(list) {
   const el = document.getElementById('errorTrend');
   if (!el) return;
   if (!list || !list.length) { el.innerHTML = '<div class="empty"><p>' + t('msg.noData') + '</p></div>'; return; }
-  el.innerHTML = list.map(t => {
-    const up = t.delta > 0, down = t.delta < 0;
+  el.innerHTML = list.map(item => {
+    const up = item.delta > 0, down = item.delta < 0;
     const arrow = up ? '↗' : down ? '↘' : '→';
     const cls = up ? 'tag-red' : down ? 'tag-green' : 'tag-gray';
     return `<div class="flex-between mb-8">
-      <span class="text-sm" style="min-width:88px">${escapeHtml(t.label)}</span>
-      <span class="text-sm text-muted" style="flex:1">${t('errTrend.range').replace('{n}', t.recent_count).replace('{p}', t.recent_pct).replace('{h}', t.total_pct)}</span>
-      <span class="tag ${cls}">${arrow} ${up ? '+' : ''}${t.delta}%</span>
+      <span class="text-sm" style="min-width:88px">${escapeHtml(item.label)}</span>
+      <span class="text-sm text-muted" style="flex:1">${t('errTrend.range').replace('{n}', item.recent_count).replace('{p}', item.recent_pct).replace('{h}', item.total_pct)}</span>
+      <span class="tag ${cls}">${arrow} ${up ? '+' : ''}${item.delta}%</span>
     </div>`;
   }).join('');
 }

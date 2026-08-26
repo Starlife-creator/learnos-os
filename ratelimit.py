@@ -56,9 +56,16 @@ def _limit_for(ip: str) -> int:
 
 def _prune(ip: str, now: float) -> list[float]:
     window = _window()
-    recent = [t for t in _failures[ip] if now - t < window]
-    if len(recent) != len(_failures[ip]):
-        _failures[ip] = recent
+    # 用 .get 而非 [ip]：defaultdict 的取值访问会凭空创建空 key，造成无界增长
+    existing = _failures.get(ip)
+    if not existing:
+        return []
+    recent = [t for t in existing if now - t < window]
+    if len(recent) != len(existing):
+        if recent:
+            _failures[ip] = recent
+        else:
+            _failures.pop(ip, None)  # 空 key 回收
     return recent
 
 
@@ -136,7 +143,14 @@ def ai_quota_ok(ip: str, tier: str = "fast") -> bool:
 
 
 def _prune_calls(key: tuple[str, str], now: float, window: float) -> list[float]:
-    recent = [t for t in _ai_calls[key] if now - t < window]
-    if len(recent) != len(_ai_calls[key]):
-        _ai_calls[key] = recent
+    # 用 .get 而非 [key]：defaultdict 的取值访问会凭空创建空 key，造成无界增长
+    existing = _ai_calls.get(key)
+    if not existing:
+        return []
+    recent = [t for t in existing if now - t < window]
+    if len(recent) != len(existing):
+        if recent:
+            _ai_calls[key] = recent
+        else:
+            _ai_calls.pop(key, None)  # 空 key 回收
     return recent

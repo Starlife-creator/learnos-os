@@ -189,6 +189,9 @@ def load_graph(subject: str = "physics") -> dict[str, Any]:
     from db import normalize_subject
     subject = normalize_subject(subject)
     ensure_seed(subject)
+    # C4 处置决策（方案 B）：SELECT * 下发三层 explanation（seed/user/resolved）有约 1/3 冗余，
+    # 但三列前端都在用（徽标/回退/显示），本机 localhost 收益有限，维持现状；
+    # 若日后暴露 LAN 或节点量级显著增长，再切显式列清单 + 前端 COALESCE（方案 A）。
     nodes = rows("SELECT * FROM concepts WHERE subject = ? ORDER BY id", (subject,))
     parent_of = {n["id"]: n["parent_id"] for n in nodes}
     for n in nodes:
@@ -256,7 +259,9 @@ def export_seed(subject: str, target_path: Path | None = None) -> Path:
             unit_name = nodes.get(n["parent_id"], {}).get("name") or "未分类"
             ch_name = "概念"
         concept_obj: dict[str, Any] = {"n": n["name"], "d": n["difficulty"]}
-        exp = (n.get("explanation") or "").strip()
+        # 只导种子基线 explanation_seed：resolved explanation 含用户覆盖层（v27），
+        # 导出会把个性化改写「洗白」成标准种子内容，随 git/克隆扩散到其他设备。
+        exp = (n.get("explanation_seed") or "").strip()
         if exp:
             concept_obj["desc"] = exp
         pres = prereq_of.get(n["id"], [])
@@ -264,7 +269,10 @@ def export_seed(subject: str, target_path: Path | None = None) -> Path:
             concept_obj["p"] = [id_to_name[p] for p in pres if p in id_to_name]
         get_chapter(unit_name, ch_name)["concepts"].append(concept_obj)
 
-    out = {"version": 1, "subject": subject, "units": list(units.values())}
+    # 版本号取库内 seed_versions 记录（硬编码 1 会在下次启动时把高版本记录拉回，破坏升级检测）
+    ver_row = row("SELECT seed_version FROM seed_versions WHERE subject = ?", (subject,))
+    out = {"version": max(1, int(ver_row["seed_version"])) if ver_row else 1,
+           "subject": subject, "units": list(units.values())}
     path = target_path or subject_seed_path(subject)
     path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
@@ -544,7 +552,8 @@ def bind_problem(problem_id: int) -> list[int]:
     csv = ",".join(f",{cid}," for cid in concept_ids) or ""
     with DB_LOCK, db() as conn:
         conn.execute("UPDATE problems SET concept_ids = ? WHERE id = ?", (csv, problem_id))
-    update_progress(force=True)
+    # 按题目实际学科重算掌握度（默认 physics 会导致非物理学科失更新）
+    update_progress(problem["subject"] or "physics", force=True)
     return concept_ids
 
 

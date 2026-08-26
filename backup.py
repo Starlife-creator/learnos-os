@@ -89,7 +89,8 @@ def export_backup() -> dict[str, Any]:
                 data[t] = [dict(r) for r in conn.execute(f'SELECT * FROM "{t}"').fetchall()]
     # 完整性校验（P4a）：对"导出表数据"做规范化序列化后计算 sha256。
     # 规范化约定（sort_keys + separators）必须与 restore_backup 的校验侧完全一致，
-    # 否则二次序列化不一致会误报。零密钥依赖，覆盖"损坏/篡改"主要失败模式。
+    # 否则二次序列化不一致会误报。C1 定位澄清：无密钥校验和只防**损坏**不防**篡改**
+    # （能改 tables 者可重算 sha256）；防篡改见 restore_backup 侧的触发式 HMAC 增强 ADR。
     tables_bytes = json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return {
         "version": 1,
@@ -151,16 +152,20 @@ def restore_backup(raw: str) -> dict[str, Any]:
     if not isinstance(tables, dict):
         raise ValueError("备份内容缺失 tables")
 
-    # 完整性校验（P4a）：仅当携带 sha256 时校验；旧备份缺字段则降级为警告，不阻断还原。
+    # 完整性校验（P4a / C1 定位澄清）：sha256 是**无密钥校验和，只防损坏不防篡改**——
+    # 能改 tables 的攻击者同样能重算/删除 sha256。防篡改属触发式增强（暴露模式常态化时
+    # 升级 HMAC-SHA256，密钥复用 LEARNOS_API_TOKEN），本机单用户不启用。
     # 校验侧与导出侧共用同一规范化序列化（sort_keys + separators），避免二次序列化误报。
     expect = payload.get("sha256")
+    integrity = "verified"
     if expect:
         computed = hashlib.sha256(
             json.dumps(tables, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
         if computed != expect:
             raise ValueError("备份完整性校验失败（sha256 不匹配，可能损坏或被篡改）")
-    elif tables is not None:
+    else:
+        integrity = "unchecked"
         LOG.warning("备份缺少 sha256 字段，跳过完整性校验（兼容旧格式）")
 
     # 1) 现库整体 rename 为 .bak 时间戳（同目录，非 unlink：原子、崩溃安全、对沙箱友好）
@@ -212,6 +217,11 @@ def restore_backup(raw: str) -> dict[str, Any]:
                     [tuple(r.get(c) for c in cols) for r in rows_in],
                 )
                 counts[t] = len(rows_in)
+        # FK 必须在事务外恢复：PRAGMA foreign_keys 在事务内是静默 no-op，
+        # 而上方 DELETE 已隐式开启事务；线程本地连接会被复用，漏开 = 该线程永久无外键约束。
+        with db() as conn:
+            assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 0
             conn.execute("PRAGMA foreign_keys = ON")
     LOG.info("还原完成: %s", counts)
-    return {"restored": counts}
+    # C1：向调用方可见的完整性状态（旧格式缺 sha256 时为 unchecked，不再只是静默日志）
+    return {"restored": counts, "integrity": integrity}

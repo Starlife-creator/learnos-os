@@ -132,8 +132,17 @@ class TestBorrowedFeatures(unittest.TestCase):
         status, data = self._request("GET", "/api/graph/unlinked")
         self.assertFalse([m for m in data["items"] if m["problem_id"] == pid and m["concept_id"] == cid])
 
-    # ── 概念详解回档端点：DELETE 清空用户覆盖层，落回种子基线 ──
-    def test_revert_explanation_endpoint(self):
+    # ── B4 回归：fsrs 副作用端点只走 POST（GET 无 CSRF 校验，可被跨站 <img> 触发）──
+    def test_fsrs_side_effect_endpoints_post_only(self):
+        get_patterns = [p for p, _m in Handler.GET_ROUTES]
+        self.assertNotIn("/api/fsrs/train", get_patterns)
+        self.assertNotIn("/api/fsrs/reset", get_patterns)
+        post_patterns = [p for p, _m, _b in Handler.POST_ROUTES] if hasattr(Handler, "POST_ROUTES") else []
+        self.assertIn("/api/fsrs/train", post_patterns)
+        self.assertIn("/api/fsrs/reset", post_patterns)
+        # 注：不做 GET 实请求断言——未命中 API 路由会落到静态文件服务返回 HTML，非 JSON
+
+    # ── 概念详解回档端点：DELETE 清空用户覆盖层，落回种子基线 ──    def test_revert_explanation_endpoint(self):
         _, add = self._request("POST", "/api/graph/concepts",
                                {"name": "回档测试概念", "aliases": "", "subject": "physics"})
         cid = add["id"]

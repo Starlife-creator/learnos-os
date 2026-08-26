@@ -162,9 +162,13 @@ def compute_fsrs_review(
     difficulty: float = 0.0,
     today: date | None = None,
     subject: str = "",
+    last_review: str = "",
 ) -> FsrsState:
     """FSRS-6 调度。返回下一次复习状态（供 problems 表持久化）。
     subject 用于 §46.5C 学科分层保持率（无则全局）。
+    last_review（ISO 日期，可选）：C5 语义修正——elapsed_days 应为「距上次复习的真实天数」，
+    此前误用调度间隔（与 scheduled_days 同源）。调用方可传上次复习日期以获得正确值；
+    不传则为 0。该字段当前无消费方。
     """
     today = today or date.today()
     card = _state_to_card(state, stability, difficulty, prev_interval)
@@ -178,13 +182,17 @@ def compute_fsrs_review(
     )
     due = updated.due
     scheduled = max(1, (due.date() - today).days)
+    try:
+        elapsed = max(0, (today - date.fromisoformat(last_review)).days) if last_review else 0
+    except (ValueError, TypeError):
+        elapsed = 0
     return FsrsState(
         state=int(updated.state),
         stability=round(updated.stability, 3),
         difficulty=round(updated.difficulty, 3),
         due=due.date().isoformat(),
         last_review=today.isoformat(),
-        elapsed_days=max(0, (due.date() - today).days),
+        elapsed_days=elapsed,
         scheduled_days=scheduled,
     )
 
