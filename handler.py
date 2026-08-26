@@ -51,6 +51,17 @@ from resp import error_counts
 class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
              CardsMixin, ReportsMixin, SocialMixin, SimpleHTTPRequestHandler):
     server_version = "LearnOS/0.5.0"
+    # HTTP/1.1 keep-alive：浏览器复用 TCP 连接（首页 ~13 资源不再逐个三次握手）。
+    # 升级前提审计（2026-08-26）：全部非流式响应均带准确 Content-Length
+    # （json_response / _text_response / _serve_media / stdlib 静态文件），
+    # 满足 HTTP/1.1 长连接定界要求；唯二例外是 SSE 流（无 Content-Length、
+    # 依赖连接关闭定界），已在两处 _stream_* 显式发送 Connection: close。
+    # 304 协商缓存：stdlib SimpleHTTPRequestHandler 自 3.6 起原生支持
+    # If-Modified-Since（server.py:739-775），业务资源 no-cache 策略因此成立。
+    protocol_version = "HTTP/1.1"
+    # keep-alive 闲置回收：ThreadingHTTPServer 每连接占一线程，浏览器会长期
+    # 钉住最多 ~6 条空闲连接；不设超时线程永不释放。读超时后 close_connection。
+    timeout = 120
 
     # 路由表：(正则模式, 处理方法名, 是否需要请求体)。路径数字组自动转 int 传入。
     # 保持声明顺序：互斥 fullmatch，先声明先命中。

@@ -99,6 +99,8 @@ class MaterialMixin:
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("X-Accel-Buffering", "no")
+        # HTTP/1.1 keep-alive 下 SSE 无 Content-Length，必须显式关闭连接定界
+        self.send_header("Connection", "close")
         self.end_headers()
         try:
             size = material.batch_chars(context_tokens)

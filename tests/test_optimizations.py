@@ -124,6 +124,67 @@ class TestOptimizations(unittest.TestCase):
             self.assertNotIn("abcdef123456", rec.msg)
             self.assertNotIn("xyz987654321", rec.msg)
 
+    def test_http11_keepalive_same_connection(self):
+        """HTTP/1.1 keep-alive：同一 TCP 连接连续两次请求均成功（此前 HTTP/1.0 每请求一连接）。"""
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=10)
+        try:
+            conn.request("GET", "/style.css")
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(resp.version, 11)  # HTTP/1.1
+            resp.read()
+            # 复用同一条连接发起第二个请求：若服务端错误地提前关闭会抛 ConnectionError/BadStatusLine
+            conn.request("GET", "/api/health")
+            resp2 = conn.getresponse()
+            self.assertEqual(resp2.status, 200)
+            resp2.read()
+        finally:
+            conn.close()
+
+    def test_static_conditional_304(self):
+        """业务静态资源 no-cache 协商缓存：If-Modified-Since 命中 → 304 且仍带缓存指令。"""
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=10)
+        try:
+            conn.request("GET", "/style.css")
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, 200)
+            last_mod = resp.getheader("Last-Modified")
+            resp.read()
+        finally:
+            conn.close()
+        self.assertIsNotNone(last_mod)
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=10)
+        try:
+            conn.request("GET", "/style.css", headers={"If-Modified-Since": last_mod})
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, 304)
+            # 304 必须继续携带 Cache-Control，浏览器才会保持每次导航再验证的行为
+            self.assertEqual(resp.getheader("Cache-Control"), "no-cache")
+            self.assertEqual(resp.read(), b"")  # 304 无响应体
+        finally:
+            conn.close()
+
+    def test_sse_stream_sends_connection_close(self):
+        """SSE 流无 Content-Length，HTTP/1.1 下必须显式 Connection: close 定界，否则客户端挂起。"""
+        pid = self._create_problem({"title": "SSE 连接定界测试题"})
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=30)
+        try:
+            conn.request(
+                "POST", f"/api/problems/{pid}/hint",
+                json.dumps({"level": 1}),
+                {"Content-Type": "application/json", "X-Requested-With": "LearnOS",
+                 "Accept": "text/event-stream"},
+            )
+            resp = conn.getresponse()
+            self.assertIn("text/event-stream", resp.getheader("Content-Type") or "")
+            self.assertEqual(resp.getheader("Connection"), "close")
+            body = resp.read()  # 连接关闭定界：读到 EOF 即流结束
+            self.assertIn(b"event: start", body)
+            # AI 未配置 → 走 error+fallback 分支，事件序列完整收尾
+            self.assertTrue(b"event: done" in body or b"event: error" in body)
+        finally:
+            conn.close()
+
 
 class TestSubjectAdmin(unittest.TestCase):
     """学科注册表：网页端增删 + 内置保护 + 有数据阻止删除。"""
