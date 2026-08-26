@@ -295,7 +295,7 @@ class TestBorrowedFeatures(unittest.TestCase):
                                   from_batch=2, max_batches=2)
         self.assertEqual(r2["from_batch"], 2)
         self.assertEqual(r2["to_batch"], 4)
-        self.assertEqual(calls["n"], 2)  # 只调用了本次窗口的 2 批
+        self.assertEqual(calls["n"], 3)  # 窗口内 2 批 + M4 跨批建边第二遍 1 次
 
     # ── 版本号 ──
     def test_version_bump(self):

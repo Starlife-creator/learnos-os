@@ -318,6 +318,15 @@ def _ai_followup(transcript: list[dict[str, str]], topic: str, stage: str, level
         "① 一句话诊断（指出最需修正或深化之处）；② 一个针对性的追问。不要给出完整答案。"
         f"剩余轮次：{remaining}。"
     )
+    if level <= 1 and turn >= 2:
+        # handoff 规则（教学研究：反复追问不点破会变成折磨）：同一薄弱点
+        # 连续多轮回答薄弱时，先用一句通俗讲解点破关键，再用更小的验证性
+        # 追问确认理解，避免无限提问循环。
+        instruction += (
+            "该生在此处已连续多轮回答薄弱：本轮先给一句简短通俗的讲解直接点破"
+            "最关键的误区或缺失前提（不超过两句话），再提一个更小的验证性追问"
+            "确认他是否真正理解。"
+        )
     messages = [{"role": "system", "content":
                  p["oral_teacher"]
                  + _profile_context()  # 稳定前缀更长，命中缓存

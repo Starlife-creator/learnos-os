@@ -175,6 +175,9 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     "fast_model":       {"type": "str",   "default": ""},
     "heavy_model":      {"type": "str",   "default": ""},
     "vision_model":     {"type": "str",   "default": ""},
+    # M8 可选向量检索：填写则启用（复用同一 AI 端点的 /v1/embeddings，零第三方依赖）；
+    # 留空则 RAG 检索保持纯 BM25，向量化链路整体降级。
+    "embedding_model":  {"type": "str",   "default": ""},
     "default_subject":  {"type": "subject", "default": "physics"},
     "hint_cache_enabled": {"type": "bool", "default": "1"},
     "daily_review_cap": {"type": "int",   "min": 0,   "max": 500, "default": "0"},
@@ -185,6 +188,14 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     "disable_thinking": {"type": "bool",  "default": "1"},
     # 模型单次输出 token 上限（自动约束各调用点 max_tokens，防越界/防截断）
     "max_output_tokens": {"type": "int",  "min": 512, "max": 32768, "default": "4096"},
+    # M1 提示词缓存断点（可选，默认关）：仅 Anthropic 原生/兼容代理需要显式 cache_control；
+    # DeepSeek/OpenAI 系对稳定前缀自动缓存，无需开启。端点拒绝该字段时由 call_ai 的
+    # 400 剥离重试自动降级（去掉断点重发一次）。
+    "prompt_cache_control": {"type": "bool", "default": "0"},
+    # M6 结构化输出强制（可选，默认关）：对 JSON 产出的调用点下发
+    # response_format={"type":"json_object"}，把「只返回 JSON」从提示词约束升级为协议约束。
+    # 本地/严格 OpenAI 兼容端点不支持时由 400 剥离重试降级回纯提示词约束 + validate_object。
+    "json_response_format": {"type": "bool", "default": "0"},
 }
 
 

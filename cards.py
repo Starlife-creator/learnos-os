@@ -171,7 +171,7 @@ def generate_drafts(subject: str, concept_id: int, use_ai: bool = True) -> list[
                 )
                 raw = call_ai(
                     [{"role": "user", "content": prompt}],
-                    max_tokens=1200, tier="heavy", route="cards",
+                    max_tokens=1200, tier="heavy", route="cards", json_mode=True,
                 )
                 data = validate_object(raw, _CARD_SCHEMA)
                 out: list[dict[str, str]] = []

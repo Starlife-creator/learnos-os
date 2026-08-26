@@ -16,6 +16,8 @@ import config
 import db
 from handler import Handler
 import rag
+import ai
+from unittest.mock import patch
 
 _TMP = Path(__file__).resolve().parent / ".tmp"
 _TMP.mkdir(exist_ok=True)
@@ -160,6 +162,92 @@ class TestRag(unittest.TestCase):
         target = next(d for d in doc if "缓存A" in d["source_path"])
         rag.delete_doc(target["id"])
         self.assertFalse(any("基尔霍夫" in h["content"] for h in rag.search("基尔霍夫", k=5)))
+
+
+class TestRagEmbeddings(unittest.TestCase):
+    """M8 向量检索：可选启用、RRF 融合、降级与清理（零第三方依赖）。"""
+    @classmethod
+    def setUpClass(cls):
+        cls.temp_dir = tempfile.TemporaryDirectory(prefix="ragemb_", dir=_TMP)
+        cls._orig_db = config.DB_PATH
+        config.DB_PATH = Path(cls.temp_dir.name) / "emb_test.db"
+        db.DB_PATH = config.DB_PATH
+        db.init_db()
+        cls.materials = Path(cls.temp_dir.name) / "materials"
+        cls.materials.mkdir()
+
+    @classmethod
+    def tearDownClass(cls):
+        db.DB_PATH = cls._orig_db
+        config.DB_PATH = cls._orig_db
+        cls.temp_dir.cleanup()
+
+    def _write_note(self, name, text):
+        fp = self.materials / name
+        fp.write_text(text, encoding="utf-8")
+        return fp
+
+    def _fake_settings(self, model="test-embed"):
+        return {
+            "embedding_model": model, "model": "m",
+            "api_base": "https://x.test/v1", "api_key": "k",
+        }
+
+    def _fake_embed(self, texts, model=None):
+        # 含"法拉第"→[1,0,0]，其余→[0,1,0]；查询含"法拉第"则与法拉第 chunk 余弦=1
+        return [[1.0, 0.0, 0.0] if "法拉第" in t else [0.0, 1.0, 0.0] for t in texts]
+
+    def test_migration_table_created(self):
+        r = db.row("SELECT name FROM sqlite_master WHERE type='table' AND name='rag_embeddings'")
+        self.assertIsNotNone(r)
+
+    def test_disabled_by_default(self):
+        self.assertFalse(rag.embedding_enabled())
+
+    def test_search_fallback_no_embed_call(self):
+        # 未启用时 search 纯词法，绝不触发 ai.embed
+        self._write_note("fallback.md", "量子力学波函数描述粒子概率分布。")
+        rag.ingest_path(str(self.materials))
+        with patch.object(ai, "embed", side_effect=AssertionError("不应调用 embed")):
+            hits = rag.search("波函数 概率", k=3)
+        self.assertTrue(hits)
+        self.assertIn("波函数", hits[0]["content"])
+
+    def test_ingest_stores_embeddings_and_vector_search(self):
+        self._write_note("faraday.md", "# 法拉第电磁感应\n磁通量变化产生感应电动势。\n")
+        self._write_note("optics.md", "# 光的干涉\n频率相同的光叠加形成明暗条纹。\n")
+        with patch.object(ai, "get_cached_settings", return_value=self._fake_settings()):
+            with patch.object(ai, "embed", side_effect=self._fake_embed):
+                rag.ingest_path(str(self.materials))
+                n = db.row("SELECT COUNT(*) AS n FROM rag_embeddings")["n"]
+                self.assertGreater(n, 0)
+                hits = rag._vector_search("法拉第相关查询", k=3)
+                self.assertTrue(hits)
+                self.assertIn("法拉第", hits[0]["content"])
+
+    def test_hybrid_search_runs(self):
+        self._write_note("hybrid.md", "# 楞次定律\n感应电流方向总是阻碍磁通量变化。\n")
+        with patch.object(ai, "get_cached_settings", return_value=self._fake_settings()):
+            with patch.object(ai, "embed", side_effect=self._fake_embed):
+                rag.ingest_path(str(self.materials))
+                hits = rag.search("法拉第 感应", k=3)
+        self.assertTrue(hits)
+
+    def test_delete_removes_embeddings(self):
+        self._write_note("del.md", "安培力：通电导线在磁场中受的力 F = BIL。\n")
+        with patch.object(ai, "get_cached_settings", return_value=self._fake_settings()):
+            with patch.object(ai, "embed", side_effect=self._fake_embed):
+                rag.ingest_path(str(self.materials))
+                doc = rag.list_docs()
+                target = next(d for d in doc if "del.md" in d["source_path"])
+                before = db.row("SELECT COUNT(*) AS n FROM rag_embeddings")["n"]
+                self.assertGreaterEqual(before, 1)
+                rag.delete_doc(target["id"])
+                after = db.row("SELECT COUNT(*) AS n FROM rag_embeddings")["n"]
+                self.assertLess(after, before)
+                self.assertTrue(rag.restore_doc(target["id"]))
+                restored = db.row("SELECT COUNT(*) AS n FROM rag_embeddings")["n"]
+                self.assertGreaterEqual(restored, 1)
 
 
 if __name__ == "__main__":

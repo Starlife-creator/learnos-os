@@ -376,8 +376,12 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         if not self._metrics_authorized():
             self.json_response({"error": "无权访问指标端点"}, 401)
             return
-        from ai import get_cache_metrics
+        from ai import get_cache_metrics, PROMPT_VERSION, get_cached_settings
         c_h, c_m, c_ratio = get_cache_metrics()
+        try:
+            _ai_flags = get_cached_settings()
+        except Exception:  # 设置读取失败不应拖垮指标端点
+            _ai_flags = {}
         tokens = 0
         cached_tokens = 0
         latency_p95 = None
@@ -407,6 +411,12 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
                 "cached_tokens": cached_tokens,
                 "latency_ms_p95": latency_p95,
                 "provider_last_error": provider_last_error,
+                "prompt_version": PROMPT_VERSION,
+                # M1/M6 高级开关的实际生效状态（排查"改了没生效"最快的入口）
+                "prompt_cache_control": _ai_flags.get("prompt_cache_control", "0") == "1",
+                "json_response_format": _ai_flags.get("json_response_format", "0") == "1",
+                # M8 向量检索是否启用（填了 embedding_model 即启用）
+                "vector_search": bool(_ai_flags.get("embedding_model", "").strip()),
             },
             "errors": error_counts(),
         })

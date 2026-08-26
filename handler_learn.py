@@ -212,8 +212,10 @@ class LearnMixin:
             self.json_response({"error": "AI 未配置：请在设置中填写 API Key 后使用助手",
                                 "offline": True}, 502)
             return
-        system = ("你是学习台助手，基于给定的教材内容片段回答学习者的问题；"
-                  "教材中没有的内容请注明「教材未涉及」。支持 LaTeX 公式（$...$）。")
+        system = ("你是学习台助手。严格只依据下方【教材片段】回答问题："
+                  "片段足以回答时，先给结论再给依据；片段不足以回答或未涉及的部分，"
+                  "必须注明「教材未涉及」，不得调用训练知识猜测编造。"
+                  "支持 LaTeX 公式（$...$）。")
         user = (f"【教材片段】\n{context}\n\n" if context else "") + f"【问题】{question}"
         try:
             answer = call_ai([{"role": "system", "content": system},

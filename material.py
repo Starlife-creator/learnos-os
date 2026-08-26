@@ -118,7 +118,7 @@ def _model_split_side(overlap_text: str) -> str | None:
         raw = call_ai([
             {"role": "system", "content": _SPLIT_PROMPT},
             {"role": "user", "content": overlap_text},
-        ], max_tokens=120, tier="fast", route="material")
+        ], max_tokens=120, tier="fast", route="material", json_mode=True)
         data = validate_object(raw, {"side": {"type": "string", "required": True},
                                      "reason": {"type": "string"}})
         side = str(data.get("side", "")).strip().lower()
@@ -208,7 +208,7 @@ def _clean_concepts(batch_text: str, _depth: int = 0) -> dict[str, Any] | None:
         )},
         {"role": "user", "content": batch_text},
     ]
-    raw_out = call_ai(prompt, max_tokens=4000, tier="heavy", route="material")
+    raw_out = call_ai(prompt, max_tokens=4000, tier="heavy", route="material", json_mode=True)
     try:
         data = validate_object(raw_out, _CONCEPT_SCHEMA)
     except _SchemaError as exc:
@@ -307,7 +307,8 @@ def _clean_questions(batch_text: str) -> list[dict[str, Any]] | None:
         {"role": "system", "content": _Q_EXTRACT_PROMPT},
         {"role": "user", "content": batch_text},
     ]
-    data = validate_object(call_ai(prompt, max_tokens=4000, tier="heavy", route="material"),
+    data = validate_object(call_ai(prompt, max_tokens=4000, tier="heavy", route="material",
+                                   json_mode=True),
                            _QUESTION_SCHEMA)
     out: list[dict[str, Any]] = []
     for q in data["questions"] or []:
@@ -330,7 +331,8 @@ def _clean_paper(batch_text: str, first: bool) -> dict[str, Any] | None:
         )},
         {"role": "user", "content": batch_text},
     ]
-    data = validate_object(call_ai(prompt, max_tokens=4000, tier="heavy", route="material"),
+    data = validate_object(call_ai(prompt, max_tokens=4000, tier="heavy", route="material",
+                                   json_mode=True),
                            _PAPER_SCHEMA)
     if not data["questions"]:
         return None
@@ -370,14 +372,87 @@ def _merge_concepts(acc: dict[str, Any], part: dict[str, Any]) -> None:
     seen_cp = {c["name"] for c in acc["concepts"]}
     for cp in part.get("concepts", []):
         name = str(cp["name"]).strip()[:40]
-        if not name or name in seen_cp:
+        if not name:
+            continue
+        rels = [str(r).strip()[:40] for r in (cp.get("related") or [])
+                if str(r).strip() and str(r).strip() != name]
+        if name in seen_cp:
+            # M4：同名概念跨批出现 → related 取并集（原实现直接丢弃后续批次的边）
+            existing = next(c for c in acc["concepts"] if c["name"] == name)
+            for r in rels:
+                if r not in existing["related"]:
+                    existing["related"].append(r)
+            if not existing.get("chapter") and cp.get("chapter"):
+                existing["chapter"] = str(cp["chapter"]).strip()[:40]
             continue
         seen_cp.add(name)
         acc["concepts"].append({
             "name": name,
             "chapter": str(cp.get("chapter", "")).strip()[:40],
-            "related": [str(r).strip()[:40] for r in (cp.get("related") or []) if str(r).strip()],
+            "related": rels,
         })
+
+
+# ── M4 跨片段建边第二遍（glossary 式两遍法）──────────────────
+# 第一遍逐批抽概念时 related 锁定同片段（防模型编造清单外名字）；
+# 第二遍把全量概念清单交给模型，只做"清单内配对"，补出跨批次/跨章节的边。
+_RELATION_SCHEMA = {
+    "concepts": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "min_length": 1, "required": True},
+                "related": {"type": "array", "items": {"type": "string"}},
+            },
+        },
+        "required": True,
+    },
+}
+
+_RELATION_PROMPT = (
+    "你是知识图谱编辑。下面是同一本教材中已提取的全部概念清单（按章节分组）。"
+    "请找出清单内跨条目/跨章节的概念关联（前提-后继、直觉类比、易混对比等），"
+    '只输出 JSON：{"concepts": [{"name": "概念名", "related": ["关联概念名", ...]}]}。'
+    "要求：name 与 related 中出现的名字必须逐字取自清单；"
+    "只列有实质学科关联的对，不要为凑数硬连；没有就返回空数组。"
+)
+
+
+def complete_relations(acc: dict[str, Any]) -> int:
+    """第二遍补边：全量概念名清单 → 模型只做清单内配对 → 合并进 acc.related。
+
+    返回新增边数。AI 失败/校验失败向上抛异常，由调用方降级为 warning（不阻断）。
+    """
+    from ai import call_ai
+    names = {c["name"] for c in acc["concepts"]}
+    if len(names) < 2:
+        return 0
+    by_ch: dict[str, list[str]] = {}
+    for c in acc["concepts"]:
+        by_ch.setdefault(c.get("chapter") or "未分组", []).append(c["name"])
+    listing = "\n".join(f"{ch}：{'、'.join(ns[:20])}"
+                        for ch, ns in list(by_ch.items())[:60])
+    prompt = [
+        {"role": "system", "content": _RELATION_PROMPT},
+        {"role": "user", "content": f"概念清单：\n{listing}"},
+    ]
+    raw = call_ai(prompt, max_tokens=2000, tier="heavy", retries=1, route="material",
+                  json_mode=True)
+    data = validate_object(raw, _RELATION_SCHEMA)
+    known = {c["name"]: c for c in acc["concepts"]}
+    added = 0
+    for item in data.get("concepts", []):
+        node = known.get(str(item.get("name", "")).strip()[:40])
+        if not node:
+            continue
+        for rel in item.get("related") or []:
+            rel_name = str(rel).strip()[:40]
+            if rel_name in names and rel_name != node["name"] \
+                    and rel_name not in node["related"]:
+                node["related"].append(rel_name)
+                added += 1
+    return added
 
 
 def analyze(text: str, subject: str, targets: list[str],
@@ -439,6 +514,14 @@ def analyze(text: str, subject: str, targets: list[str],
                         warnings.append(f"概念提取某批失败已跳过（{exc}）")
                     _tick("concepts")
                 draft["concepts"] = acc
+                # M4 跨批建边第二遍：仅多批且 AI 提取有产出时执行（单批无跨片段可连）
+                if len(batches) >= 2 and ok_counts[target] > 0:
+                    try:
+                        added = complete_relations(acc)
+                        if added:
+                            warnings.append(f"跨片段概念关联已补充 {added} 条。")
+                    except Exception as exc_:
+                        warnings.append(f"跨片段关联补充失败已跳过：{exc_}")
             elif target == "questions":
                 qs: list[dict[str, Any]] = []
                 seen_stem: set[str] = set()
@@ -566,7 +649,7 @@ def extract_atomic_cards(text: str, subject: str = "",
                         '"concept": "概念名"}]}。答案来自原文，不要编造。'
                     )},
                     {"role": "user", "content": text[:12000]},
-                ], max_tokens=1500, tier="heavy", route="material"), {"cards": {"type": "array", "items": {"type": "object", "properties": {
+                ], max_tokens=1500, tier="heavy", route="material", json_mode=True), {"cards": {"type": "array", "items": {"type": "object", "properties": {
                     "question": {"type": "string", "min_length": 3, "required": True},
                     "answer": {"type": "string", "min_length": 1, "required": True},
                     "concept": {"type": "string"},

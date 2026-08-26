@@ -11,6 +11,7 @@ async function loadSettings() {
     document.getElementById('setFastModel').value = s.fast_model || '';
     document.getElementById('setHeavyModel').value = s.heavy_model || '';
     document.getElementById('setVisionModel').value = s.vision_model || '';
+    document.getElementById('setEmbeddingModel').value = s.embedding_model || '';
     document.getElementById('setMasterPassword').value = '';
     document.getElementById('setMasterPassword').placeholder = s.key_source === 'keyfile' ? t('set.masterPhKeyfile') : t('set.masterPh');
     document.getElementById('setTemp').value = s.temperature || '0.3';
@@ -37,6 +38,11 @@ async function loadSettings() {
     if (mtEl) mtEl.value = s.max_output_tokens || 4096;
     const thinkSel = document.getElementById('setDisableThinking');
     if (thinkSel) thinkSel.value = String(s.disable_thinking === false ? '0' : '1');
+    // M6/M1 高级开关：默认关，后端 display_settings 返回布尔
+    const jsonFmtSel = document.getElementById('setJsonResponseFormat');
+    if (jsonFmtSel) jsonFmtSel.value = s.json_response_format === true ? '1' : '0';
+    const cacheCtlSel = document.getElementById('setPromptCacheControl');
+    if (cacheCtlSel) cacheCtlSel.value = s.prompt_cache_control === true ? '1' : '0';
     const defSel = document.getElementById('setDefaultSubject');
     if (defSel) {
       loadSubjectOptions(defSel, s.default_subject || 'physics');
@@ -372,6 +378,7 @@ async function saveSettings() {
     fast_model: document.getElementById('setFastModel').value,
     heavy_model: document.getElementById('setHeavyModel').value,
     vision_model: document.getElementById('setVisionModel').value,
+    embedding_model: document.getElementById('setEmbeddingModel').value,
   };
   const defSel = document.getElementById('setDefaultSubject');
   if (defSel && defSel.value) body.default_subject = defSel.value;
@@ -389,6 +396,10 @@ async function saveSettings() {
   if (localSel) body.allow_local_ai = localSel.value;
   const thinkSel = document.getElementById('setDisableThinking');
   if (thinkSel) body.disable_thinking = thinkSel.value;
+  const jsonFmtSel = document.getElementById('setJsonResponseFormat');
+  if (jsonFmtSel) body.json_response_format = jsonFmtSel.value;
+  const cacheCtlSel = document.getElementById('setPromptCacheControl');
+  if (cacheCtlSel) body.prompt_cache_control = cacheCtlSel.value;
   const mtEl = document.getElementById('setMaxOutputTokens');
   if (mtEl && mtEl.value !== '') body.max_output_tokens = parseInt(mtEl.value, 10) || 4096;
   const key = document.getElementById('setApiKey').value;

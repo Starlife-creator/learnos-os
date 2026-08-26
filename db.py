@@ -675,6 +675,22 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (29, ?)", (now(),))
         LOG.info("数据库已迁移到 v29 (学习台批注 annotations)")
 
+    # v30: M8 可选向量检索 — chunk 向量（embedding_model 未配置则不生成，纯增量增强）
+    if current < 30:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS rag_embeddings (
+                chunk_id INTEGER PRIMARY KEY,
+                dim INTEGER NOT NULL,
+                model TEXT NOT NULL,
+                vec BLOB NOT NULL,
+                FOREIGN KEY(chunk_id) REFERENCES rag_chunks(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rag_embeddings_model ON rag_embeddings(model)")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (30, ?)", (now(),))
+        LOG.info("数据库已迁移到 v30 (M8 向量检索 rag_embeddings)")
+
 
 # 内置三科的中文显示名（title）；user 自定义过的中文 title 不会被覆盖。
 _BUILTIN_SUBJECT_TITLES = {

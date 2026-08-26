@@ -226,6 +226,7 @@ def display_settings() -> dict[str, str]:
         "fast_model": eff.get("fast_model", ""),
         "heavy_model": eff.get("heavy_model", ""),
         "vision_model": eff.get("vision_model", ""),
+        "embedding_model": eff.get("embedding_model", ""),
         "temperature": eff.get("temperature") or "0.3",
         "default_subject": eff.get("default_subject", "physics"),
         "hint_cache_enabled": eff.get("hint_cache_enabled", "1") != "0",
@@ -234,6 +235,9 @@ def display_settings() -> dict[str, str]:
         "allow_local_ai": eff.get("allow_local_ai", "1") != "0",
         "disable_thinking": eff.get("disable_thinking", "1") != "0",
         "max_output_tokens": int(eff.get("max_output_tokens", "4096") or 4096),
+        # M1/M6 高级开关（默认关，端点不支持时自动 400 剥离降级）
+        "prompt_cache_control": eff.get("prompt_cache_control", "0") == "1",
+        "json_response_format": eff.get("json_response_format", "0") == "1",
         "has_api_key": has_key,
         "key_source": eff.get("key_source", "none"),
         # 存在 keys.enc 但当前未解锁（key_source 为 none/runtime）时提示可解锁
@@ -384,6 +388,28 @@ def _model_preset_body(model: str, base: str) -> dict[str, Any]:
     return {}
 
 
+# 提示词版本（M7 工程化基线）：任何 system/角色提示词语义变更时递增
+# （YYYY.MM），配合 /api/metrics 的 prompt_version 与 tests/test_prompt_upgrade.py
+# 的措辞不变量测试，实现"改提示词必须跑回归"的最小闭环。
+PROMPT_VERSION = "2026.08"
+
+
+def _with_cache_breakpoint(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """给首条 system 消息打 Anthropic 风格缓存断点（ephemeral）。
+
+    仅在用户显式开启 prompt_cache_control 时使用：DeepSeek/OpenAI 对稳定前缀
+    自动缓存无需此参数；部分严格端点会拒绝未知字段（由 call_ai 的 400 剥离
+    重试兜底）。返回新列表，不修改入参。
+    """
+    out = [dict(m) for m in messages]
+    for m in out:
+        if m.get("role") == "system" and isinstance(m.get("content"), str):
+            m["content"] = [{"type": "text", "text": m["content"],
+                             "cache_control": {"type": "ephemeral"}}]
+            break
+    return out
+
+
 def _prepare_ai_request(
     messages: list[dict[str, str]],
     max_tokens: int,
@@ -393,11 +419,15 @@ def _prepare_ai_request(
     model_override: str | None = None,
     skip_preset: bool = False,
     temperature: float | None = None,
+    json_mode: bool = False,
 ) -> tuple[str, str, dict[str, str], dict[str, str], float]:
     """call_ai / call_ai_stream 共用的配置校验与请求构造。
 
     返回 (model, url, payload, headers, start)；未配置时记录 telemetry 并抛 ValueError。
-    skip_preset=True 时不注入模型预设参数（用于 400 未知参数后的降级重试）。
+    skip_preset=True 时不注入模型预设参数、缓存断点与 response_format
+    （用于 400 未知参数后的降级重试）。
+    json_mode=True 表示该调用点产出 JSON（M6）；是否真正下发 response_format
+    还需用户开启 json_response_format——双闸门确保默认零行为变更。
     """
     from telemetry import record
     start = time.monotonic()
@@ -438,6 +468,14 @@ def _prepare_ai_request(
             if not stream or config.get("disable_thinking", "1") != "0":
                 for k, v in preset.items():
                     body.setdefault(k, v)
+    # 提示词缓存断点（可选开关，默认关）：仅 Anthropic 原生/兼容代理需要显式
+    # cache_control；DeepSeek/OpenAI 系自动缓存稳定前缀，无需开启。
+    if not skip_preset and config.get("prompt_cache_control", "0") == "1":
+        body["messages"] = _with_cache_breakpoint(body["messages"])
+    # M6 结构化输出（可选开关，默认关）：把「只返回 JSON」从提示词约束升级为协议约束。
+    # 仅对声明 json_mode 的调用点生效；不支持的端点会 400，由剥离重试降级。
+    if not skip_preset and json_mode and config.get("json_response_format", "0") == "1":
+        body["response_format"] = {"type": "json_object"}
     if stream:
         # 请求最后一块附带 usage（DeepSeek/OpenAI 支持；本地实现不识别则忽略）
         body["stream_options"] = {"include_usage": True}
@@ -514,12 +552,17 @@ def call_ai(
     model_override: str | None = None,
     route: str = "",
     temperature: float | None = None,
+    json_mode: bool = False,
 ) -> str:
-    """调 OpenAI 兼容接口。temperature 覆盖设置；None=用全局配置。"""
+    """调 OpenAI 兼容接口。temperature 覆盖设置；None=用全局配置。
+
+    json_mode=True 声明本调用点产出 JSON（M6）：用户开启 json_response_format 时
+    下发 response_format=json_object；端点不支持则 400 后自动剥离降级。
+    """
     from telemetry import record
     model, url, payload, headers, start = _prepare_ai_request(
         messages, max_tokens, tier, route, stream=False, model_override=model_override,
-        temperature=temperature,
+        temperature=temperature, json_mode=json_mode,
     )
 
     # 中转站式降级：预设注入的 thinking 参数若被端点 400 拒绝（未知参数），
@@ -533,7 +576,7 @@ def call_ai(
                 messages, max_tokens, tier, route, stream=False,
                 model_override=model_override, skip_preset=True)
             _dropped_preset = True
-            LOG.warning("AI 请求 400：去掉模型预设 thinking 参数后重试。")
+            LOG.warning("AI 请求 400：去掉可选参数（thinking 预设/缓存断点/response_format）后重试。")
             return m2, p2
         except Exception:
             return "", None
@@ -565,11 +608,14 @@ def call_ai(
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:500]
             err_text = f"{exc.code} {detail}"
-            # 400 且疑似"未知 thinking 参数"→ 去掉预设重试一次
+            # 400 且疑似"未知 thinking 参数/缓存字段/response_format 不支持"
+            # → 去掉预设、缓存断点与 response_format 重试一次
             if (exc.code == 400 and not _dropped_preset
                     and any(k in detail.lower() for k in (
                         "enable_thinking", "thinking", "reasoning_effort",
-                        "reasoning_split", "unknown parameter", "invalid parameter"))):
+                        "reasoning_split", "cache_control", "cache",
+                        "response_format", "json_object", "json mode",
+                        "unknown parameter", "invalid parameter", "unknown field"))):
                 m2, p2 = _retry_without_preset()
                 if p2 is not None:
                     model, payload = m2, p2
@@ -603,6 +649,49 @@ def call_ai_vision(text: str, image_data_uri: str, max_tokens: int = 900) -> str
         {"type": "image_url", "image_url": {"url": image_data_uri}},
     ]}]
     return call_ai(messages, max_tokens=max_tokens, tier="heavy", model_override=model)
+
+
+def embed(texts: list[str], model: str | None = None) -> list[list[float]]:
+    """M8 可选向量检索：调用配置的 /v1/embeddings（OpenAI 兼容，本地 Ollama 同样支持）。
+
+    未配置 embedding_model 时抛 ValueError，由 rag.py 捕获后降级为纯 BM25（不阻断摄取/检索）。
+    返回向量列表与输入 texts 一一对应。
+    """
+    if not texts:
+        return []
+    config = get_cached_settings()
+    model = (model or config.get("embedding_model", "")).strip() or config.get("model", "").strip()
+    if not model:
+        raise ValueError("未配置 embedding 模型，请在「AI 设置」中填写 embedding_model")
+    base = (config.get("api_base", "") or "").strip()
+    if not base:
+        raise ValueError("未配置 API 地址")
+    key = config.get("api_key", "")
+    if not key and not is_local_endpoint(base):
+        raise ValueError("未配置 API 密钥")
+    url = base.rstrip("/") + "/embeddings"
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    payload = json.dumps({"model": model, "input": texts}).encode("utf-8")
+    request = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=60) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"embedding 请求失败 HTTP {exc.code}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"embedding 接口不可达: {exc}") from exc
+    items = sorted(data.get("data") or [], key=lambda x: x.get("index", 0))
+    vecs: list[list[float]] = []
+    for it in items:
+        emb = it.get("embedding")
+        if not emb:
+            raise RuntimeError("embedding 响应缺少 embedding 字段")
+        vecs.append([float(x) for x in emb])
+    if len(vecs) != len(texts):
+        raise RuntimeError("embedding 返回数量与输入不一致")
+    return vecs
 
 
 def call_ai_stream(
@@ -1223,7 +1312,7 @@ def extract_tags(
         {"role": "user", "content": user_text},
     ]
     try:
-        raw = call_ai(prompt, max_tokens=300, tier="fast", retries=1)
+        raw = call_ai(prompt, max_tokens=300, tier="fast", retries=1, json_mode=True)
         data = validate_object(raw, _TAG_SCHEMA)
         tags = [str(t).strip() for t in data["tags"] if str(t).strip()]
         if not tags:
@@ -1341,7 +1430,7 @@ def generate_variants(problem: dict[str, Any]) -> tuple[str, list[dict[str, Any]
         )},
     ]
     try:
-        raw = call_ai(prompt, max_tokens=1500, tier="heavy", retries=1)
+        raw = call_ai(prompt, max_tokens=1500, tier="heavy", retries=1, json_mode=True)
         data = validate_object(raw, _VARIANT_SCHEMA)
         variants = data["variants"]
         if not variants:
@@ -1429,7 +1518,7 @@ def generate_bank_question(subject: str, topic: str, qtype: str = "single",
         {"role": "user", "content": user_text},
     ]
     try:
-        raw = call_ai(prompt, max_tokens=1500, tier="heavy", retries=1)
+        raw = call_ai(prompt, max_tokens=1500, tier="heavy", retries=1, json_mode=True)
         data = validate_object(raw, _BANK_Q_SCHEMA)
         q = data["question"]
         qtype_r = q.get("type")
@@ -1536,7 +1625,7 @@ def review_bank_question(question: dict[str, Any], subject: str = "") -> dict[st
         {"role": "user", "content": f"学科：{subject or '未知'}\n待审题目：\n{payload}"},
     ]
     try:
-        raw = call_ai(prompt, max_tokens=700, tier="heavy", retries=1)
+        raw = call_ai(prompt, max_tokens=700, tier="heavy", retries=1, json_mode=True)
         data = validate_object(raw, _REVIEW_SCHEMA)
         rv = data["review"]
         verdict = rv.get("verdict", "warn")
@@ -1710,7 +1799,7 @@ def _ai_subjective(item: dict[str, Any], user_raw: Any, subject: str) -> dict[st
     try:
         # 第 1 次调用（低温 0）：只按 rubric 出结构化分值（评分稳定）
         raw = call_ai(prompt, max_tokens=500, tier="heavy", retries=1,
-                      temperature=0.0, route="score")
+                      temperature=0.0, route="score", json_mode=True)
         data = validate_object(raw, _SCORE_SCHEMA)
         sc = data["score"]
         s = int(sc.get("score") or 0)
@@ -1729,7 +1818,7 @@ def _ai_subjective(item: dict[str, Any], user_raw: Any, subject: str) -> dict[st
                 {"role": "user", "content": f"题目与答案：\n{payload}\n学生已得 {s} 分。"},
             ]
             raw2 = call_ai(polish_prompt, max_tokens=200, tier="heavy", retries=1,
-                           temperature=0.7, route="score")
+                           temperature=0.7, route="score", json_mode=True)
             polished = validate_object(raw2, {"comment": {"type": "string", "required": True}})
             c2 = str(polished.get("comment") or "").strip()
             if c2:

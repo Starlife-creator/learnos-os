@@ -823,6 +823,11 @@
         <input type="text" id="setVisionModel" placeholder="如 qwen-vl-max / gpt-4o，留空则用默认模型" data-i18n-ph="set.visionPh">
         <p class="hint-text" data-i18n="set.visionHint">用于 B1 拍照/截图识别题目；未配置时图片仅作附件，需手动录入。</p>
       </div>
+      <div class="form-group">
+        <label for="setEmbeddingModel" data-i18n="set.embeddingModel">嵌入模型 embedding（可选，混合检索用）</label>
+        <input type="text" id="setEmbeddingModel" placeholder="如 text-embedding-3-small / bge-m3，留空则禁用向量检索" data-i18n-ph="set.embeddingPh">
+        <p class="hint-text" data-i18n="set.embeddingHint">用于 RAG 向量检索（与关键词 BM25 融合）；未配置时自动回落纯关键词检索。</p>
+      </div>
       <div class="flex gap-12">
         <button class="btn btn-primary" onclick="saveSettings()" data-i18n="set.save">保存</button>
         <button class="btn btn-secondary" onclick="testSettings()" data-i18n="set.test">测试连接</button>
@@ -861,6 +866,22 @@
             <option value="0">开启（深度推理，仅建议流式对话）</option>
           </select>
           <p class="text-sm text-muted">阿里云百炼 DeepSeek 等：非流式请求必须关闭思考，否则仅返回推理内容导致解析失败。</p>
+        </div>
+        <div class="form-group">
+          <label for="setJsonResponseFormat">结构化输出强制（JSON 模式）</label>
+          <select id="setJsonResponseFormat" class="form-input">
+            <option value="0">关闭（推荐：靠提示词约束 + 本地校验）</option>
+            <option value="1">开启（下发 response_format=json_object）</option>
+          </select>
+          <p class="text-sm text-muted">对概念/题库提取、评分等 JSON 任务把「只返回 JSON」升级为协议约束，可降低解析失败率。端点不支持时会自动剥离该参数重试，无需担心报错。</p>
+        </div>
+        <div class="form-group">
+          <label for="setPromptCacheControl">提示词缓存断点（Anthropic 系）</label>
+          <select id="setPromptCacheControl" class="form-input">
+            <option value="0">关闭（推荐：DeepSeek/OpenAI 自动缓存前缀）</option>
+            <option value="1">开启（显式下发 cache_control）</option>
+          </select>
+          <p class="text-sm text-muted">仅 Anthropic 原生或兼容代理需要显式声明缓存断点以复用稳定系统提示；DeepSeek/OpenAI 系自动缓存，开启无益。端点不支持时自动剥离重试。</p>
         </div>
         <div class="form-group">
           <label for="setMaxOutputTokens">单次输出上限（max tokens）</label>

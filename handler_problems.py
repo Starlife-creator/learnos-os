@@ -613,11 +613,16 @@ class ProblemsMixin:
         )
 
     def _rag_context(self, problem: dict[str, Any]) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
-        """B3：检索个人资料（教材/笔记）相关片段，注入 AI 上下文；返回 (注入消息, 溯源列表)。"""
+        """B3：检索个人资料（教材/笔记）相关片段，注入 AI 上下文；返回 (注入消息, 溯源列表)。
+
+        检索 k=5 后按相对分阈值过滤（剔除沾边低质片段）；提示场景保持"优先基于"
+        软约束（教材未覆盖的题仍需正常给提示），仅追加反虚构与无关片段忽略规则。
+        """
         try:
             import rag
             hits = rag.search(f"{problem.get('topic', '')} {problem.get('title', '')} "
-                              f"{str(problem.get('content', ''))[:200]}", k=2)
+                              f"{str(problem.get('content', ''))[:200]}", k=5)
+            hits = rag.filter_relevant(hits)
         except Exception:
             return [], []
         docs = {d["id"]: d for d in rag.list_docs()}
@@ -631,12 +636,15 @@ class ProblemsMixin:
             src = {"path": doc["source_path"], "page": page,
                    "name": Path(doc["source_path"]).name}
             sources.append(src)
-            frags.append(f"[{src['name']}" + (f" 第{page}页" if page else "") + f"] {hit['content']}")
+            frags.append(f"[Source {len(sources)}｜{src['name']}"
+                         + (f" 第{page}页" if page else "") + f"] {hit['content']}")
         if not frags:
             return [], []
         return [{"role": "system", "content": (
-            "以下是用户个人资料（教材/课件/笔记）中检索到的相关片段，"
-            "解答时应优先基于这些片段给出与教材一致的表述：\n" + "\n".join(frags)
+            "以下是用户个人资料（教材/课件/笔记）中检索到的相关片段：\n" + "\n".join(frags)
+            + "\n要求：解答时优先采用与上述片段一致的表述与符号；"
+              "片段与题目无关时直接忽略，不得把片段中没有的内容说成出自教材；"
+              "引用片段结论时可标注对应 [Source N]。"
         )}], sources
 
     def _handle_concept_explanation(self, data: dict[str, Any]) -> None:

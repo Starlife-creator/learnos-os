@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import struct
 import threading
 from pathlib import Path
 from typing import Any
@@ -169,6 +170,13 @@ def _ingest_file(fp: Path) -> dict[str, Any]:
         )
         _sync_fts(conn, doc_id)
         _invalidate_bm25()
+        # M8：向量化（可选）；失败仅告警，不阻断 BM25 检索
+        model = _current_embedding_model()
+        if model:
+            try:
+                _embed_and_store(conn, doc_id, model)
+            except Exception as exc:
+                LOG.warning("向量嵌入失败（降级纯 BM25）: %s", exc)
     LOG.info("RAG 摄取: %s（%d 块）", fp.name, len(chunks))
     return {"doc": str(fp), "chunks": len(chunks), "pages": pages}
 
@@ -206,6 +214,7 @@ def delete_doc(doc_id: int) -> bool:
         if doc is None:
             return False
         chunks = rows("SELECT chunk_index, page, content FROM rag_chunks WHERE doc_id = ? ORDER BY chunk_index", (doc_id,))
+        conn.execute("DELETE FROM rag_embeddings WHERE chunk_id IN (SELECT id FROM rag_chunks WHERE doc_id = ?)", (doc_id,))
         conn.execute("DELETE FROM rag_chunks WHERE doc_id = ?", (doc_id,))
         cur = conn.execute("DELETE FROM rag_docs WHERE id = ?", (doc_id,))
         _invalidate_bm25()
@@ -234,6 +243,13 @@ def restore_doc(doc_id: int) -> bool:
         )
         _sync_fts(conn, doc_id)
         _invalidate_bm25()
+        # M8：撤销删除后尽力重建向量（失败不阻断，BM25 仍可用）
+        model = _current_embedding_model()
+        if model:
+            try:
+                _embed_and_store(conn, doc_id, model)
+            except Exception as exc:
+                LOG.warning("撤销删除后向量重建失败（BM25 仍可用）: %s", exc)
         return True
 
 
@@ -307,19 +323,172 @@ def _fts_search(query: str, k: int = 5) -> list[dict[str, Any]]:
         return []
 
 
+def filter_relevant(hits: list[dict[str, Any]], ratio: float = 0.35) -> list[dict[str, Any]]:
+    """按相对分阈值过滤检索结果（零 AI 调用，纯本地）。
+
+    保留 score >= ratio * 最高分的命中：BM25 绝对分无跨语料可比性，
+    相对分可剔除"沾边但低质"的长尾片段。最高分命中恒保留；空输入返回空。
+    """
+    if not hits:
+        return []
+    best = max(h.get("score", 0) for h in hits)
+    if best <= 0:
+        return hits[:1]
+    return [h for h in hits if h.get("score", 0) >= ratio * best]
+
+
 def search(query: str, k: int = 5) -> list[dict[str, Any]]:
-    """BM25 主 + FTS5 可选合并（按 doc+chunk 去重取更优分）。"""
+    """BM25 主 + FTS5 可选；若启用向量检索则三路 RRF 融合。
+
+    向量未启用或不可用时静默回落纯词法合并（与旧行为一致），保证零回归。
+    """
     bm = _bm25(query, k)
     fts = _fts_search(query, k)
-    if not fts:
-        return bm
-    merged: dict[int, dict[str, Any]] = {}
-    for item in bm + fts:
-        cid = item["chunk_id"]
-        cur = merged.get(cid)
-        if cur is None or item.get("score", 0) > cur.get("score", 0):
-            merged[cid] = item
-    return sorted(merged.values(), key=lambda x: -x["score"])[:k]
+    if not embedding_enabled():
+        # 维持现状：BM25 主 + FTS 可选，按 chunk 去重取更优分
+        if not fts:
+            return bm
+        merged: dict[int, dict[str, Any]] = {}
+        for item in bm + fts:
+            cid = item["chunk_id"]
+            cur = merged.get(cid)
+            if cur is None or item.get("score", 0) > cur.get("score", 0):
+                merged[cid] = item
+        return sorted(merged.values(), key=lambda x: -x["score"])[:k]
+    vec = _vector_search(query, k)
+    fused = _rrf_merge([bm, fts, vec])
+    return filter_relevant(fused)[:k]
+
+
+# ── M8 可选向量检索（零第三方依赖；embedding_model 未配置则整条链路降级 BM25）──
+_EMBED_BATCH = 16
+_RRF_K = 60
+
+
+def _current_embedding_model() -> str:
+    """当前生效的 embedding 模型；空串表示未启用向量检索。"""
+    try:
+        from ai import get_cached_settings
+        s = get_cached_settings()
+        return (s.get("embedding_model", "") or "").strip() or (s.get("model", "") or "").strip()
+    except Exception:
+        return ""
+
+
+def embedding_enabled() -> bool:
+    return bool(_current_embedding_model())
+
+
+def _embed_batch(texts: list[str], model: str) -> list[list[float]]:
+    """批量向量化（每批 _EMBED_BATCH 条，控制请求数）。"""
+    import ai
+    out: list[list[float]] = []
+    for i in range(0, len(texts), _EMBED_BATCH):
+        out.extend(ai.embed(texts[i:i + _EMBED_BATCH], model=model))
+    return out
+
+
+def _embed_and_store(conn: Any, doc_id: int, model: str) -> None:
+    """为某文档全部 chunk 生成并落库向量（替换旧向量）。失败抛异常由调用方降级。"""
+    chs = rows("SELECT id, content FROM rag_chunks WHERE doc_id = ? ORDER BY chunk_index", (doc_id,))
+    if not chs:
+        return
+    vecs = _embed_batch([c["content"] for c in chs], model)
+    if not vecs or len(vecs) != len(chs):
+        raise RuntimeError("embedding 返回数量与 chunk 不一致")
+    conn.execute(
+        "DELETE FROM rag_embeddings WHERE chunk_id IN (SELECT id FROM rag_chunks WHERE doc_id = ?)",
+        (doc_id,),
+    )
+    packed = [
+        (c["id"], len(v), model, struct.pack("<%df" % len(v), *v))
+        for c, v in zip(chs, vecs)
+    ]
+    conn.executemany(
+        "INSERT OR REPLACE INTO rag_embeddings(chunk_id, dim, model, vec) VALUES (?, ?, ?, ?)",
+        packed,
+    )
+
+
+def _unpack_vec(blob: Any, dim: int) -> list[float] | None:
+    if blob is None:
+        return None
+    try:
+        return list(struct.unpack("<%df" % dim, blob))
+    except Exception:
+        return None
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(x * x for x in b))
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
+
+
+def _vector_search(query: str, k: int) -> list[dict[str, Any]]:
+    """查询向量化 + 与当前模型向量库余弦排序取 top；空模型/失败返回 []。
+
+    仅检索与当前 embedding_model 同名的向量，避免维度不一致的模型混用导致崩溃。
+    """
+    model = _current_embedding_model()
+    if not model:
+        return []
+    try:
+        import ai
+        qv = ai.embed([query], model=model)[0]
+    except Exception as exc:
+        LOG.warning("查询向量化失败（降级纯词法）: %s", exc)
+        return []
+    recs = rows("SELECT chunk_id, dim, vec FROM rag_embeddings WHERE model = ?", (model,))
+    scored: list[tuple[float, int]] = []
+    for r in recs:
+        v = _unpack_vec(r["vec"], r["dim"])
+        if v is None:
+            continue
+        scored.append((_cosine(qv, v), r["chunk_id"]))
+    if not scored:
+        return []
+    scored.sort(key=lambda x: -x[0])
+    top = scored[: k * 3]
+    ids = [cid for _, cid in top]
+    if not ids:
+        return []
+    placeholders = ",".join("?" for _ in ids)
+    ch = rows(f"SELECT id, doc_id, page, content FROM rag_chunks WHERE id IN ({placeholders})", ids)
+    cmap = {c["id"]: c for c in ch}
+    out: list[dict[str, Any]] = []
+    for sim, cid in top:
+        c = cmap.get(cid)
+        if not c:
+            continue
+        out.append({
+            "chunk_id": cid, "doc_id": c["doc_id"], "page": c["page"],
+            "content": c["content"][:300], "score": round(sim, 4),
+        })
+    return out
+
+
+def _rrf_merge(ranked_lists: list[list[dict[str, Any]]], k: int = _RRF_K) -> list[dict[str, Any]]:
+    """Reciprocal Rank Fusion：多路召回按排名融合，弱化各路绝对分差异。"""
+    acc: dict[int, dict[str, Any]] = {}
+    for lst in ranked_lists:
+        for rank, item in enumerate(lst):
+            cid = item["chunk_id"]
+            entry = acc.get(cid)
+            if entry is None:
+                entry = {"item": item, "s": 0.0}
+                acc[cid] = entry
+            entry["s"] += 1.0 / (k + rank + 1)
+    merged = [e["item"] for e in acc.values()]
+    for e in merged:
+        e["score"] = round(acc[e["chunk_id"]]["s"], 6)
+    merged.sort(key=lambda x: -x["score"])
+    return merged
 
 
 def registered_paths() -> set[str]:

@@ -180,7 +180,8 @@ class TestMaterialUnit(unittest.TestCase):
         self.assertGreater(result["batches"], 8)
         self.assertEqual(result["ai_calls"], result["batches"])
         self.assertEqual(len(result["draft"]["concepts"]["concepts"]), result["batches"])
-        self.assertEqual(calls["n"], result["batches"])
+        # M4 跨批建边第二遍：多批时固定追加 1 次调用（ai_calls 统计仍只含逐批调用）
+        self.assertEqual(calls["n"], result["batches"] + 1)
 
     def test_analyze_bad_schema_falls_back(self):
         # AI 返回非 JSON → SchemaError → 单批失败（=全部批失败）→ concepts 回退启发式
