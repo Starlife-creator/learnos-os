@@ -41,6 +41,8 @@ BACKUP_TABLES = [
     "gamification",       # 成就 / 积分
     "cards",              # v25 概念闪卡（主动回忆）
     "card_reviews",       # v25 闪卡评分日志
+    "materials",          # v28 学习台教材注册表
+    "annotations",        # v29 学习台批注/高亮
 ]
 
 

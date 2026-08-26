@@ -634,6 +634,47 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (27, ?)", (now(),))
         LOG.info("数据库已迁移到 v27 (概念详解分层 explanation_seed/explanation_user)")
 
+    # v28: 学习台教材注册表 — 登记工作区内 md/txt/html/pdf 教材文件（路径相对 APP_DIR）。
+    #      只存注册元数据，不动文件本体；path 唯一防重复登记；chapter_tree 预留目录缓存。
+    if current < 28:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS materials (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subject TEXT NOT NULL DEFAULT 'physics',
+                title TEXT NOT NULL,
+                path TEXT NOT NULL UNIQUE,
+                fmt TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'upload',
+                chapter_tree TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_materials_subject ON materials(subject, updated_at)")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (28, ?)", (now(),))
+        LOG.info("数据库已迁移到 v28 (学习台教材注册表 materials)")
+
+    # v29: 学习台批注 — 高亮/旁注（P0.5 划词四连）。锚点存 JSON
+    #      {prefix, quote, suffix} 三段模糊锚：渲染端在文本节点中定位 quote，
+    #      失配时用 prefix/suffix 辅助模糊重定位；教材编辑致漂移由前端标记失效。
+    if current < 29:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS annotations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                material_id INTEGER NOT NULL REFERENCES materials(id),
+                kind TEXT NOT NULL,
+                anchor TEXT NOT NULL,
+                body TEXT,
+                color TEXT,
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_annotations_material ON annotations(material_id)")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (29, ?)", (now(),))
+        LOG.info("数据库已迁移到 v29 (学习台批注 annotations)")
+
 
 # 内置三科的中文显示名（title）；user 自定义过的中文 title 不会被覆盖。
 _BUILTIN_SUBJECT_TITLES = {

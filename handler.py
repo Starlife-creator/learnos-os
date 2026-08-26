@@ -35,6 +35,7 @@ import graph
 from errors import normalize_error_type, ERROR_TYPE_LABELS, is_valid_error_type
 from validate import SchemaError
 from handler_material import MaterialMixin
+from handler_learn import LearnMixin
 from handler_problems import ProblemsMixin
 from handler_reviews import ReviewsMixin
 from handler_reports import ReportsMixin
@@ -48,7 +49,7 @@ from handler_base import (X_HEADER, X_VALUE, _IDEMPOTENCY, _IDEMPOTENCY_TTL,
 from resp import error_counts
 
 
-class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
+class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
              CardsMixin, ReportsMixin, SocialMixin, SimpleHTTPRequestHandler):
     server_version = "LearnOS/0.5.0"
     # HTTP/1.1 keep-alive：浏览器复用 TCP 连接（首页 ~13 资源不再逐个三次握手）。
@@ -105,6 +106,11 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         (r"/api/rag/docs", "_handle_rag_docs"),
         (r"/api/rag/search", "_handle_rag_search"),
         (r"/api/rag/open", "_handle_rag_open"),
+        (r"/api/learn/materials", "_handle_learn_materials"),
+        (r"/api/learn/materials/(\d+)/content", "_handle_learn_content"),
+        (r"/api/learn/materials/(\d+)/annotations", "_handle_learn_annotations"),
+        (r"/api/learn/review-today", "_handle_learn_review_today"),
+        (r"/api/learn/search", "_handle_learn_search"),
         (r"/api/exam/papers", "_handle_exam_papers"),
         (r"/api/exam/papers/(\d+)/predict", "_handle_exam_predict"),
         (r"/api/exam/papers/(\d+)", "_handle_exam_paper"),
@@ -167,6 +173,12 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         (r"/api/material/analyze", "_handle_material_analyze", True),
         (r"/api/material/cards", "_handle_material_cards", True),
         (r"/api/material/apply", "_handle_material_apply", True),
+        (r"/api/learn/materials", "_handle_learn_add", True),
+        (r"/api/learn/materials/(\d+)/update", "_handle_learn_update", True),
+        (r"/api/learn/materials/(\d+)/annotations", "_handle_learn_anno_add", True),
+        (r"/api/learn/cards/apply", "_handle_learn_apply_cards", True),
+        (r"/api/learn/generate", "_handle_learn_generate", True),
+        (r"/api/learn/ask", "_handle_learn_ask", True),
         (r"/api/social/checkin", "_handle_social_checkin", True),
         (r"/api/render-config", "_handle_set_render_config", True),
         (r"/api/cards", "_handle_create_card", True),
@@ -1059,6 +1071,23 @@ class Handler(MaterialMixin, OralMixin, ProblemsMixin, ReviewsMixin,
                     return
                 auth.audit("delete_rag_doc", ip=self._client_ip(), detail=match.group(1))  # R5 审计
                 self.json_response({"ok": True})
+                return
+            match = re.fullmatch(r"/api/learn/materials/(\d+)", path)
+            if match:
+                import learn
+                if not learn.delete_material(int(match.group(1))):
+                    self.json_response({"error": "教材不存在"}, 404)
+                    return
+                auth.audit("delete_material", ip=self._client_ip(), detail=match.group(1))  # R5 审计
+                self.json_response({"ok": True})
+                return
+            match = re.fullmatch(r"/api/learn/annotations/(\d+)", path)
+            if match:
+                import learn
+                if not learn.delete_annotation(int(match.group(1))):
+                    self.json_response({"error": "批注不存在"}, 404)
+                    return
+                self.json_response({"ok": True})  # 高亮删除高频低危，不写审计
                 return
             match = re.fullmatch(r"/api/exam/papers/(\d+)", path)
             if match:
