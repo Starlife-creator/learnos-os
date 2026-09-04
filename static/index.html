@@ -207,6 +207,16 @@
       <p class="hint-text mt-12" data-i18n="card.backupHint">一键备份包含全部表（错题/复习/口语/知识图谱/考试）。还原前现库会自动保存为 .bak 文件；导入采用参数化写入，不会造成注入或数据损坏。</p>
     </div>
 
+    <div class="card" id="trashCard">
+      <div class="card-title" data-i18n="card.trash">回收站</div>
+      <div class="flex gap-12" style="align-items:center; flex-wrap:wrap">
+        <button class="btn btn-secondary btn-sm" onclick="loadTrash()" data-i18n="btn.trashRefresh">刷新回收站</button>
+        <span class="hint-text" id="trashMeta"></span>
+      </div>
+      <div id="trashList" class="mt-12"></div>
+      <p class="hint-text mt-12" data-i18n="trash.hint">删除的卡片 / 概念 / 教材 / 批注 / 资料会暂存在此，保留期内可原样恢复；到期自动清理，请尽快处理。</p>
+    </div>
+
     <div class="card">
       <div class="card-title" data-i18n="card.recent">最近记录</div>
       <div id="recentList"></div>

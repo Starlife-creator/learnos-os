@@ -504,6 +504,61 @@ async function importData(input) {
   input.value = '';
 }
 
+// ── D3 回收站（后端 /api/trash + /api/trash/<id>/restore，前端入口在此）──
+const TRASH_KINDS = {
+  card: 'trash.kind.card',
+  concept: 'trash.kind.concept',
+  material: 'trash.kind.material',
+  annotation: 'trash.kind.annotation',
+  rag_doc: 'trash.kind.ragDoc',
+};
+
+function trashKindLabel(kind) {
+  return t(TRASH_KINDS[kind] || '', kind);
+}
+
+async function loadTrash() {
+  const box = document.getElementById('trashList');
+  if (!box) return;
+  try {
+    const r = await api('/api/trash');
+    const items = r.items || [];
+    const meta = document.getElementById('trashMeta');
+    if (meta) meta.textContent = items.length
+      ? t('trash.count').replace('{n}', items.length) : '';
+    if (!items.length) {
+      box.innerHTML = `<p class="hint-text">${escapeHtml(t('trash.empty'))}</p>`;
+      return;
+    }
+    box.innerHTML = items.map(it => {
+      const when = String(it.trashed_at || '').slice(0, 16).replace('T', ' ');
+      const head = `<b>${escapeHtml(trashKindLabel(it.kind))}</b>`
+        + `<span class="hint-text"> #${escapeHtml(it.entity_id)} · ${escapeHtml(when)}</span>`
+        + (it.restored_at ? ` <span class="hint-text">· ${escapeHtml(t('trash.restoredAt'))}</span>` : '');
+      const act = it.restorable
+        ? `<button class="btn btn-secondary btn-sm" onclick="restoreTrash(${Number(it.id)})">${escapeHtml(t('trash.restore'))}</button>`
+        : `<span class="hint-text">${escapeHtml(t('trash.restoredAt'))}</span>`;
+      return `<div class="flex gap-12" style="align-items:center; justify-content:space-between; padding:6px 0">`
+        + `<span class="text-sm">${head}</span>${act}</div>`;
+    }).join('');
+  } catch (e) {
+    toast(t('trash.load') + (e && e.message ? '：' + e.message : ''), 'error');
+  }
+}
+
+async function restoreTrash(id) {
+  try {
+    const ok = await confirmDialog(t('trash.confirm'));
+    if (!ok) return;
+    const r = await api(`/api/trash/${Number(id)}/restore`, { method: 'POST' });
+    toast(t('trash.restored').replace('{n}', trashKindLabel(r.kind)));
+    await loadTrash();
+    if (typeof loadDashboard === 'function') loadDashboard();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
 // ── 公式速查 ──
 const _FORMULAS = [
   {key:'formula.kinematics', eqs:['v = v₀ + at','s = v₀t + ½at²','v² − v₀² = 2as','ω = dθ/dt']},

@@ -122,7 +122,8 @@ function refreshForLang() {
   const active = document.querySelector('.page.active');
   if (!active) return;
   const page = active.id;
-  if (page === 'page-dashboard') loadDashboard();
+  // 回收站卡片在仪表盘（与「数据备份」同页），故仅仪表盘加载
+  if (page === 'page-dashboard') { loadDashboard(); loadTrash(); }
   else if (page === 'page-bank') { loadBankUnits(); loadBank(); }
   else if (page === 'page-problems') { loadProblems(1); loadUnlinked(); }
   else if (page === 'page-review') loadReviews();
@@ -656,7 +657,7 @@ function switchPage(page, {push=true}={}) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.getElementById('page-' + page).classList.add('active');
   if (push) history.pushState(null, '', '#' + page);
-  if (page === 'dashboard') { loadDashboard(); loadLearningPath('lpContent'); }
+  if (page === 'dashboard') { loadDashboard(); loadLearningPath('lpContent'); loadTrash(); }
   if (page === 'bank') { loadBankUnits(); loadBank(); }
   if (page === 'problems') loadProblems(1);
   if (page === 'review') loadReviews();

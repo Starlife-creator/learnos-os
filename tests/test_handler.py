@@ -785,6 +785,54 @@ class TestEndpoints(unittest.TestCase):
             scan.feed(open(base / html_name, encoding="utf-8").read())
             self.assertEqual(scan.issues, [], f"{html_name} 存在未接线的中文文本: {scan.issues}")
 
+    def test_feature_endpoints_are_wired_to_frontend(self):
+        """接线守护：B0-B5 的功能端点必须在前端有调用方（防「后端完成、功能不可用」）。
+
+        背景：本类缺陷已出现两次——U2 引用面板（端点建了前端没接）、D3 回收站
+        （trash 表/迁移/路由全在，前端零入口，删除等于静默永久丢失）。
+        后端单测全绿并不能发现，因为测试也是后端视角的。
+
+        注意：/api/learn/next-step 不在此列——它的功能经 graph.next_step()
+        内嵌于 /api/dashboard 下发，独立端点是冗余别名，非缺陷。
+
+        扫描前必须剥离注释：否则写在注释里的路径就能让本测试变绿（形同虚设）。
+        """
+        import re
+        base = Path(__file__).resolve().parent.parent / "static"
+
+        def strip_comments(text: str) -> str:
+            text = re.sub(r"<!--.*?-->", " ", text, flags=re.S)   # HTML 注释
+            text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)    # JS 块注释
+            text = re.sub(r"(?m)^(\s*)//[^\n]*", " ", text)       # 整行注释
+            # 行尾注释：// 前不能是 : 或 / ，避免吃掉 http:// 与正则里的 //
+            text = re.sub(r"(?<=[\s;{}()])(?<![:/])//[^\n]*", " ", text)
+            return text
+
+        fe = "\n".join(
+            strip_comments(p.read_text(encoding="utf-8"))
+            for p in list(base.glob("*.js")) + list(base.glob("*.html"))
+        )
+
+        def to_regex(route: str) -> re.Pattern:
+            parts = []
+            for seg in route.split("/"):
+                if re.fullmatch(r"\([^)]+\)", seg):
+                    parts.append(r"(?:\$\{[^}]*\}|[^/\s\"'`,]+)")
+                else:
+                    parts.append(re.escape(seg))
+            return re.compile("/" + "/".join(parts[1:]))
+
+        must_wire = [
+            "/api/trash",                          # D3 回收站列表
+            "/api/trash/(\\d+)/restore",           # D3 回收站恢复
+            "/api/cards/(\\d+)/undo",              # D2 撤销上次评分
+            "/api/ai/context/estimate",            # U2 引用面板 token 估算
+            "/api/ai/concept-explanation",         # U2 概念详解（含 context_ref）
+            "/api/graph/concepts/(\\d+)/link",     # G1 概念建边
+        ]
+        unwired = [r for r in must_wire if not to_regex(r).search(fe)]
+        self.assertEqual(unwired, [], f"以下功能端点前端零调用（功能不可用）: {unwired}")
+
     def test_write_idempotency(self):
         # 相同 X-Request-Id 重复提交应返回首次结果，不产生重复题目
         body = {"title": "幂等题", "content": "test"}
