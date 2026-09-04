@@ -412,13 +412,20 @@ def _detect_weak_points(transcript: list[dict[str, str]], subject: str = "") -> 
 
 
 def _write_back_profile(transcript: list[dict[str, str]], topic: str, subject: str = "") -> None:
-    """F1：会话结束回写学习者画像（仅本地，薄弱点追加到备注，不覆盖用户原备注）。"""
+    """F1：会话结束回写学习者画像（仅本地，薄弱点追加到备注，不覆盖用户原备注）。
+
+    D4：同事务落一行 mastery_events（entry_point='oral'）——口试不直接改 mastery，
+    但审计/回放需要「某主题发生过口试」的留痕。
+    """
     try:
         weak = "、".join(_detect_weak_points(transcript, subject))
         entry = f"[口试 {topic}] 薄弱点：{weak}"
         cur = row("SELECT value FROM learner_profile WHERE key = 'note'")
         merged = entry if not cur or not cur["value"] else f"{cur['value']} | {entry}"
         profile.update({"note": merged[:500]})
+        if subject:
+            import graph  # 延迟导入避免口试冷启动拖慢（graph 含图谱/seed 加载）
+            graph.record_audit_event(subject, topic, "oral", f"薄弱点：{weak}")
     except Exception as exc:
         LOG.warning("口试画像回写失败: %s", exc)
 

@@ -55,7 +55,11 @@ def list_cards(subject: str, status: str = "") -> list[dict[str, Any]]:
 
 
 def due_cards(subject: str) -> list[dict[str, Any]]:
-    """到期复习队列（status=active 且 due_date<=今天，按到期升序）。"""
+    """到期复习队列（status=active 且 due_date<=今天，按到期升序）。
+
+    B6 P2-1：每张卡附 `familiarity`（4 档键 hazy/shaky/familiar/solid），前端 i18n
+    翻成本地化词显示。FSRS 未启用时所有卡落到 hazy（语义：还没记录）。
+    """
     items = rows(
         "SELECT c.*, k.name AS concept_name FROM cards c "
         "LEFT JOIN concepts k ON k.id = c.concept_id "
@@ -70,6 +74,22 @@ def due_cards(subject: str) -> list[dict[str, Any]]:
         except (ValueError, TypeError):
             overdue = 0
         it["overdue_days"] = max(0, overdue)
+        # B6 P2-1：调 fsrs_bridge.retrievability 算 R，再 familiarity_label 翻 4 档
+        try:
+            R = fsrs_bridge.retrievability(
+                prev_interval=int(it.get("interval_days") or 0),
+                state=int(it.get("state") or 0),
+                stability=float(it.get("stability") or 0.0),
+                difficulty=float(it.get("difficulty") or 0.0),
+                last_review=str(it.get("last_review") or ""),
+                subject=subject,
+            )
+            it["retrievability"] = R
+            it["familiarity"] = fsrs_bridge.familiarity_label(R)
+        except Exception as exc:
+            LOG.debug("卡片熟悉度估算失败（可忽略）: %s", exc)
+            it["retrievability"] = 0.0
+            it["familiarity"] = fsrs_bridge.FAM_HAZY
     items.sort(key=lambda c: -c["overdue_days"])
     return items
 

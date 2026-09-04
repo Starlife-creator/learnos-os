@@ -44,6 +44,12 @@ function renderCardsList(items) {
   const kindBadge = k => `<span class="tag tag-gray">${(_cardKindLabels[k] ? _cardKindLabels[k]() : k)}</span>`;
   const dueBadge = it => (it.due_date && it.due_date <= new Date().toISOString().slice(0,10))
     ? `<span class="tag tag-blue">${t('cards.dueToday')}</span>` : '';
+  // B6 P2-1：熟悉度 badge（4 档词表）
+  const famBadge = it => {
+    if (!it.familiarity) return '';
+    const key = 'fsrs.fam' + it.familiarity[0].toUpperCase() + it.familiarity.slice(1);
+    return `<span class="tag ${_famTagClass(it.familiarity)}" title="${escapeHtml(t(key))}（R=${(it.retrievability||0).toFixed(2)}）">${escapeHtml(t(key))}</span>`;
+  };
   wrap.innerHTML = items.map(it => `
     <div class="card mb-8">
       <div class="flex-between" style="align-items:flex-start;gap:10px">
@@ -51,6 +57,7 @@ function renderCardsList(items) {
           <div class="flex gap-8" style="flex-wrap:wrap;align-items:center;margin-bottom:6px">
             ${it.concept_name ? `<span class="tag">🧠 ${escapeHtml(it.concept_name)}</span>` : ''}
             ${kindBadge(it.kind)}
+            ${famBadge(it)}
             <span class="text-muted text-sm">${t('cards.reps')} ${it.repetition||0}</span>
             ${dueBadge(it)}
           </div>
@@ -248,13 +255,27 @@ function renderCardFlash() {
   if (!r) { cardFlashFinish(); return; }
   document.getElementById('cardFlashCount').textContent =
     `${_cardIdx + 1}/${_cardQueue.length}`;
-  document.getElementById('cardFlashMeta').textContent =
-    `${r.concept_name ? '🧠 ' + r.concept_name + ' · ' : ''}${t('cards.reps')} ${r.repetition||0}`;
+  // B6 P2-1：熟悉度 badge（4 档词表）紧贴 reps 后面
+  const fam = r.familiarity;
+  const famTag = fam ? `<span class="tag ${_famTagClass(fam)}" title="${escapeHtml(t('fsrs.fam' + fam[0].toUpperCase() + fam.slice(1)))}（R=${(r.retrievability||0).toFixed(2)}）">${escapeHtml(t('fsrs.fam' + fam[0].toUpperCase() + fam.slice(1)))}</span>` : '';
+  document.getElementById('cardFlashMeta').innerHTML =
+    `${r.concept_name ? '🧠 ' + r.concept_name + ' · ' : ''}${t('cards.reps')} ${r.repetition||0} ${famTag}`;
   document.getElementById('cardFlashCue').textContent = r.cue || t('cards.noContent');
   document.getElementById('cardFlashAnswer').textContent = r.answer || t('cards.noContent');
   // D2：已有评分记录才可撤销（_cardIdx>0 说明本会话刚评过）
   document.getElementById('cardFlashUndoBtn').classList.toggle('hidden', _cardIdx === 0);
   cardFlashFlip(true);
+}
+
+// B6 P2-1：熟悉度档位 → CSS 颜色（hazy 红/shaky 琥珀/familiar 蓝/solid 绿）
+function _famTagClass(fam) {
+  switch (fam) {
+    case 'solid': return 'tag-green';
+    case 'familiar': return 'tag-blue';
+    case 'shaky': return 'tag-amber';
+    case 'hazy':
+    default: return 'tag-red';
+  }
 }
 
 function cardFlashFlip(forceBack) {

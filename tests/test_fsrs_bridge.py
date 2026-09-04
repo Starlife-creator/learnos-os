@@ -178,5 +178,41 @@ class TestFsrsPerSubject(unittest.TestCase):
         self.assertEqual(payload["confidence"], "insufficient")
 
 
+class TestFamiliarityLabel(unittest.TestCase):
+    """B6 P2-1：熟悉度词表 — 4 档阈值（R<0.5 hazy / <0.75 shaky / <0.9 familiar / ≥0.9 solid）。"""
+
+    def test_thresholds(self):
+        cases = [
+            (-0.1, fsrs_bridge.FAM_HAZY),
+            (0.0, fsrs_bridge.FAM_HAZY),
+            (0.49999, fsrs_bridge.FAM_HAZY),
+            (0.5, fsrs_bridge.FAM_SHAKY),
+            (0.7, fsrs_bridge.FAM_SHAKY),
+            (0.74999, fsrs_bridge.FAM_SHAKY),
+            (0.75, fsrs_bridge.FAM_FAMILIAR),
+            (0.85, fsrs_bridge.FAM_FAMILIAR),
+            (0.89999, fsrs_bridge.FAM_FAMILIAR),
+            (0.9, fsrs_bridge.FAM_SOLID),
+            (0.99, fsrs_bridge.FAM_SOLID),
+            (1.0, fsrs_bridge.FAM_SOLID),
+        ]
+        for R, expected in cases:
+            with self.subTest(R=R):
+                self.assertEqual(fsrs_bridge.familiarity_label(R), expected)
+
+    def test_robust_to_bad_input(self):
+        self.assertEqual(fsrs_bridge.familiarity_label(None), fsrs_bridge.FAM_HAZY)
+        self.assertEqual(fsrs_bridge.familiarity_label("not a number"), fsrs_bridge.FAM_HAZY)
+        self.assertEqual(fsrs_bridge.familiarity_label(float("nan")), fsrs_bridge.FAM_HAZY)
+
+    def test_keys_match_i18n_suffix_pattern(self):
+        """约定：4 个键小写，对应 i18n 键 fsrs.famHazy/famShaky/famFamiliar/famSolid。"""
+        from fsrs_bridge import FAM_HAZY, FAM_SHAKY, FAM_FAMILIAR, FAM_SOLID
+        self.assertEqual(FAM_HAZY, "hazy")
+        self.assertEqual(FAM_SHAKY, "shaky")
+        self.assertEqual(FAM_FAMILIAR, "familiar")
+        self.assertEqual(FAM_SOLID, "solid")
+
+
 if __name__ == "__main__":
     unittest.main()

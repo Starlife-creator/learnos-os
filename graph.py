@@ -555,6 +555,53 @@ def update_progress(subject: str = "physics", force: bool = False,
             )
 
 
+def record_audit_event(subject: str, topic: str, entry_point: str,
+                       evidence: str = "") -> int:
+    """D4 audit-only 事件写入：掌握度无变化也能落一行（用于「发生过」留痕）。
+
+    与 `update_progress` 的差异：本函数**不重算 mastery**，仅按 topic 查对应概念，
+    把当前 mastery 作 prev/cur 直接 INSERT 一行 mastery_events。
+
+    用途：口试 / 打卡等「非评分」入口——它们不直接改 mastery，但审计/回放需要
+    看到「某主题 X 在 T 时刻发生过口试」。重复事件也算发生，不去重。
+
+    topic 找不到对应概念节点时直接返回 0（不抛错——口试常聊跨学科，未必有
+    精确概念映射）。
+
+    Returns: 写入事件行数（0 或 1）。
+    """
+    if not topic or not subject:
+        return 0
+    try:
+        with DB_LOCK, db() as conn:
+            cid_row = conn.execute(
+                "SELECT id FROM concepts WHERE subject = ? AND name = ? LIMIT 1",
+                (subject, topic),
+            ).fetchone()
+            if not cid_row:
+                return 0
+            cid = int(cid_row["id"])
+            cur = conn.execute(
+                "SELECT mastery FROM concept_progress WHERE concept_id = ?", (cid,),
+            ).fetchone()
+            cur_v = round(float(cur["mastery"]) if cur and cur["mastery"] is not None else 0.0, 3)
+            rev = conn.execute(
+                "SELECT COUNT(*) AS n FROM mastery_events WHERE concept_id = ?", (cid,),
+            ).fetchone()
+            revision = int(rev["n"]) + 1 if rev else 1
+            conn.execute(
+                "INSERT INTO mastery_events(subject, concept_id, entry_point, evidence, "
+                "revision, prev_mastery, cur_mastery, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (subject, cid, entry_point, (evidence or "")[:200],
+                 revision, cur_v, cur_v, now()),
+            )
+            return 1
+    except Exception as exc:
+        LOG.debug("record_audit_event 写入失败（可忽略）: %s", exc)
+        return 0
+
+
 # Phase 3：按先修链的主动学习路径。掌握度 < 该阈值视为「待学/待补」。
 LEARN_THRESHOLD = 0.6
 _PATH_LIMIT = 20

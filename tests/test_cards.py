@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import config
 import db
 import cards
+import fsrs_bridge
 import graph
 
 _TMP = Path(__file__).resolve().parent / ".tmp"
@@ -407,6 +408,22 @@ class TestCards(unittest.TestCase):
         out2 = cards.generate_batch_drafts("math", [999998], use_ai=False)
         self.assertEqual(out2["results"], [])
         self.assertEqual(out2["failed"][0]["concept_id"], 999998)
+
+    def test_due_cards_attach_familiarity(self):
+        """B6 P2-1：due_cards 每张卡附 retrievability + familiarity（4 档键之一）。"""
+        cid = self._create(cue="熟悉度卡")
+        items = cards.due_cards("math")
+        self.assertTrue(any(c["id"] == cid for c in items))
+        it = next(c for c in items if c["id"] == cid)
+        self.assertIn("retrievability", it)
+        self.assertIn("familiarity", it)
+        self.assertIn(it["familiarity"], {
+            fsrs_bridge.FAM_HAZY, fsrs_bridge.FAM_SHAKY,
+            fsrs_bridge.FAM_FAMILIAR, fsrs_bridge.FAM_SOLID,
+        })
+        self.assertIsInstance(it["retrievability"], float)
+        self.assertGreaterEqual(it["retrievability"], 0.0)
+        self.assertLessEqual(it["retrievability"], 1.0)
 
 
 if __name__ == "__main__":

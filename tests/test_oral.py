@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import config
 import db
 import profile
+import graph
 from oral import (
     _assess, _next_stage, _detect_weak_points, start_oral, continue_oral, draft_oral_card,
     start_feynman, feynman_self_review, save_feynman_self_review,
@@ -230,6 +231,57 @@ class TestOralSubjectAwareness(unittest.TestCase):
         session = db.row("SELECT * FROM oral_sessions WHERE id = ?", (sid,))
         draft = draft_oral_card(session)
         self.assertNotIn("物理图像", draft["content"])
+
+
+class TestOralMasteryEvent(unittest.TestCase):
+    """D4：口试完成时落 mastery_events 一行（entry_point='oral'）—— 审计/回放留痕。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory(prefix="oral_evt_", dir=_TMP)
+        cls._orig_db = config.DB_PATH
+        config.DB_PATH = Path(cls._tmp.name) / "oral_evt.db"
+        db.DB_PATH = config.DB_PATH
+        db.init_db()
+        # 注册一个概念节点让 topic 能映射到 concept_id（record_audit_event 按 name 查）
+        with db.db() as conn:
+            conn.execute(
+                "INSERT INTO concepts(name, parent_id, chapter_id, subject, created_at) "
+                "VALUES ('牛顿第二定律', 0, 0, 'physics', ?)",
+                (db.now(),))
+
+    @classmethod
+    def tearDownClass(cls):
+        db.DB_PATH = cls._orig_db
+        config.DB_PATH = cls._orig_db
+        try:
+            cls._tmp.cleanup()
+        except OSError:
+            pass
+
+    def test_completed_oral_emits_audit_event(self):
+        sid, _ = start_oral("牛顿第二定律", "physics")
+        # 跑满 5 轮触发 _write_back_profile（口试走 finish 分支）
+        for _ in range(5):
+            session = db.row("SELECT * FROM oral_sessions WHERE id = ?", (sid,))
+            continue_oral(session, "浅答", "physics")
+        evs = db.rows(
+            "SELECT entry_point, evidence, prev_mastery, cur_mastery FROM mastery_events "
+            "WHERE entry_point = 'oral' ORDER BY id"
+        )
+        self.assertEqual(len(evs), 1, f"应落 1 行 oral 事件，实际 {len(evs)}")
+        self.assertEqual(evs[0]["entry_point"], "oral")
+        self.assertIn("薄弱点", evs[0]["evidence"])
+        self.assertEqual(evs[0]["prev_mastery"], evs[0]["cur_mastery"],
+                         "audit-only 事件 prev=cur（口试不直接改 mastery）")
+
+    def test_unknown_topic_returns_zero(self):
+        # topic 在 concepts 表里查不到 → 优雅返回 0，不抛错
+        n = graph.record_audit_event("physics", "完全不存在的概念", "oral", "evidence")
+        self.assertEqual(n, 0)
+
+    def test_empty_topic_returns_zero(self):
+        self.assertEqual(graph.record_audit_event("physics", "", "oral", ""), 0)
 
 
 if __name__ == "__main__":

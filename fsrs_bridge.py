@@ -242,6 +242,39 @@ def retrievability(
         return 0.0
 
 
+# B6 P2-1：熟悉度词表 — 把 0-1 的 retrievability 翻成 4 档可懂文本（Space CLI 风格）。
+# 阈值固定：复习曲线告诉我们 R<0.5 已大概率遗忘，R>=0.9 处于「自动调取」区间。
+# 返回纯英文键，前端用 i18n 翻成本地化词。
+FAM_HAZY = "hazy"          # R < 0.5  大概率忘了
+FAM_SHAKY = "shaky"        # 0.5 ≤ R < 0.75  能想起来但不稳
+FAM_FAMILIAR = "familiar"   # 0.75 ≤ R < 0.9  想起较快
+FAM_SOLID = "solid"        # R ≥ 0.9  牢固
+
+
+def familiarity_label(R: float) -> str:
+    """把 R（retrievability，0-1）翻成 4 档熟悉度键。越界值也安全返回。
+
+    前端用 `t('fsrs.fam' + label.capitalize())` 渲染本地化词（如「模糊/生疏/熟悉/牢固」）。
+
+    注意：NaN 与任何值比较都是 False → 必须显式拦截，否则会一路掉进最后分支
+    返回 solid（看似最熟实则未定义）。
+    """
+    if R is None:
+        return FAM_HAZY
+    try:
+        v = float(R)
+    except (TypeError, ValueError):
+        return FAM_HAZY
+    import math
+    if math.isnan(v) or v < 0.5:
+        return FAM_HAZY
+    if v < 0.75:
+        return FAM_SHAKY
+    if v < 0.9:
+        return FAM_FAMILIAR
+    return FAM_SOLID
+
+
 def next_interval_days(
     rating: int,
     prev_interval: int,
