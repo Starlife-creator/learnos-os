@@ -758,6 +758,7 @@ async function selectNode(id) {
   selectedId = id;
   const n = nodeById.get(id);
   if (!n) return;
+  resetRefPanel();
   document.getElementById('welcome').classList.add('hidden');
   document.getElementById('detail').classList.remove('hidden');
   document.getElementById('dTitle').textContent = n.name;
@@ -947,6 +948,22 @@ async function generateExplanation() {
 // ── U2 引用面板：选资料段落 / 子图摘要 → 实时 token 估算与占比 → 确认注入 AI 提示 ──
 let refInjectOn = false;
 let _refTimer = null;
+
+// 切换概念时重置引用面板：引用段落与注入开关是「针对当前概念」的一次性上下文，
+// 残留到下一个概念会误导（把 A 概念的教材段落注进 B 概念的详解生成）。
+function resetRefPanel() {
+  refInjectOn = false;
+  const body = document.getElementById('refPanelBody');
+  const ta = document.getElementById('dRefText');
+  const est = document.getElementById('dRefEstimate');
+  const injectBtn = document.getElementById('btnRefInject');
+  const toggleBtn = document.getElementById('btnRefToggle');
+  if (body) body.style.display = 'none';
+  if (ta) ta.value = '';
+  if (est) est.textContent = t('graph.refEmpty');
+  if (injectBtn) { injectBtn.textContent = t('graph.refInjectOff'); injectBtn.className = 'btn'; }
+  if (toggleBtn) toggleBtn.textContent = t('graph.refOpen');
+}
 
 function toggleRefPanel() {
   const body = document.getElementById('refPanelBody');
