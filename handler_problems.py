@@ -671,6 +671,8 @@ class ProblemsMixin:
         if not name:
             self.json_response({"error": "概念名为空"}, 400)
             return
+        # U2 引用面板注入：用户确认的教材/子图引用段落（截断防滥用后透传 AI）
+        context_ref = str(data.get("context_ref", ""))[:6000]
         try:
             from ai import explain_concept
             text = explain_concept(
@@ -680,11 +682,29 @@ class ProblemsMixin:
                 str(data.get("prereq", "")),
                 str(data.get("succ", "")),
                 str(data.get("contrast", "")),
+                context_ref,
             )
             self.json_response({"explanation": text})
         except RuntimeError as exc:
             LOG.warning("概念详解生成失败: %s", exc)
             self.json_response({"error": str(exc)}, 502)
+
+    def _handle_context_estimate(self, data: dict[str, Any]) -> None:
+        """U2 引用面板：上下文 token 估算（零依赖启发式，只读、不调 AI、不计额度）。
+
+        返回 {tokens, window, ratio}：ratio = tokens / ai_context_tokens，
+        供前端「引用面板」实时展示预估 token 与占上下文窗口比例，注入前让用户看清成本。
+        """
+        try:
+            from ai import estimate_tokens
+        except Exception:
+            self.json_response({"error": "estimate_tokens 不可用"}, 501)
+            return
+        text = str(data.get("text", ""))
+        tokens = estimate_tokens(text)
+        window = int(str(get_cached_settings().get("ai_context_tokens", "32000")) or 32000)
+        ratio = round(tokens / window, 4) if window else 0
+        self.json_response({"tokens": tokens, "window": window, "ratio": ratio})
 
     def _handle_extract_tags(self, data: dict[str, Any]) -> None:
         """B5：AI 自动打标签（草稿，R3 不落库）。返回建议 + 置信度，前端确认后写入。"""

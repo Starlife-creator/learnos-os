@@ -61,6 +61,21 @@ class TestEndpoints(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
 
+    def test_context_estimate_token(self):
+        """U2 引用面板：/api/ai/context/estimate 返回 {tokens, window, ratio}（纯本地估算，不调 AI）。"""
+        status, data = self._request(
+            "POST", "/api/ai/context/estimate",
+            {"text": "牛顿第二定律 F=ma 描述力与加速度的关系。"},
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("tokens", data)
+        self.assertIn("window", data)
+        self.assertIn("ratio", data)
+        self.assertGreater(data["tokens"], 0)
+        self.assertGreater(data["window"], 0)
+        self.assertGreaterEqual(data["ratio"], 0)
+        self.assertLessEqual(data["ratio"], 1.0)
+
     def test_hint_level4_fallback_and_diagnose(self):
         """A6：四级提示可生成（无 AI 走降级）；最近一次复习失败时返回诊断门建议。"""
         pid = self._create_problem()

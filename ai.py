@@ -1300,6 +1300,7 @@ def explain_concept(
         f"用一行点出关系；如有典型直觉或易错点，用一行简要点出；\n"
         f"4. 总字数控制在 80-160 字，不要 Markdown 标题，纯文本换行即可。\n"
         f"已知上下文：\n{ctx_block}"
+        f"{ref_block}"
     )
     return call_ai([{"role": "user", "content": prompt}], max_tokens=500, tier="heavy", route="material")
 

@@ -214,6 +214,19 @@
         <button class="btn btn-primary" id="btnGenExplain" onclick="generateExplanation()" data-i18n="graph.explainGen">AI 生成详解</button>
         <button class="btn" id="btnRevertExplain" onclick="revertExplanation()" data-i18n="graph.explainRevert" style="display:none">回退到种子</button>
       </div>
+      <p class="kv" style="margin-top:10px"><b data-i18n="graph.refTitle">引用面板：</b></p>
+      <div style="display:flex; gap:8px; margin-top:2px; flex-wrap:wrap">
+        <button class="btn" id="btnRefToggle" onclick="toggleRefPanel()" data-i18n="graph.refOpen">展开</button>
+        <button class="btn" id="btnRefSearch" onclick="refSearchOwnMaterial()" data-i18n="graph.refSearch">用自己的资料检索</button>
+      </div>
+      <div id="refPanelBody" style="display:none; margin-top:6px">
+        <textarea id="dRefText" data-i18n-ph="graph.refTextPh" placeholder="粘贴/填入要作为依据的教材段落或子图摘要"
+          rows="4" style="width:100%;resize:vertical;font:inherit;line-height:1.5" oninput="onRefInput()"></textarea>
+        <div style="display:flex; gap:8px; margin-top:6px; align-items:center; flex-wrap:wrap">
+          <span id="dRefEstimate" class="muted" data-i18n="graph.refEmpty">预计 ~0 tokens</span>
+          <button class="btn" id="btnRefInject" onclick="toggleRefInject()" data-i18n="graph.refInjectOff">注入引用：关</button>
+        </div>
+      </div>
       <p class="kv" style="margin-top:10px"><b data-i18n="graph.evidenceTitle">掌握判据：</b></p>
       <textarea id="dEvidence" data-i18n-ph="graph.evidencePh" placeholder="可观察的达标判据，每行一条（如：能独立写出 F=ma 并说明适用条件）"
         rows="3" style="width:100%;resize:vertical;font:inherit;line-height:1.5"></textarea>

@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from ai import (
     api_endpoint, fallback_hint, problem_prompt, get_cached_settings, invalidate_settings_cache,
-    _resolve_subject, _subject_profile, extract_tags,
+    _resolve_subject, _subject_profile, extract_tags, estimate_tokens, explain_concept,
 )
 import config
 import db
@@ -201,6 +201,55 @@ class TestSettingsCache(unittest.TestCase):
         invalidate_settings_cache()
         s2 = get_cached_settings()
         self.assertIsNot(s1, s2)
+
+
+class TestEstimateTokens(unittest.TestCase):
+    """U2 引用面板：estimate_tokens 零依赖启发式（中文≈1.1字符/token，ASCII≈4字符/token）。"""
+
+    def test_empty_returns_one(self):
+        self.assertEqual(estimate_tokens(""), 1)
+
+    def test_ascii_sparse(self):
+        # 400 个 ASCII 字符 → 400/4 + 1 ≈ 101
+        n = estimate_tokens("a" * 400)
+        self.assertGreater(n, 90)
+        self.assertLess(n, 110)
+
+    def test_cjk_dense(self):
+        # 110 个汉字 → 110/1.1 + 1 ≈ 101
+        n = estimate_tokens("学" * 110)
+        self.assertGreaterEqual(n, 95)
+        self.assertLessEqual(n, 105)
+
+    def test_mixed_non_zero(self):
+        self.assertGreater(estimate_tokens("F=ma 牛顿第二定律：力与加速度成正比"), 1)
+
+
+class TestExplainConceptContextRef(unittest.TestCase):
+    """U2 引用面板：explain_concept 收到 context_ref 时应构造「引用资料」块并注入提示。"""
+
+    def _run(self, context_ref):
+        imported_ai = __import__("ai", fromlist=["explain_concept"])
+        captured = {}
+        from unittest import mock
+
+        def fake_call_ai(messages, **kw):
+            captured["prompt"] = messages[0]["content"]
+            return "ok"
+
+        with mock.patch.object(imported_ai, "call_ai", side_effect=fake_call_ai):
+            out = imported_ai.explain_concept("牛顿第二定律", "physics", context_ref=context_ref)
+        return captured["prompt"], out
+
+    def test_context_ref_injected(self):
+        prompt, out = self._run("教材第3页：F=ma，力与加速度成正比。")
+        self.assertEqual(out, "ok")
+        self.assertIn("引用资料", prompt)
+        self.assertIn("教材第3页：F=ma", prompt)
+
+    def test_no_context_ref_omits_block(self):
+        prompt, _ = self._run("")
+        self.assertNotIn("引用资料", prompt)
 
 
 if __name__ == "__main__":

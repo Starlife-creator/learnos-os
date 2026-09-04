@@ -780,7 +780,7 @@ async function selectNode(id) {
   const prereq = [], succ = [], cont = [];
   const escAttr = s => _escGraphLP(String(s || '')).replace(/"/g, '&quot;');
   for (const l of graphData.links) {
-    const tip = l.reason ? ` title="${escAttr(l.reason + (l.evidence_ref ? ' · ' + l.evidence_ref : '')} [${l.strength || 'soft'}]"` : '';
+    const tip = l.reason ? ` title="${escAttr(l.reason + (l.evidence_ref ? ' · ' + l.evidence_ref : ''))} [${l.strength || 'soft'}]"` : '';
     if (l.relation === 'prerequisite') {
       if (l.concept_b === id) { const x = nodeById.get(l.concept_a); if (x) prereq.push(`<span${tip}>${_escGraphLP(x.name)}</span>`); }
       else if (l.concept_a === id) { const x = nodeById.get(l.concept_b); if (x) succ.push(`<span${tip}>${_escGraphLP(x.name)}</span>`); }
@@ -917,17 +917,23 @@ async function generateExplanation() {
         if (x) con.push(x.name);
       }
     }
+    const payload = {
+      name: n.name,
+      subject: graphSubject(),
+      aliases: n.aliases || '',
+      prereq: pre.join('、'),
+      succ: suc.join('、'),
+      contrast: con.join('、'),
+    };
+    // U2 引用面板：注入开关开启且已填入引用段落 → 透传 context_ref（后端优先依据该资料）
+    if (refInjectOn) {
+      const ref = document.getElementById('dRefText') ? document.getElementById('dRefText').value.trim() : '';
+      if (ref) payload.context_ref = ref;
+    }
     const resp = await fetch('/api/ai/concept-explanation', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'LearnOS' },
-      body: JSON.stringify({
-        name: n.name,
-        subject: graphSubject(),
-        aliases: n.aliases || '',
-        prereq: pre.join('、'),
-        succ: suc.join('、'),
-        contrast: con.join('、'),
-      }),
+      body: JSON.stringify(payload),
     });
     const data = await resp.json();
     if (data.explanation) {
@@ -936,6 +942,75 @@ async function generateExplanation() {
     } else alert(data.error || t('graph.loadFail'));
   } catch { alert(t('graph.loadFail')); }
   finally { if (btn) { btn.disabled = false; btn.textContent = t('graph.explainGen'); } }
+}
+
+// ── U2 引用面板：选资料段落 / 子图摘要 → 实时 token 估算与占比 → 确认注入 AI 提示 ──
+let refInjectOn = false;
+let _refTimer = null;
+
+function toggleRefPanel() {
+  const body = document.getElementById('refPanelBody');
+  const btn = document.getElementById('btnRefToggle');
+  if (!body) return;
+  const show = body.style.display === 'none';
+  body.style.display = show ? '' : 'none';
+  if (btn) btn.textContent = show ? t('graph.refClose') : t('graph.refOpen');
+  if (show) updateRefEstimate();
+}
+
+function onRefInput() {
+  clearTimeout(_refTimer);
+  _refTimer = setTimeout(updateRefEstimate, 250);
+}
+
+async function updateRefEstimate() {
+  const el = document.getElementById('dRefEstimate');
+  const text = document.getElementById('dRefText') ? document.getElementById('dRefText').value : '';
+  if (!el) return;
+  if (!text.trim()) { el.textContent = t('graph.refEmpty'); return; }
+  el.textContent = t('graph.refCalc');
+  try {
+    const resp = await fetch('/api/ai/context/estimate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'LearnOS' },
+      body: JSON.stringify({ text }),
+    });
+    const d = await resp.json();
+    if (d.tokens !== undefined) {
+      el.textContent = t('graph.refTokens').replace('{n}', d.tokens).replace('{p}', ((d.ratio || 0) * 100).toFixed(1));
+    } else {
+      el.textContent = t('graph.refError');
+    }
+  } catch { el.textContent = t('graph.refError'); }
+}
+
+function toggleRefInject() {
+  refInjectOn = !refInjectOn;
+  const btn = document.getElementById('btnRefInject');
+  if (btn) {
+    btn.textContent = refInjectOn ? t('graph.refInjectOn') : t('graph.refInjectOff');
+    btn.className = refInjectOn ? 'btn btn-primary' : 'btn';
+  }
+}
+
+async function refSearchOwnMaterial() {
+  const q = (nodeById.get(selectedId) || {}).name || '';
+  if (!q) return;
+  const btn = document.getElementById('btnRefSearch');
+  const old = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = t('graph.refSearching'); }
+  try {
+    const resp = await fetch(`/api/rag/search?q=${encodeURIComponent(q)}&k=5`);
+    const d = await resp.json();
+    const items = Array.isArray(d.items) ? d.items : [];
+    if (!items.length) { toast(t('graph.refNoHit')); return; }
+    const top = items[0];
+    const label = top.name ? `${top.name}${top.page ? ' 第' + top.page + '页' : ''}` : '';
+    const ta = document.getElementById('dRefText');
+    if (ta) ta.value = (label ? `[${label}] ` : '') + (top.content || '');
+    updateRefEstimate();
+  } catch { toast(t('graph.refError')); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = old; } }
 }
 
 // 详解徽标：有用户覆盖层显示「已编辑」并可回退，否则显示「默认(种子)」
