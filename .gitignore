@@ -65,6 +65,8 @@ backups/
 
 # Test-local temp data (workspace-confined)
 tests/.tmp/
+# Root-level repo-clone test artifact (e.g. tests that verify a fresh checkout)
+/.tmp/
 
 # B1: uploaded photos (user data, generated at runtime)
 media/

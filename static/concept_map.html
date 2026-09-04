@@ -116,6 +116,11 @@
     display: none; position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
     background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
     padding: 10px 14px; z-index: 20; box-shadow: 0 4px 18px rgba(0,0,0,.14);
+    flex-direction: column; gap: 6px; max-width: min(92vw, 560px);
+  }
+  #linkChooser input, #linkChooser select {
+    padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--card); color: var(--text); font: inherit;
   }
   /* ── 6 类边：形状 + 颜色 双重编码（有向=先修/演进带箭头）── */
   .edge-prerequisite { stroke: #3b82f6; stroke-width: 2; }              /* 实线 · 蓝 */
@@ -209,6 +214,13 @@
         <button class="btn btn-primary" id="btnGenExplain" onclick="generateExplanation()" data-i18n="graph.explainGen">AI 生成详解</button>
         <button class="btn" id="btnRevertExplain" onclick="revertExplanation()" data-i18n="graph.explainRevert" style="display:none">回退到种子</button>
       </div>
+      <p class="kv" style="margin-top:10px"><b data-i18n="graph.evidenceTitle">掌握判据：</b></p>
+      <textarea id="dEvidence" data-i18n-ph="graph.evidencePh" placeholder="可观察的达标判据，每行一条（如：能独立写出 F=ma 并说明适用条件）"
+        rows="3" style="width:100%;resize:vertical;font:inherit;line-height:1.5"></textarea>
+      <div style="display:flex; gap:8px; margin-top:6px">
+        <input id="dAssessPrompt" data-i18n-ph="graph.assessPh" placeholder="口试模板（可含 {{name}} 占位）" style="flex:1">
+        <button class="btn" onclick="saveEvidence()" data-i18n="graph.evidenceSave">保存判据</button>
+      </div>
       <div style="display:flex; gap:8px; margin-top:10px">
         <button class="btn btn-primary" onclick="prereqMode()" data-i18n="graph.prereqBtn">先修模式：看相关错题</button>
       </div>
@@ -233,13 +245,22 @@
 </div>
 <div id="linkChooser">
   <span class="muted" data-i18n="graph.chooseRelation">选择关系类型</span>
-  <button class="btn" onclick="doLink('prerequisite')" data-i18n="graph.relationP">先修 ▸</button>
-  <button class="btn" onclick="doLink('progression')" data-i18n="graph.relationProg">演进 ▸</button>
-  <button class="btn" onclick="doLink('inclusion')" data-i18n="graph.relationI">包含 —</button>
-  <button class="btn" onclick="doLink('analogy')" data-i18n="graph.relationA">类比 ··</button>
-  <button class="btn" onclick="doLink('contrast')" data-i18n="graph.relationC">易混 ⃒</button>
-  <button class="btn" onclick="doLink('related')" data-i18n="graph.relationR">相关 —</button>
-  <button class="btn" onclick="cancelLink()" data-i18n="graph.linkCancel">取消</button>
+  <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+    <input id="linkReason" data-i18n-ph="graph.linkReasonPh" placeholder="连线理由（必填，一句话依据）" style="flex:1;min-width:170px">
+    <select id="linkStrength" data-i18n-title="graph.strengthTitle" title="边强度：硬性=教材明确定义；软性=经验推断">
+      <option value="soft" data-i18n="graph.strengthSoft">软性</option>
+      <option value="hard" data-i18n="graph.strengthHard">硬性</option>
+    </select>
+  </div>
+  <div style="display:flex;gap:6px;flex-wrap:wrap">
+    <button class="btn" onclick="doLink('prerequisite')" data-i18n="graph.relationP">先修 ▸</button>
+    <button class="btn" onclick="doLink('progression')" data-i18n="graph.relationProg">演进 ▸</button>
+    <button class="btn" onclick="doLink('inclusion')" data-i18n="graph.relationI">包含 —</button>
+    <button class="btn" onclick="doLink('analogy')" data-i18n="graph.relationA">类比 ··</button>
+    <button class="btn" onclick="doLink('contrast')" data-i18n="graph.relationC">易混 ⃒</button>
+    <button class="btn" onclick="doLink('related')" data-i18n="graph.relationR">相关 —</button>
+    <button class="btn" onclick="cancelLink()" data-i18n="graph.linkCancel">取消</button>
+  </div>
 </div>
 <script src="concept_map.js"></script>
 </body>

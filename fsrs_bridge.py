@@ -17,6 +17,7 @@ P0 增强（2026-08-12）：
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -77,6 +78,17 @@ def _invalidate() -> None:
         _PARAM_CACHE = None
 
 
+def params_hash(params: list[float] | tuple[float, ...]) -> str:
+    """F2 参数指纹：训练参数向量的稳定短哈希（12 位 hex）。
+
+    同参数必同哈希；重训后参数变化则哈希变化——供评分日志（D1 fsrs_params_version）
+    与审计回答「这次评分用的是哪版参数」。纯函数，无状态。
+    """
+    digest = hashlib.sha256(
+        ",".join(f"{float(p):.6f}" for p in params).encode("ascii")).hexdigest()
+    return digest[:12]
+
+
 def _load_params() -> dict[str, object] | None:
     global _PARAM_CACHE
     if _PARAM_CACHE is not None:
@@ -89,7 +101,12 @@ def _load_params() -> dict[str, object] | None:
                 data = json.loads(_PARAM_FILE.read_text("utf-8"))
                 params = [float(x) for x in data.get("parameters", [])]
                 if len(params) == len(DEFAULT_PARAMETERS):
-                    _PARAM_CACHE = {"parameters": params, "trained_at": data.get("trained_at", "")}
+                    _PARAM_CACHE = {
+                        "parameters": params,
+                        "trained_at": data.get("trained_at", ""),
+                        # 旧文件无 params_hash 时按参数向量现算（确定性等价）
+                        "params_hash": str(data.get("params_hash") or "") or params_hash(params),
+                    }
                     return _PARAM_CACHE  # type: ignore[return-value]
         except Exception as exc:
             LOG.warning("FSRS 参数文件读取失败（用默认参数）: %s", exc)
@@ -244,6 +261,12 @@ def next_interval_days(
     return max(1, compute_review(rating, prev_interval, 2.5, 0).interval_days)
 
 
+def current_params_hash() -> str:
+    """当前生效参数的指纹（default 参数返回空串）——评分日志落库用（D1 fsrs_params_version）。"""
+    trained = _load_params()
+    return str(trained["params_hash"]) if trained else ""
+
+
 def fsrs_status() -> dict[str, object]:
     """P0：调度与训练状态（设置页 FSRS 卡 + 遗忘预测）。"""
     trained = _load_params()
@@ -251,6 +274,8 @@ def fsrs_status() -> dict[str, object]:
         "available": _FSRS_AVAILABLE,
         "params_source": "trained" if trained else "default",
         "trained_at": str(trained["trained_at"]) if trained else "",
+        # F2：参数指纹（default 参数无指纹；trained 必有）——界面/日志可追溯「哪版参数」
+        "params_hash": str(trained["params_hash"]) if trained else "",
         "desired_retention": _desired_retention(),
         "training": bool(_TRAIN_STATE["running"]),
         "sample_count": 0,
@@ -345,17 +370,21 @@ def train_parameters(
         return False, {"reason": "训练参数越界，已丢弃（保留默认参数）"}
     try:
         _PARAM_FILE.parent.mkdir(parents=True, exist_ok=True)
+        rounded = [round(float(p), 6) for p in params]
         tmp = _PARAM_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps({
-            "parameters": [round(float(p), 6) for p in params],
+            "parameters": rounded,
             "trained_at": now(),
+            # F2 参数指纹：落盘自描述，重训前后哈希可对照
+            "params_hash": params_hash(rounded),
         }, ensure_ascii=False), "utf-8")
         os.replace(tmp, _PARAM_FILE)
     except OSError as exc:
         return False, {"reason": "参数写入失败：%s" % exc}
     _invalidate()
     return True, {"sample_count": len(logs), "trained_at": now(),
-                  "confidence": confidence_for(len(logs))}  # §16.2 高置信度标记
+                  "confidence": confidence_for(len(logs)),
+                  "params_hash": params_hash([round(float(p), 6) for p in params])}  # §16.2 高置信度标记
 
 
 def train_async(reviews: list[tuple[int, int, str]]) -> bool:

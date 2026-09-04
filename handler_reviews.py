@@ -10,7 +10,7 @@ from config import LOG
 from db import DB_LOCK, db, now, row, rows
 from ai import get_cached_settings
 from review import compute_review
-from errors import ERROR_TYPE_LABELS
+from errors import ERROR_TYPE_LABELS, queue_weight
 import fsrs_bridge
 from fsrs_bridge import next_interval_days
 from handler_base import (X_HEADER, X_VALUE, _IDEMPOTENCY, _IDEMPOTENCY_TTL,
@@ -19,11 +19,11 @@ from handler_base import (X_HEADER, X_VALUE, _IDEMPOTENCY, _IDEMPOTENCY_TTL,
 
 class ReviewsMixin:
     def _handle_list_reviews(self) -> None:
-        """复习队列。优先级排序（逾期久 > 掌握度低 > 带漏点）+ 交错 + 每日上限。
-        ?mode=plain 关闭交错（A7 遗留参数保留）。"""
+        """复习队列。优先级排序（逾期久 > 错因权重 > 记忆脆弱 > 掌握度低 > 带漏点）
+        + 交错 + 每日上限。?mode=plain 关闭交错（A7 遗留参数保留）。"""
         items = rows("""
             SELECT r.*, p.title, p.course, p.topic, p.content, p.my_attempt,
-                   p.mastery, p.ease_factor
+                   p.mastery, p.ease_factor, p.error_type, p.stability
             FROM reviews r JOIN problems p ON p.id = r.problem_id
             WHERE r.completed = 0 AND p.subject = ? ORDER BY r.due_date ASC
         """, (self.subject,))
@@ -44,10 +44,13 @@ class ReviewsMixin:
                 gap_counts[fs["problem_id"]] = max(gap_counts.get(fs["problem_id"], 0), n)
         for item in items:
             item["feynman_gaps"] = gap_counts.get(item["problem_id"], 0)
-        # 优先级：逾期天数多 > 掌握度低 > 带费曼漏点（墨墨式优先级选卡）
+        # 优先级（B3 M2+M3 双信号）：逾期久 > 知识性错因(M2 权重) > 记忆脆弱(M3 低稳定)
+        # > 掌握度低 > 带费曼漏点。纯内存排序，零写库（F1 出队守恒条款）。
         today = date.today()
         items.sort(key=lambda r: (
             -(today - date.fromisoformat(r["due_date"])).days,
+            -queue_weight(r["error_type"]),   # M2：空白/概念错(3) > 陷阱(2) > 计算/审题(1) > 执行类(0)
+            float(r["stability"] or 0),       # M3：FSRS 稳定性低 = 记忆脆弱，优先重考
             float(r["mastery"] or 2.5),
             -int(r["feynman_gaps"]),
         ))
@@ -149,7 +152,8 @@ class ReviewsMixin:
             self._log_variant_result(conn, review, rating)
             self._log_mastery(conn, self.subject)
         import graph
-        graph.update_progress(self.subject, force=True)
+        graph.update_progress(self.subject, force=True, entry_point="review",
+                              evidence=f"题目#{review['problem_id']} 评分{rating}")
         try:
             from gamification import record as gamify_record
             gamify_record(rating)  # D6 游戏化（零依赖，失败不影响主流程）

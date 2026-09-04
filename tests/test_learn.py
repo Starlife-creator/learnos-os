@@ -251,6 +251,56 @@ class TestLearnApi(unittest.TestCase):
             {"kind": "highlight", "anchor": {"quote": "x"}})
         self.assertEqual(status, 404)
 
+    def test_material_trash_restore(self):
+        """D3：教材删除（级联批注）先入回收站，经 /api/trash/{id}/restore 原样恢复。"""
+        mid = self._make_material(title="回收站教材")
+        status, data = self._request(
+            "POST", f"/api/learn/materials/{mid}/annotations",
+            {"kind": "note", "anchor": {"prefix": "章", "quote": "惯性", "suffix": "定律"},
+             "body": "回收站批注"})
+        self.assertEqual(status, 201, data)
+        aid = data["id"]
+        # 删除教材（旧实现含批注会 FK 报错；D3 收口后批注级联快照 + 删除）
+        status, data = self._request("DELETE", f"/api/learn/materials/{mid}")
+        self.assertEqual(status, 200, data)
+        status, data = self._request("GET", "/api/learn/materials?subject=physics")
+        self.assertNotIn(mid, [m["id"] for m in data["items"]])
+        # 回收站列表命中
+        status, data = self._request("GET", "/api/trash")
+        self.assertEqual(status, 200)
+        hit = [it for it in data["items"]
+               if it["kind"] == "material" and it["entity_id"] == mid and it["restorable"]]
+        self.assertEqual(len(hit), 1, data)
+        # 恢复：教材 + 批注原样回来
+        status, data = self._request("POST", f"/api/trash/{hit[0]['id']}/restore")
+        self.assertEqual(status, 200, data)
+        status, data = self._request("GET", "/api/learn/materials?subject=physics")
+        self.assertIn(mid, [m["id"] for m in data["items"]])
+        status, data = self._request("GET", f"/api/learn/materials/{mid}/annotations")
+        self.assertEqual(status, 200)
+        self.assertEqual([it["id"] for it in data["items"]], [aid])
+        self.assertEqual(data["items"][0]["body"], "回收站批注")
+        # 同一条快照二次恢复 → 404
+        status, data = self._request("POST", f"/api/trash/{hit[0]['id']}/restore")
+        self.assertEqual(status, 404)
+
+    def test_annotation_trash_restore(self):
+        """D3：批注删除入回收站，恢复后锚点结构保真。"""
+        import trash
+        mid = self._make_material(title="批注回收站教材")
+        status, data = self._request(
+            "POST", f"/api/learn/materials/{mid}/annotations",
+            {"kind": "highlight", "anchor": {"prefix": "a", "quote": "回收站", "suffix": "b"}})
+        self.assertEqual(status, 201, data)
+        aid = data["id"]
+        status, _ = self._request("DELETE", f"/api/learn/annotations/{aid}")
+        self.assertEqual(status, 200)
+        self.assertTrue(trash.restore("annotation", aid))
+        status, data = self._request("GET", f"/api/learn/materials/{mid}/annotations")
+        self.assertEqual(status, 200)
+        self.assertEqual([it["id"] for it in data["items"]], [aid])
+        self.assertEqual(data["items"][0]["anchor"]["quote"], "回收站")
+
     def test_apply_cards_endpoint(self):
         cards = [{"question": "用自己的话解释「惯性」", "answer": "物体保持原有运动状态的性质"},
                  {"question": "", "answer": "无问题的卡应被过滤"}]

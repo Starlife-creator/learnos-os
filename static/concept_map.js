@@ -771,22 +771,29 @@ async function selectNode(id) {
   document.getElementById('dAliases').value = n.aliases || '';
   document.getElementById('dExplanation').value = n.explanation || '';
   updateExplanationBadge(n);
-  // 单遍扫 links（旧实现三遍 filter + 每次重建 byId Map）
+  // G2：掌握判据（evidence JSON 数组 → 每行一条）+ 口试模板
+  let evLines = [];
+  try { evLines = Array.isArray(JSON.parse(n.evidence || '[]')) ? JSON.parse(n.evidence || '[]') : []; } catch (e) {}
+  document.getElementById('dEvidence').value = evLines.join('\n');
+  document.getElementById('dAssessPrompt').value = n.assessment_prompt || '';
+  // 单遍扫 links（旧实现三遍 filter + 每次重建 byId Map）；G1：边带理由/锚点 tooltip
   const prereq = [], succ = [], cont = [];
+  const escAttr = s => _escGraphLP(String(s || '')).replace(/"/g, '&quot;');
   for (const l of graphData.links) {
+    const tip = l.reason ? ` title="${escAttr(l.reason + (l.evidence_ref ? ' · ' + l.evidence_ref : '')} [${l.strength || 'soft'}]"` : '';
     if (l.relation === 'prerequisite') {
-      if (l.concept_b === id) { const x = nodeById.get(l.concept_a); if (x) prereq.push(x); }
-      else if (l.concept_a === id) { const x = nodeById.get(l.concept_b); if (x) succ.push(x); }
+      if (l.concept_b === id) { const x = nodeById.get(l.concept_a); if (x) prereq.push(`<span${tip}>${_escGraphLP(x.name)}</span>`); }
+      else if (l.concept_a === id) { const x = nodeById.get(l.concept_b); if (x) succ.push(`<span${tip}>${_escGraphLP(x.name)}</span>`); }
     } else if (l.relation === 'contrast' && (l.concept_a === id || l.concept_b === id)) {
       const x = nodeById.get(l.concept_a === id ? l.concept_b : l.concept_a);
-      if (x) cont.push(x);
+      if (x) cont.push(`<span${tip}>${_escGraphLP(x.name)}</span>`);
     }
   }
   const dPrereq = document.getElementById('dPrereq');
   dPrereq.innerHTML = '';
-  if (prereq.length) dPrereq.innerHTML += `<p class="kv"><b>${t('graph.prereq')}</b>${prereq.map(p => _escGraphLP(p.name)).join('、')}</p>`;
-  if (succ.length) dPrereq.innerHTML += `<p class="kv"><b>${t('graph.succ')}</b>${succ.map(s => _escGraphLP(s.name)).join('、')}</p>`;
-  if (cont.length) dPrereq.innerHTML += `<p class="kv"><b>${t('graph.contrast')}</b>${cont.map(c => _escGraphLP(c.name)).join('、')}</p>`;
+  if (prereq.length) dPrereq.innerHTML += `<p class="kv"><b>${t('graph.prereq')}</b>${prereq.join('、')}</p>`;
+  if (succ.length) dPrereq.innerHTML += `<p class="kv"><b>${t('graph.succ')}</b>${succ.join('、')}</p>`;
+  if (cont.length) dPrereq.innerHTML += `<p class="kv"><b>${t('graph.contrast')}</b>${cont.join('、')}</p>`;
   document.getElementById('dProblems').innerHTML = '';
   // 做闪卡：仅为章/概念级显示（单元级不在闪卡概念下拉内）
   const mk = document.getElementById('btnMakeCardWrap');
@@ -823,7 +830,8 @@ async function loadRelatedProblems(id) {
 
 function prereqMode() {
   const cid = selectedId;
-  window.open(`/#page-problems?prereq=${cid}`, '_blank');
+  // 同 app-review.js：#problems 是路由名，#page-problems 是 DOM id，深链必须用前者。
+  window.open(`/#problems?prereq=${cid}`, '_blank');
 }
 
 async function saveAliases() {
@@ -866,6 +874,27 @@ async function saveExplanation() {
       }
       updateExplanationBadge(n);
       toast(t('graph.explainSaved'));
+    } else alert(data.error || 'fail');
+  } catch { alert(t('graph.loadFail')); }
+}
+
+// G2：保存掌握判据（每行一条）+ 口试模板（可含 {{name}} 占位）
+async function saveEvidence() {
+  if (!selectedId) return;
+  const lines = document.getElementById('dEvidence').value
+    .split('\n').map(s => s.trim()).filter(Boolean);
+  const prompt = document.getElementById('dAssessPrompt').value.trim();
+  try {
+    const resp = await fetch(`/api/graph/concepts/${selectedId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'LearnOS' },
+      body: JSON.stringify({ evidence: lines, assessment_prompt: prompt }),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      const n = graphData.nodes.find(x => x.id === selectedId);
+      if (n) { n.evidence = JSON.stringify(lines); n.assessment_prompt = prompt; }
+      toast(t('graph.evidenceSaved'));
     } else alert(data.error || 'fail');
   } catch { alert(t('graph.loadFail')); }
 }
@@ -1130,6 +1159,8 @@ async function onLinkClick(id) {
 function cancelLink() {
   const chooser = document.getElementById('linkChooser');
   if (chooser) chooser.style.display = 'none';
+  const reasonEl = document.getElementById('linkReason');
+  if (reasonEl) reasonEl.value = '';
   linkMode = false; linkSrc = null; _linkAB = null;
   clearLinkHighlight();
   const btn = document.getElementById('btnLink');
@@ -1137,13 +1168,18 @@ function cancelLink() {
 }
 async function doLink(relation) {
   const { a, b } = _linkAB || {};
+  const reasonEl = document.getElementById('linkReason');
+  const reason = (reasonEl && reasonEl.value || '').trim();
+  const strengthEl = document.getElementById('linkStrength');
+  const strength = strengthEl ? strengthEl.value : 'soft';
+  if (!reason) { toast(t('graph.linkReasonNeed')); return; }  // G1：溯源强制填写理由
   cancelLink();
   if (!a || !b) return;
   try {
     const resp = await fetch(`/api/graph/concepts/${a}/link?subject=${encodeURIComponent(graphSubject())}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'LearnOS' },
-      body: JSON.stringify({ b, relation }),
+      body: JSON.stringify({ b, relation, reason, strength }),
     });
     const j = await resp.json().catch(() => ({}));
     if (!resp.ok) { toast(j.error || t('graph.linkFail')); return; }

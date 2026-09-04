@@ -43,7 +43,22 @@ BACKUP_TABLES = [
     "card_reviews",       # v25 闪卡评分日志
     "materials",          # v28 学习台教材注册表
     "annotations",        # v29 学习台批注/高亮
+    # 架构守卫测试 test_backup_tables_cover_all_business_tables 发现遗漏的 2 张：
+    "ai_telemetry",       # AI 调用遥测（丢失 = 用量趋势断层）
+    "seed_versions",      # 种子版本账本（丢失危害最大：init_db 用**当前**种子文件
+                          #   版本重建该表，随后回填旧版概念 → seed_ver 恒等于
+                          #   recorded → needs_update 恒为 False → 旧图谱永不提示升级）
+    # v33/v34 增量（B2 批 D3/D4）：
+    "trash",              # D3 回收站快照（丢失 = 未恢复的误删不可找回）
+    "mastery_events",     # D4 掌握度事件溯源（丢失 = 掌握度变化证据链断层）
+    # 注：`ai_result_cache` **不**纳入备份。它由 ai.py:58 在模块导入时以
+    # CREATE TABLE IF NOT EXISTS 惰性创建，既不属于 config.SCHEMA 也不在迁移体系内；
+    # 且它本质是带 TTL 的派生缓存（可再生），备份它只会让备份文件无谓膨胀。
+    # 原则：备份业务数据，不备份派生缓存。
 ]
+# 说明：本清单由 tests/test_fitness_functions.py 的 TestBackupCompleteness
+# 双向断言守护——既覆盖 sqlite_master 中全部业务表（漏登记 → 还原静默丢数据），
+# 也不含 schema 中不存在的表（误登记 → 导出直接报错）。新增表漏登记会 CI 红。
 
 
 def _trash_dir() -> Path:

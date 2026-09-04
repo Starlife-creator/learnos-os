@@ -379,6 +379,21 @@ class TestEndpoints(unittest.TestCase):
         self.assertGreaterEqual(careless[0]["count"], 1)
         self.assertIn("label", careless[0])
 
+    def test_next_step_consistency(self):
+        """U1：/api/learn/next-step 与仪表盘内嵌 next_step 同一结果（入口不分叉）。"""
+        status, ns = self._request("GET", "/api/learn/next-step")
+        self.assertEqual(status, 200)
+        self.assertIn("next", ns)
+        self.assertIn("queue", ns)
+        if ns["queue"]:
+            self.assertEqual(ns["next"], ns["queue"][0], "next 必须是队列首项")
+        status, d = self._request("GET", "/api/dashboard")
+        self.assertEqual(status, 200)
+        self.assertIn("next_step", d, "仪表盘应内嵌 next_step（队列消费同一结果）")
+        self.assertEqual(d["next_step"]["next"], ns["next"],
+                         "任意入口进入学习队列应得到同一条全局 next")
+        self.assertEqual(d["next_step"]["queue"], ns["queue"])
+
     def test_dashboard_error_trend(self):
         """C7：dashboard 含 error_trend（近30天 vs 历史占比 + delta）。"""
         from datetime import date, timedelta

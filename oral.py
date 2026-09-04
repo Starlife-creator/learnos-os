@@ -183,17 +183,39 @@ def _profile_context() -> str:
             "针对其高频错因设计检查点；回答质量判断参照其历史掌握水平。")
 
 
+def _assessment_hint(topic: str, subject: str) -> str:
+    """G2：概念自带的口试模板（assessment_prompt，{{name}} 占位替换为概念名）。
+
+    概念详情页可维护判据与模板；命中同名概念即以其模板定向首问（零依赖，未配置时空串）。
+    """
+    if not subject:
+        return ""
+    try:
+        r = row(
+            "SELECT assessment_prompt FROM concepts "
+            "WHERE subject = ? AND name = ? AND assessment_prompt != ''",
+            (subject, topic),
+        )
+        if r:
+            return str(r["assessment_prompt"]).replace("{{name}}", topic)
+    except Exception as exc:
+        LOG.debug("口试模板读取失败（可忽略）: %s", exc)
+    return ""
+
+
 def start_oral(topic: str, subject: str = "") -> tuple[int, str]:
     sbj = _resolve_subject(subject, topic) or subject
     p = _subject_profile(sbj)
     state = "concept"
-    question = p["stage_prompts"][state].format(topic=topic)
+    tpl = _assessment_hint(topic, sbj)
+    question = tpl or p["stage_prompts"][state].format(topic=topic)
     try:
         question = call_ai([
             {"role": "system", "content": (
                 p["oral_teacher"]
                 + _profile_context()  # 画像日内稳定，前置以命中前缀缓存
                 + f"学生刚开始学习「{topic}」。一次只问一个简洁的、关于核心概念的问题，不给答案。"
+                + (f"该概念的自测模板：{tpl}。首问优先围绕模板判据展开。" if tpl else "")
             )},
             {"role": "user", "content": f'围绕「{topic}」提出第一个概念理解问题。'},
         ], max_tokens=180, route="oral")
@@ -305,6 +327,28 @@ def save_feynman_self_review(session_id: int, values: dict[str, Any]) -> bool:
         return cur.rowcount > 0
 
 
+def _evidence_context(topic: str, subject: str) -> str:
+    """G2：概念的达标判据 evidence[]（M1 判分素材）注入口试追问。
+
+    命中同名概念且配置了判据时，返回一段供 AI 对照评估的素材文本；未配置返回空串。
+    """
+    if not subject:
+        return ""
+    try:
+        r = row(
+            "SELECT evidence FROM concepts WHERE subject = ? AND name = ? AND evidence != ''",
+            (subject, topic),
+        )
+        if r:
+            items = [str(x).strip() for x in json.loads(r["evidence"]) if str(x).strip()]
+            if items:
+                return ("该概念的达标判据（评估学生回答时逐条对照）：\n- "
+                        + "\n- ".join(items[:8]) + "\n")
+    except Exception as exc:
+        LOG.debug("口试判据素材读取失败（可忽略）: %s", exc)
+    return ""
+
+
 def _ai_followup(transcript: list[dict[str, str]], topic: str, stage: str, level: int, turn: int, subject: str = "") -> str:
     """AI 引导追问：先内心评估，再输出「一句诊断 + 一个追问」，不给答案。"""
     p = _subject_profile(subject)
@@ -314,7 +358,8 @@ def _ai_followup(transcript: list[dict[str, str]], topic: str, stage: str, level
     instruction = (
         f"学生正在学习「{topic}」，当前引导阶段：{p['stage_labels'][stage]}，"
         f"本轮回答质量级别：{level}/3（1=薄弱 3=扎实）。"
-        "先在内心评估学生回答最大的缺陷，然后只输出两行："
+        + _evidence_context(topic, subject)  # G2：判据素材（M1 定量判分对照）
+        + "先在内心评估学生回答最大的缺陷，然后只输出两行："
         "① 一句话诊断（指出最需修正或深化之处）；② 一个针对性的追问。不要给出完整答案。"
         f"剩余轮次：{remaining}。"
     )

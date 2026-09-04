@@ -18,6 +18,7 @@ from typing import Any
 import config
 from db import DB_LOCK, db, now, row, rows
 from config import APP_DIR, LOG
+import trash
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]")
 _STOP = {"the", "a", "an", "of", "to", "in", "on", "for", "and", "or", "is", "are",
@@ -204,53 +205,37 @@ def list_docs() -> list[dict[str, Any]]:
     return rows("SELECT * FROM rag_docs ORDER BY ingested_at DESC")
 
 
-_UNDO: dict[int, dict[str, Any]] = {}
-"""删除快照：doc_id -> {doc, chunks}，供前端撤销误删（内存态，进程内有效）。"""
-
-
 def delete_doc(doc_id: int) -> bool:
+    """D3：删除文档（含块与向量）先全量快照入回收站，保留期内可原样恢复。"""
     with DB_LOCK, db() as conn:
-        doc = row("SELECT * FROM rag_docs WHERE id = ?", (doc_id,))
-        if doc is None:
+        if not conn.execute("SELECT 1 FROM rag_docs WHERE id = ?", (doc_id,)).fetchone():
             return False
-        chunks = rows("SELECT chunk_index, page, content FROM rag_chunks WHERE doc_id = ? ORDER BY chunk_index", (doc_id,))
+        trash.snapshot(conn, "rag_doc", doc_id, [
+            ("rag_docs", "SELECT * FROM rag_docs WHERE id = ?", (doc_id,)),
+            ("rag_chunks", "SELECT * FROM rag_chunks WHERE doc_id = ?", (doc_id,)),
+            ("rag_embeddings", "SELECT * FROM rag_embeddings WHERE chunk_id IN "
+             "(SELECT id FROM rag_chunks WHERE doc_id = ?)", (doc_id,)),
+        ])
         conn.execute("DELETE FROM rag_embeddings WHERE chunk_id IN (SELECT id FROM rag_chunks WHERE doc_id = ?)", (doc_id,))
         conn.execute("DELETE FROM rag_chunks WHERE doc_id = ?", (doc_id,))
-        cur = conn.execute("DELETE FROM rag_docs WHERE id = ?", (doc_id,))
+        conn.execute("DELETE FROM rag_docs WHERE id = ?", (doc_id,))
         _invalidate_bm25()
-        if cur.rowcount > 0:
-            _UNDO[doc_id] = {"doc": doc, "chunks": chunks}
-        return cur.rowcount > 0
+        return True
 
 
 def restore_doc(doc_id: int) -> bool:
-    """撤销删除：恢复 rag_docs + rag_chunks（同 id）。"""
-    snap = _UNDO.pop(doc_id, None)
-    if not snap:
+    """撤销删除（D3 回收站）：原样恢复 rag_docs + rag_chunks + rag_embeddings（同 id）。
+
+    向量随快照原样恢复（旧内存态实现需重建，现零成本）；FTS 衍生索引重建、
+    BM25 缓存失效。
+    """
+    t = trash.restore("rag_doc", doc_id)
+    if not t:
         return False
-    doc = snap["doc"]
     with DB_LOCK, db() as conn:
-        try:
-            conn.execute(
-                "INSERT INTO rag_docs(id, source_path, file_type, pages, chunk_count, ingested_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (doc["id"], doc["source_path"], doc["file_type"], doc["pages"], doc["chunk_count"], doc["ingested_at"]),
-            )
-        except Exception:
-            return False
-        conn.executemany(
-            "INSERT INTO rag_chunks(doc_id, chunk_index, page, content) VALUES (?, ?, ?, ?)",
-            [(doc_id, c["chunk_index"], c["page"], c["content"]) for c in snap["chunks"]],
-        )
         _sync_fts(conn, doc_id)
-        _invalidate_bm25()
-        # M8：撤销删除后尽力重建向量（失败不阻断，BM25 仍可用）
-        model = _current_embedding_model()
-        if model:
-            try:
-                _embed_and_store(conn, doc_id, model)
-            except Exception as exc:
-                LOG.warning("撤销删除后向量重建失败（BM25 仍可用）: %s", exc)
-        return True
+    _invalidate_bm25()
+    return True
 
 
 _BM25_CACHE: dict[str, Any] = {"docs": None}
@@ -335,6 +320,37 @@ def filter_relevant(hits: list[dict[str, Any]], ratio: float = 0.35) -> list[dic
     if best <= 0:
         return hits[:1]
     return [h for h in hits if h.get("score", 0) >= ratio * best]
+
+
+def query_coverage(query: str, content: str) -> float:
+    """查询 token（去重）在候选内容中的覆盖率 0-1。纯函数，零 AI 调用。"""
+    qt = set(_tokenize(query))
+    return len(qt & set(_tokenize(str(content)))) / len(qt) if qt else 0.0
+
+
+# 实测阈值依据（单字分词语料）：垃圾命中（共享 1-2 常用字）score≈1.0-1.6、
+# 覆盖率≤0.08；真命中 score≈13-32、覆盖率≥0.26——分离带约一个数量级。
+NOISE_MIN_SCORE = 5.0
+NOISE_MIN_COVERAGE = 0.2
+
+
+def filter_noise(hits: list[dict[str, Any]], query: str,
+                 min_score: float = NOISE_MIN_SCORE,
+                 min_coverage: float = NOISE_MIN_COVERAGE) -> list[dict[str, Any]]:
+    """X1 低质命中过滤：词法分数 OR 查询覆盖率双通道，两头都低判为噪声。
+
+    单字分词下「共享常用字」的沾边块会得 BM25 正分，而相对分过滤
+    （filter_relevant）在全部命中都是垃圾时失效——best 本身就是垃圾。
+    宁可漏注入（少带 Source），不可假注入（AI 谎称「根据教材」）。
+    向量路径的 RRF 融合分为小数量纲，由覆盖率通道兜底。
+    """
+    if not hits:
+        return []
+    return [
+        h for h in hits
+        if h.get("score", 0) >= min_score
+        or query_coverage(query, str(h.get("content", ""))) >= min_coverage
+    ]
 
 
 def search(query: str, k: int = 5) -> list[dict[str, Any]]:

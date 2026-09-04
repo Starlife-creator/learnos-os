@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import re
@@ -42,6 +43,11 @@ _TYPE_LABEL_ZH = {
     "subjective": "主观题",
     "composite": "大小题",
 }
+
+# C3 题目来源标记（题库 JSON 顶层，不动判分链路）：
+#   manual=手填导入 / material=资料导入向导（教材提取）/ teacher=教师题库 /
+#   ai_generated=AI 出题（generate_bank_question 成功路径）
+QUESTION_SOURCES = ("manual", "material", "teacher", "ai_generated")
 
 
 def _bank_file(subject: str) -> Path:
@@ -213,11 +219,15 @@ def _normalize_question(raw: Any, idx: int, used_ids: set[str], subject: str,
         raise ValueError("必须为对象")
     qtype = str(raw.get("type") or "").strip().lower()
     if not qtype:
-        # 向后兼容：有 choices 且无 parts → 视为单选
+        # C3 题型自动判定（导入题缺 type 时按结构推断，映射到现有 5 类枚举）：
+        # 有 choices → single；题干含下划线占位 → fill；其余（含判断/对错题）→ subjective
+        stem_hint = str(raw.get("stem") or raw.get("question") or "")
         if isinstance(raw.get("choices"), list) and "parts" not in raw:
             qtype = "single"
+        elif re.search(r"_{2,}|＿", stem_hint) and isinstance(raw.get("answer"), (str, list)):
+            qtype = "fill"
         else:
-            raise ValueError("缺少 type 字段")
+            qtype = "subjective"
     if qtype not in QUESTION_TYPES:
         raise ValueError(f"未知题型 type={qtype}")
 
@@ -248,6 +258,9 @@ def _normalize_question(raw: Any, idx: int, used_ids: set[str], subject: str,
         "stem": stem,
         "title": str(raw.get("title") or "").strip(),
         "explain": str(raw.get("explain") or "").strip(),
+        # C3 来源标记：白名单外一律 manual（种子题不走归一化，保持原样）
+        "source": (str(raw.get("source") or "").strip().lower()
+                   if str(raw.get("source") or "").strip().lower() in QUESTION_SOURCES else "manual"),
     }
     if not (1 <= item["difficulty"] <= 5):
         item["difficulty"] = 2
@@ -426,8 +439,25 @@ def _problem_title(item: dict[str, Any]) -> str:
     return "大小题"
 
 
-def _ensure_problem(conn: Any, item: dict[str, Any]) -> int:
-    """答错时：把题目写入错题库（幂等——同一 qid 只建一条），并安排明日复习。"""
+def _is_blank_answer(user_raw: Any) -> bool:
+    """M2 空白作答判定：None / 纯空白串 / 空列表 / 全空白元素（错因自动初判用）。
+
+    数字 0（如选了选项 A）是有效作答，不算空白。
+    """
+    if user_raw is None:
+        return True
+    if isinstance(user_raw, str):
+        return not user_raw.strip()
+    if isinstance(user_raw, (list, tuple)):
+        return not user_raw or all(_is_blank_answer(v) for v in user_raw)
+    return False
+
+
+def _ensure_problem(conn: Any, item: dict[str, Any], error_type: str = "待诊断") -> int:
+    """答错时：把题目写入错题库（幂等——同一 qid 只建一条），并安排明日复习。
+
+    error_type：建档时的错因初值（M2 空白作答由 judge 自动传 blank_in_facts）；
+    已有错题不覆盖 error_type（用户可能已手选/诊断过错因）。"""
     existing = conn.execute(
         "SELECT problem_id FROM bank_problems WHERE qid = ?", (item["id"],)
     ).fetchone()
@@ -463,7 +493,7 @@ def _ensure_problem(conn: Any, item: dict[str, Any]) -> int:
         str(item.get("chapter", "")),
         _problem_content(item),
         "",
-        "待诊断",
+        error_type,
         concept_csv,
         "[]",
         1,
@@ -483,27 +513,80 @@ def _ensure_problem(conn: Any, item: dict[str, Any]) -> int:
     return pid
 
 
-def _grade_answer(user_raw: Any, correct_raw: Any) -> bool:
-    """判分核心：数值学科按数值比较（容忍浮点/千分位/负号），否则归一化字符串比较。
-    修复原 int() 强转对非数值学科（语言/历史/编程/化学符号/生物）一律判错或崩溃的缺陷。"""
-    def _to_num(s: Any):
-        try:
-            return float(str(s).strip().replace(",", "").replace("，", "").replace(" ", ""))
-        except (TypeError, ValueError):
-            return None
+def _to_num(s: Any):
+    try:
+        return float(str(s).strip().replace(",", "").replace("，", "").replace(" ", ""))
+    except (TypeError, ValueError):
+        return None
 
+
+def _norm(s: Any) -> str:
+    return re.sub(r"[\s\.。，,、；;:：]+$", "", str(s).strip().lower())
+
+
+# ── M1 相似度判分（B3）：确定性分级匹配，替代单一精确匹配 ──
+# ③ 短答案（双方 ≤30 字符）用序列相似度 ≥0.85，容忍排版噪声/个别笔误；
+#    含 = 或数字的公式类不做模糊（防 F=ma2 这类近形误判），仍走精确匹配。
+_FUZZY_MAX_LEN = 30
+_FUZZY_SIM_THRESHOLD = 0.85
+_NO_FUZZY_RE = re.compile(r"[=0-9]")
+# ④ 开放题（参考答案 >30 字符）按参考答案字符 bigram 命中率 ≥0.6 判分。
+_KEYWORD_COVERAGE = 0.6
+
+
+def _norm_loose(s: Any) -> str:
+    """M1 宽松归一化：小写 + 去除全部空白（含内部空格）+ 去尾标点。
+
+    与 _norm 的区别：_norm 仅去首尾空白，"F = ma" 与 "F=ma" 不等；本函数使之相等。
+    """
+    return re.sub(r"[\s\.。，,、；;:：]+$", "", re.sub(r"\s+", "", str(s or "").lower()))
+
+
+def _keyword_covered(user: str, ref: str) -> bool:
+    """M1 开放题关键词命中：参考答案的字符 bigram 集视为关键词，命中率 ≥0.6 判对。"""
+    grams = {ref[i:i + 2] for i in range(len(ref) - 1)}
+    if not grams:
+        return user == ref
+    hit = sum(1 for g in grams if g in user)
+    return hit / len(grams) >= _KEYWORD_COVERAGE
+
+
+def _answer_match(user_raw: Any, correct_raw: Any) -> bool:
+    """M1 判分核心（_grade_answer/_grade_fill 共用）：
+    ① 数值比较（容忍浮点/千分位/负号）——既有行为；
+    ② 归一化精确匹配（去首尾空白/尾标点/小写）——既有行为；
+    ③ 短答案序列相似度：双方 ≤30 字符且非公式类，difflib 比率 ≥0.85（近音/近形
+       如 玻尔→波尔(0.5)、F=ma→F=ma2(公式禁模糊) 均不误判对）；
+    ④ 开放题关键词覆盖：参考答案 >30 字符时，其 bigram 命中率 ≥0.6。
+    全程确定性、零依赖；新判分只对新作答生效，不追溯历史。"""
     cu, cc = _to_num(user_raw), _to_num(correct_raw)
     if cu is not None and cc is not None:
         return abs(cu - cc) < 1e-6
 
-    def _norm(s: Any) -> str:
-        return re.sub(r"[\s\.。，,、；;:：]+$", "", str(s).strip().lower())
+    if _norm(user_raw) == _norm(correct_raw):
+        return True
+    u, c = _norm_loose(user_raw), _norm_loose(correct_raw)
+    if not u or not c:
+        return False
+    if u == c:  # 内部空白差异（"F = ma" vs "F=ma"）
+        return True
+    if len(u) <= _FUZZY_MAX_LEN and len(c) <= _FUZZY_MAX_LEN:
+        if _NO_FUZZY_RE.search(u) or _NO_FUZZY_RE.search(c):
+            return False  # 公式/含数字：仅精确匹配，防近形误判
+        return difflib.SequenceMatcher(None, u, c).ratio() >= _FUZZY_SIM_THRESHOLD
+    if len(c) > _FUZZY_MAX_LEN:
+        return _keyword_covered(u, c)
+    return False
 
-    return _norm(user_raw) == _norm(correct_raw)
+
+def _grade_answer(user_raw: Any, correct_raw: Any) -> bool:
+    """判分入口：数值 → 精确 → M1 相似度/覆盖率（详见 _answer_match）。
+    修复原 int() 强转对非数值学科（语言/历史/编程/化学符号/生物）一律判错或崩溃的缺陷。"""
+    return _answer_match(user_raw, correct_raw)
 
 
 def _grade_fill(user_raw: Any, correct_raw: Any) -> bool:
-    """填空判分：逐空归一化（去首尾空白/标点、转小写）后按序比较。"""
+    """填空判分：逐空走 _answer_match（M1：短空格同样获得相似度容错与公式保护）。"""
     def _to_list(x: Any) -> list[str]:
         if isinstance(x, list):
             return [str(v) for v in x]
@@ -512,11 +595,7 @@ def _grade_fill(user_raw: Any, correct_raw: Any) -> bool:
     u, c = _to_list(user_raw), _to_list(correct_raw)
     if len(u) != len(c):
         return False
-    return all(_norm_fill(a) == _norm_fill(b) for a, b in zip(u, c))
-
-
-def _norm_fill(s: Any) -> str:
-    return re.sub(r"[\s\.。，,、；;:：]+$", "", str(s).strip().lower())
+    return all(_answer_match(a, b) for a, b in zip(u, c))
 
 
 def grade_item(item: dict[str, Any], user_raw: Any) -> dict[str, Any]:
@@ -579,13 +658,25 @@ def judge(qid: str, answer: Any, subject: str = "physics") -> dict[str, Any]:
             (qid, cval, now()),
         )
         if correct is False:
-            problem_id = _ensure_problem(conn, item)
+            # M2 错因自动初判：空白作答（不会/没写）→ blank_in_facts，无需手选
+            problem_id = _ensure_problem(
+                conn, item,
+                error_type="blank_in_facts" if _is_blank_answer(answer) else "待诊断")
     resp = {
         "correct": correct,
         "needs_review": result.get("needs_review", False),
         "explain": result.get("explain", ""),
         "problem_id": problem_id,
     }
+    if correct is False and problem_id:
+        # D4：题库答错建档改了 problems.mastery → 按学科重算掌握度并落事件
+        # （旧行为不重算，概念掌握度要等下一次其他入口触发才更新）
+        try:
+            import graph
+            graph.update_progress(subject, force=True, entry_point="bank",
+                                  evidence=f"题库 {qid} 答错建档（掌握度=1）")
+        except Exception as exc:
+            LOG.debug("题库判分后掌握度重算失败（可忽略）: %s", exc)
     if item.get("type") == "composite":
         resp["parts"] = result["parts"]
     else:

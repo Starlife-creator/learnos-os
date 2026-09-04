@@ -15,11 +15,19 @@ _TMP = Path(__file__).resolve().parent / ".tmp"
 _TMP.mkdir(exist_ok=True)
 
 
+_ORIG_AI_CONFIGURED = ai.ai_configured  # 模块导入时保存原始实现，供 tearDown 恢复
+
+
 def _force_offline():
     """确保 AI 完全离线：清空内存密钥 + 伪造 ai_configured()=False。"""
     ai.set_runtime_key(None)
     ai.set_master_password(None)
     ai.ai_configured = lambda: False  # 屏蔽本机 keys.enc 干扰
+
+
+def _restore_online():
+    """恢复被 _force_offline 覆盖的 ai_configured，防止 mock 泄漏到后续测试类。"""
+    ai.ai_configured = _ORIG_AI_CONFIGURED
 
 
 def _subj_item(**kw) -> dict:
@@ -52,6 +60,9 @@ class TestReviewBankQuestion(unittest.TestCase):
 class TestAiScoreItem(unittest.TestCase):
     def setUp(self):
         _force_offline()
+
+    def tearDown(self):
+        _restore_online()
 
     def test_objective_single(self):
         it = {"type": "single", "stem": "题干足够长", "choices": ["A", "B", "C"], "answer": 1}
@@ -122,15 +133,18 @@ class TestScoreHistory(unittest.TestCase):
 
     def test_save_and_query_history(self):
         _force_offline()
-        res = {"score": None, "ai_available": False, "mode": "unrated", "needs_review": True,
-               "comment": "测试", "against": "要点"}
-        pid = bank.save_score_history("physics-seed-subjective-3", "physics", res)
-        self.assertGreater(pid, 0)
-        hist = bank.recent_scores("physics-seed-subjective-3")
-        self.assertEqual(len(hist), 1)
-        self.assertIsNone(hist[0]["score"])
-        self.assertTrue(hist[0]["needs_review"])
-        self.assertEqual(hist[0]["comment"], "测试")
+        try:
+            res = {"score": None, "ai_available": False, "mode": "unrated", "needs_review": True,
+                   "comment": "测试", "against": "要点"}
+            pid = bank.save_score_history("physics-seed-subjective-3", "physics", res)
+            self.assertGreater(pid, 0)
+            hist = bank.recent_scores("physics-seed-subjective-3")
+            self.assertEqual(len(hist), 1)
+            self.assertIsNone(hist[0]["score"])
+            self.assertTrue(hist[0]["needs_review"])
+            self.assertEqual(hist[0]["comment"], "测试")
+        finally:
+            _restore_online()
 
 
 class TestCompositeShortStemImport(unittest.TestCase):
@@ -405,6 +419,35 @@ class TestPresetDropRetry(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     ai.call_ai([{"role": "user", "content": "hi"}], retries=0, route="test")
         self.assertEqual(calls["n"], 1)
+
+
+class TestGenerateBankQuestionSource(unittest.TestCase):
+    """C3：AI 出题带 ai_generated 标记 + 定向概念命中；离线降级不冒充 AI。"""
+
+    def setUp(self):
+        _force_offline()
+
+    def tearDown(self):
+        _restore_online()
+
+    def test_ai_success_marks_ai_generated(self):
+        import json as _json
+        from unittest import mock
+        fake = {"question": {
+            "type": "single", "stem": "两个点电荷距离增大为原来的 2 倍，库仑力变为？",
+            "choices": ["不变", "变为 1/2", "变为 1/4", "变为 4 倍"], "answer": 2,
+            "explain": "F∝1/r²。"}}
+        with mock.patch.object(ai, "ai_configured", return_value=True), \
+             mock.patch.object(ai, "call_ai", return_value=_json.dumps(fake, ensure_ascii=False)):
+            q = ai.generate_bank_question("physics", "库仑定律", "single")
+        self.assertEqual(q["source"], "ai_generated", "AI 成功路径必须带 ai_generated 标记")
+        self.assertEqual(q["concept"], "库仑定律", "定向出题须命中目标概念")
+
+    def test_offline_fallback_not_marked_ai(self):
+        q = ai.generate_bank_question("physics", "库仑定律", "single")
+        # 离线降级走 local 占位题：source=manual（不冒充 AI 生成）
+        self.assertEqual(q["source"], "manual")
+        self.assertIn("库仑定律", q["stem"])
 
 
 if __name__ == "__main__":

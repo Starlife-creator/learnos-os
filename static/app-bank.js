@@ -50,6 +50,8 @@ async function loadBank() {
         </div>
         <p class="text-sm mb-8" style="white-space:pre-wrap;line-height:1.6">${escapeHtml(item.stem)}</p>
         <div class="flex gap-8">
+          <span class="tag tag-gray">${typeBadge(item.type)}</span>
+          ${sourceBadge(item.source)}
           <button class="btn btn-primary btn-sm" onclick="openBankPractice('${item.id}')">${t('bank.practice')}</button>
         </div>
       </div>`;
@@ -78,6 +80,12 @@ const _TYPE_BADGE = { single: 'qtype.single', multiple: 'qtype.multiple', fill: 
 function typeBadge(ty) {
   const key = _TYPE_BADGE[ty || 'single'];
   return key ? t(key) : t('qtype.single');
+}
+// C3 来源徽标：material=教材提取 / ai_generated=AI 出题 / teacher=教师题库；
+// manual 与种子题（无 source）不显示，避免噪音
+function sourceBadge(src) {
+  const key = { material: 'bank.srcMaterial', ai_generated: 'bank.srcAI', teacher: 'bank.srcTeacher' }[src];
+  return key ? `<span class="tag tag-blue">${t(key)}</span>` : '';
 }
 // 判定文案（📝 待评阅 / ✅ 正确 / ❌ 错误）
 function verdictBadge(correct) {

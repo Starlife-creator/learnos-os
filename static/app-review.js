@@ -101,7 +101,9 @@ async function rescheduleReview(id) {
 function openPrereqMode(conceptId) {
   closeModal('problemModal');
   switchPage('problems');
-  window.location.hash = `#page-problems?prereq=${conceptId}`;
+  // 必须是 #problems（路由名）而非 #page-problems（DOM id）——switchPage 只接受
+  // PAGES 白名单内的路由名，否则 fallback 到 dashboard，把上一行的 switchPage 抵消掉。
+  window.location.hash = `#problems?prereq=${conceptId}`;
   loadProblems();
 }
 

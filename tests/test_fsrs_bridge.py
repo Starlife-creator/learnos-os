@@ -84,6 +84,48 @@ class TestFsrsBridge(unittest.TestCase):
         self.assertIn("reason", payload)
         self.assertGreaterEqual(next_interval_days(3, 5), 1)  # 仍可调度
 
+    def test_params_hash_stable_and_distinct(self):
+        """F2 参数指纹：同参数同哈希、异参数异哈希、定长 12 位 hex。"""
+        a = fsrs_bridge.params_hash([1.0, 2.0, 3.0])
+        self.assertEqual(a, fsrs_bridge.params_hash([1.0, 2.0, 3.0]))
+        self.assertNotEqual(a, fsrs_bridge.params_hash([1.0, 2.0, 3.1]))
+        self.assertEqual(len(a), 12)
+        int(a, 16)  # 合法 hex
+
+    def test_load_params_computes_hash_fallback(self):
+        """F2：写带 params_hash 的参数文件 → _load_params 可读；旧文件无哈希 → 现算兜底。"""
+        import json as _json
+        orig_file = fsrs_bridge._PARAM_FILE
+        try:
+            with tempfile.TemporaryDirectory(prefix="fsrs_hash_", dir=_TMP) as td:
+                # 1) 新格式（train_parameters 产物）：哈希原样读出
+                p1 = Path(td) / "params1.json"
+                fsrs_bridge._PARAM_FILE = p1
+                fsrs_bridge._invalidate()
+                rounded = [round(float(p), 6) for p in fsrs_bridge.DEFAULT_PARAMETERS]
+                p1.write_text(_json.dumps({
+                    "parameters": rounded, "trained_at": "2026-09-04T10:00:00",
+                    "params_hash": fsrs_bridge.params_hash(rounded),
+                }), "utf-8")
+                loaded = fsrs_bridge._load_params()
+                self.assertIsNotNone(loaded)
+                self.assertEqual(loaded["params_hash"], fsrs_bridge.params_hash(rounded))
+                # fsrs_status 暴露指纹（F2 验收）
+                self.assertEqual(fsrs_bridge.fsrs_status()["params_hash"],
+                                 fsrs_bridge.params_hash(rounded))
+                # 2) 旧格式（无 params_hash）：按参数向量现算，确定性等价
+                p2 = Path(td) / "params2.json"
+                fsrs_bridge._PARAM_FILE = p2
+                fsrs_bridge._invalidate()
+                p2.write_text(_json.dumps({
+                    "parameters": rounded, "trained_at": "2026-08-01T10:00:00",
+                }), "utf-8")
+                loaded2 = fsrs_bridge._load_params()
+                self.assertEqual(loaded2["params_hash"], fsrs_bridge.params_hash(rounded))
+        finally:
+            fsrs_bridge._PARAM_FILE = orig_file
+            fsrs_bridge._invalidate()
+
 
 class TestFsrsPerSubject(unittest.TestCase):
     """§16.2 训练门槛单一常量 + 高置信度；§46.5C 学科分层保持率。"""

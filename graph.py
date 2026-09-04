@@ -24,6 +24,7 @@ from typing import Any
 
 from config import LOG, BUNDLE_ROOT
 from db import db, now, row, rows, DB_LOCK
+import trash
 
 SEED_PATH = BUNDLE_ROOT / "data" / "seed_concepts.json"
 PREREQ_THRESHOLD = 0.6
@@ -101,8 +102,11 @@ def ensure_seed(subject: str = "physics") -> None:
                 for chapter in unit.get("chapters", []):
                     ch_id = _insert_concept(conn, chapter["name"], unit_id, unit_id, 0.2, name_to_id, subject, "seed")
                     for c in chapter.get("concepts", []):
+                        ev = c.get("ev") or []
                         cid = _insert_concept(conn, c["n"], ch_id, ch_id, float(c.get("d", 0.5)),
-                                              name_to_id, subject, "seed", str(c.get("desc", "") or ""))
+                                              name_to_id, subject, "seed", str(c.get("desc", "") or ""),
+                                              json.dumps([str(x) for x in ev], ensure_ascii=False) if ev else "",
+                                              str(c.get("ap", "") or ""))
                         name_to_id.setdefault(c["n"], cid)
             # 第二遍：建先修边（不依赖出现顺序）
             for unit in seed.get("units", []):
@@ -113,13 +117,15 @@ def ensure_seed(subject: str = "physics") -> None:
                             continue
                         for prereq_name in c.get("p", []):
                             if prereq_name in name_to_id:
-                                _insert_link(conn, name_to_id[prereq_name], cid, "prerequisite")
+                                _insert_link(conn, name_to_id[prereq_name], cid, "prerequisite",
+                                             evidence_ref="seed")
                             else:
                                 LOG.warning("先修引用不存在，已跳过: %s", prereq_name)
             for relation, pairs in seed.get("links", {}).items():
                 for a, b in pairs:
                     if a in name_to_id and b in name_to_id:
-                        _insert_link(conn, name_to_id[a], name_to_id[b], relation)
+                        _insert_link(conn, name_to_id[a], name_to_id[b], relation,
+                                     evidence_ref="seed")
                     else:
                         LOG.warning("%s 关系引用不存在，已跳过: %s-%s", relation, a, b)
             # 记录种子版本（首次加载）
@@ -155,7 +161,8 @@ def seed_status(subject: str = "physics") -> dict[str, Any]:
 
 def _insert_concept(conn: Any, name: str, parent_id: int, chapter_id: int,
                     difficulty: float, name_to_id: dict[str, int], subject: str = "physics",
-                    source: str = "unknown", explanation: str = "") -> int:
+                    source: str = "unknown", explanation: str = "",
+                    evidence: str = "", assessment_prompt: str = "") -> int:
     cur = conn.execute(
         "SELECT id FROM concepts WHERE subject = ? AND name = ?", (subject, name)
     ).fetchone()
@@ -163,19 +170,22 @@ def _insert_concept(conn: Any, name: str, parent_id: int, chapter_id: int,
         return int(cur["id"])
     cursor = conn.execute(
         "INSERT INTO concepts(name, parent_id, chapter_id, difficulty, subject, created_at, "
-        "source, explanation_seed, explanation_user, explanation) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)",
-        (name, parent_id, chapter_id, difficulty, subject, now(), source, explanation, explanation),
+        "source, explanation_seed, explanation_user, explanation, evidence, assessment_prompt) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
+        (name, parent_id, chapter_id, difficulty, subject, now(), source, explanation, explanation,
+         evidence, assessment_prompt),
     )
     cid = int(cursor.lastrowid)
     name_to_id[name] = cid
     return cid
 
 
-def _insert_link(conn: Any, a: int, b: int, relation: str) -> None:
+def _insert_link(conn: Any, a: int, b: int, relation: str,
+                 strength: str = "soft", reason: str = "", evidence_ref: str = "") -> None:
     conn.execute(
-        "INSERT OR IGNORE INTO concept_links(concept_a, concept_b, relation) VALUES (?, ?, ?)",
-        (a, b, relation),
+        "INSERT OR IGNORE INTO concept_links(concept_a, concept_b, relation, strength, reason, evidence_ref) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (a, b, relation, strength, reason, evidence_ref),
     )
 
 
@@ -197,7 +207,7 @@ def load_graph(subject: str = "physics") -> dict[str, Any]:
     for n in nodes:
         n["level"] = _level_from_parents(n["parent_id"], parent_of)
     links = rows(
-        "SELECT concept_a, concept_b, relation FROM concept_links "
+        "SELECT concept_a, concept_b, relation, strength, reason, evidence_ref FROM concept_links "
         "WHERE concept_a IN (SELECT id FROM concepts WHERE subject = ?) "
         "ORDER BY CASE relation WHEN 'prerequisite' THEN 0 WHEN 'contrast' THEN 1 ELSE 2 END",
         (subject,),
@@ -267,6 +277,17 @@ def export_seed(subject: str, target_path: Path | None = None) -> Path:
         pres = prereq_of.get(n["id"], [])
         if pres:
             concept_obj["p"] = [id_to_name[p] for p in pres if p in id_to_name]
+        # G2 判据/口试模板随导出反哺种子（ev/ap 可选键，老加载器忽略无碍）
+        try:
+            ev_list = json.loads(n.get("evidence") or "[]")
+            ev_list = [str(x) for x in ev_list] if isinstance(ev_list, list) else []
+        except (json.JSONDecodeError, TypeError):
+            ev_list = []
+        if ev_list:
+            concept_obj["ev"] = ev_list
+        ap = (n.get("assessment_prompt") or "").strip()
+        if ap:
+            concept_obj["ap"] = ap
         get_chapter(unit_name, ch_name)["concepts"].append(concept_obj)
 
     # 版本号取库内 seed_versions 记录（硬编码 1 会在下次启动时把高版本记录拉回，破坏升级检测）
@@ -304,26 +325,36 @@ def _linked_ids(concept_id: int, relation: str, reverse: bool = False) -> list[i
     )]
 
 
-def _self_mastery(conn: Any, concept_id: int, card_signal: tuple[float, int] | None = None) -> tuple[float, int]:
-    """该概念被绑定题目的平均掌握度（0-1）与绑定题数。
+def _fuse_card(m: float, count: int, card_signal: tuple[float, int] | None) -> float:
+    """把闪卡信号按样本数融合进题目掌握度（Phase 2 双驱动）。
 
-    card_signal=(卡驱动掌握度, 卡样本数)：Phase 2 双驱动——当该概念存在已复习的
-    概念闪卡时，把卡片评分信号与题目掌握度按样本数融合，使掌握度同时反映主动回忆表现。
+    count=题目样本数；card_signal=(卡驱动掌握度, 卡样本数)。
     """
-    subj = conn.execute("SELECT subject FROM concepts WHERE id = ?", (concept_id,)).fetchone()
-    subject = subj["subject"] if subj else "physics"
-    r = conn.execute("""
-        SELECT AVG(mastery) / 5.0 AS m, COUNT(*) AS c FROM problems
-        WHERE subject = ? AND concept_ids LIKE ?
-    """, (subject, f"%,{concept_id},%")).fetchone()
-    m = float(r["m"] or 0.0)
-    count = int(r["c"] or 0)
-    if card_signal:
-        val, cnt = card_signal
-        if cnt > 0:
-            denom = count + cnt
-            m = (m * count + val * cnt) / denom if denom > 0 else val
-    return m, count
+    if not card_signal:
+        return m
+    val, cnt = card_signal
+    if cnt <= 0:
+        return m
+    denom = count + cnt
+    return (m * count + val * cnt) / denom if denom > 0 else val
+
+
+def _evidence_caps(conn: Any) -> dict[int, float]:
+    """M1 置信度封顶表（B3）：证据次数 → 掌握度上限，默认 {1: 0.5, 2: 0.8}。
+
+    防「单次蒙对即掌握」：证据 <3 次时封顶，3 次起不设限。
+    阈值可经 settings.mastery_evidence_caps（CSV，如 "0.5,0.8"）调整调回。
+    """
+    try:
+        r = conn.execute(
+            "SELECT value FROM settings WHERE key = 'mastery_evidence_caps'"
+        ).fetchone()
+        vals = [float(x) for x in str(r["value"] if r else "").split(",") if x.strip()]
+    except Exception:
+        vals = []
+    if not vals:
+        vals = [0.5, 0.8]
+    return {i + 1: min(1.0, v) for i, v in enumerate(vals[:9])}
 
 
 def card_mastery_signal(conn: Any, subject: str) -> dict[int, tuple[float, int]]:
@@ -335,7 +366,7 @@ def card_mastery_signal(conn: Any, subject: str) -> dict[int, tuple[float, int]]
     rows_ = conn.execute(
         "SELECT c.concept_id AS cid, c.id AS card_id, cr.rating AS rating "
         "FROM cards c JOIN card_reviews cr ON cr.card_id = c.id "
-        "WHERE c.subject = ? AND c.status = 'active' "
+        "WHERE c.subject = ? AND c.status = 'active' AND cr.undone = 0 "
         "ORDER BY c.id DESC, cr.id DESC", (subject,)).fetchall()
     per_card: dict[int, list[int]] = {}
     for r_ in rows_:
@@ -350,8 +381,38 @@ def card_mastery_signal(conn: Any, subject: str) -> dict[int, tuple[float, int]]
     return out
 
 
+def concept_csv(ids: list[int] | tuple[int, ...]) -> str:
+    """唯一的 concept_ids 序列化器（唯一真相源）。
+
+    格式恒为两侧包裹逗号、单逗号分隔：",1,7,"；空列表返回 ""。
+
+    历史背景：库内曾同时存在三种互不兼容的写法——
+      1. "[]"        schema 默认值（config.py v10 的 DEFAULT '[]'，JSON 风格）
+      2. ",1,,,7,"   旧的 bind_problem（",".join(f",{cid},")，多出空段）
+      3. ",1,7,"     bind_concept 的正确写法
+    三格式共存会让任何精确等值匹配不可靠。所有写入点必须统一走本函数。
+    """
+    seen: set[int] = set()
+    ordered: list[int] = []
+    for raw in (ids or []):
+        s = str(raw).strip()
+        if not s.lstrip("-").isdigit():
+            continue
+        i = int(s)
+        if i not in seen:  # 去重且保序：concept_ids 语义上是集合
+            seen.add(i)
+            ordered.append(i)
+    if not ordered:
+        return ""
+    return f",{','.join(str(i) for i in ordered)},"
+
+
 def concept_ids_to_list(raw: str) -> list[int]:
-    """DB 内 concept_ids 为两侧逗号 CSV（如 ",1,7,"），解析为整数列表。"""
+    """解析 concept_ids。容错处理历史遗留格式（"[]"、含空段的 ",1,,,7,"）。
+
+    正常输入为两侧逗号 CSV（",1,7,"）。历史脏值靠 split + isdigit 过滤掉
+    非数字段（"[]"、""），因此不会崩，但写入端已统一为 concept_csv。
+    """
     try:
         return [int(x) for x in (raw or "").split(",") if x.strip().isdigit()]
     except (TypeError, ValueError):
@@ -390,29 +451,71 @@ def update_progress_cached(subject: str = "physics") -> None:
     _progress_ttl[key] = now_ts + 15.0
 
 
-def update_progress(subject: str = "physics", force: bool = False) -> None:
+def update_progress(subject: str = "physics", force: bool = False,
+                    entry_point: str = "other", evidence: str = "") -> None:
     """重算掌握度：自身聚合 + 先修门传播两轮（A→B 表示 A 是先修）。
 
     显式调用 = 数据已变，永远立即重算（force 参数保留兼容，行为不变）。
+    D4 事件溯源：重算前后值有实际变化的 concept 落 mastery_events
+    （entry_point=哪个入口触发 / evidence=证据摘要 / prev→cur / revision=该概念第几次变化），
+    全量重算仍是唯一写路径，事件只作审计/回放依据。
     """
     ensure_seed(subject)
     with DB_LOCK, db() as conn:
+        # D4：重算前旧值快照（本学科全部已有 concept_progress 行）
+        prev = {r["concept_id"]: round(float(r["mastery"] or 0.0), 3) for r in conn.execute(
+            "SELECT cp.concept_id, cp.mastery FROM concept_progress cp "
+            "JOIN concepts c ON c.id = cp.concept_id WHERE c.subject = ?", (subject,)
+        ).fetchall()}
         ids = [r["id"] for r in conn.execute(
             "SELECT id FROM concepts WHERE parent_id <> 0 AND subject = ?", (subject,)
         ).fetchall()]
+        id_set = set(ids)
         # Phase 2：本学科概念的闪卡驱动掌握度（双驱动融合）
         card_m = card_mastery_signal(conn, subject)
+
+        # ── 题目-major 聚合（反转循环）──
+        # 旧实现对每个概念各发一条 `concept_ids LIKE '%,id,%'`：前导通配符使任何索引
+        # 都失效，且复杂度 O(概念数 × 题目数) —— 实测 computer 学科 3000 题时 855ms。
+        # 改为遍历题目一次、按概念累加，复杂度 O(题目数 × 每题概念数)。
+        acc: dict[int, list[float]] = {}
+        for p in conn.execute(
+            "SELECT concept_ids, mastery FROM problems "
+            "WHERE subject = ? AND concept_ids IS NOT NULL AND concept_ids <> ''",
+            (subject,),
+        ).fetchall():
+            val = float(p["mastery"] or 0) / 5.0
+            for cid in concept_ids_to_list(p["concept_ids"]):
+                if cid in id_set:
+                    acc.setdefault(cid, []).append(val)
+
         self_m: dict[int, float] = {}
+        insert_rows: list[tuple[int, float, int, str]] = []
+        caps = _evidence_caps(conn)  # M1 置信度封顶：证据 <3 次封顶（默认 1 次 0.5、2 次 0.8）
         for cid in ids:
-            m, cnt = _self_mastery(conn, cid, card_m.get(cid))
+            vals = acc.get(cid)
+            cnt = len(vals) if vals else 0
+            m = (sum(vals) / cnt) if cnt else 0.0
+            card_sig = card_m.get(cid)
+            m = _fuse_card(m, cnt, card_sig)
+            # M1：证据 = 题目数 + 有评分卡数；封顶只降不升，防单次蒙对即「掌握」
+            n_evid = cnt + (card_sig[1] if card_sig else 0)
+            cap = caps.get(n_evid, 1.0)
+            if m > cap:
+                m = cap
             self_m[cid] = m
-            conn.execute(
-                "INSERT OR REPLACE INTO concept_progress(concept_id, mastery, reviews, updated_at) "
-                "VALUES (?, ?, ?, ?)",
-                (cid, m, cnt, now()),
-            )
+            insert_rows.append((cid, m, cnt, now()))
+        # executemany 取代 N 次独立 execute
+        conn.executemany(
+            "INSERT OR REPLACE INTO concept_progress(concept_id, mastery, reviews, updated_at) "
+            "VALUES (?, ?, ?, ?)", insert_rows)
+
+        # 先修边：JOIN concepts 在 SQL 侧按学科过滤。
+        # 旧实现拉全学科 3503 条先修边后在 Python 里过滤，白付 I/O 与内存。
         links = conn.execute(
-            "SELECT concept_a, concept_b FROM concept_links WHERE relation = 'prerequisite'"
+            "SELECT l.concept_a, l.concept_b FROM concept_links l "
+            "JOIN concepts c ON c.id = l.concept_b "
+            "WHERE l.relation = 'prerequisite' AND c.subject = ?", (subject,),
         ).fetchall()
         prereq: dict[int, list[int]] = {}
         for l in links:
@@ -431,9 +534,24 @@ def update_progress(subject: str = "physics", force: bool = False) -> None:
                     changed = True
             if not changed:
                 break
-        for cid, val in eff.items():
-            conn.execute(
-                "UPDATE concept_progress SET mastery = ? WHERE concept_id = ?", (round(val, 3), cid),
+        conn.executemany(
+            "UPDATE concept_progress SET mastery = ? WHERE concept_id = ?",
+            [(round(val, 3), cid) for cid, val in eff.items()],
+        )
+        # D4：只记实际变化的行（与库内存储同口径的 3 位小数比较，避免舍入噪声误报；
+        # 新概念从 0 起算，0→0 不记）
+        evid = evidence[:200]
+        delta_rows = [(cid, prev.get(cid, 0.0), round(val, 3))
+                      for cid, val in eff.items() if prev.get(cid, 0.0) != round(val, 3)]
+        if delta_rows:
+            revs = {r["concept_id"]: int(r["n"]) for r in conn.execute(
+                "SELECT concept_id, COUNT(*) AS n FROM mastery_events "
+                "WHERE subject = ? GROUP BY concept_id", (subject,)).fetchall()}
+            conn.executemany(
+                "INSERT INTO mastery_events(subject, concept_id, entry_point, evidence, "
+                "revision, prev_mastery, cur_mastery, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [(subject, cid, entry_point, evid, revs.get(cid, 0) + 1, p, c, now())
+                 for cid, p, c in delta_rows],
             )
 
 
@@ -473,13 +591,18 @@ def learning_path(subject: str = "physics", threshold: float = 0.6) -> dict[str,
         parent_ids = {n["parent_id"] for n in nodes.values()}
         leaf = [cid for cid in nodes if nodes[cid]["parent_id"] != 0 and cid not in parent_ids]
 
-        # 先修边（仅限本学科节点）
+        # 先修边（仅限本学科节点）。在 SQL 侧双向 JOIN 过滤学科，
+        # 取代「拉全学科 3503 条先修边再在 Python 里判 nodes」的白付 I/O。
         prereq_of: dict[int, list[int]] = {}
-        for l in conn.execute("SELECT concept_a, concept_b FROM concept_links "
-                              "WHERE relation = 'prerequisite'").fetchall():
+        for l in conn.execute(
+            "SELECT l.concept_a, l.concept_b FROM concept_links l "
+            "JOIN concepts ca ON ca.id = l.concept_a "
+            "JOIN concepts cb ON cb.id = l.concept_b "
+            "WHERE l.relation = 'prerequisite' AND ca.subject = ? AND cb.subject = ?",
+            (subject, subject),
+        ).fetchall():
             a, b = int(l["concept_a"]), int(l["concept_b"])
-            if b in nodes and a in nodes:
-                prereq_of.setdefault(b, []).append(a)
+            prereq_of.setdefault(b, []).append(a)
 
         def chapter_name(cid: int) -> str:
             ch = nodes.get(int(nodes[cid]["chapter_id"] or 0))
@@ -535,6 +658,93 @@ def learning_path(subject: str = "physics", threshold: float = 0.6) -> dict[str,
     }
 
 
+# ── U1 统一下一步：next 由状态计算而非游标 ──────────────────
+
+def weak_oral_topic(subject: str = "physics",
+                    topics: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
+    """M2 口试选题：薄弱主题（掌握度<3）中错因权重最高者；无薄弱主题返回 None。
+
+    从 _handle_dashboard 原样抽出供 next_step 复用（同一逻辑同一结果，不因入口分叉）。
+    topics 可传已查的仪表盘主题列表免重复查询；None 时自查（同口径 SQL）。
+    纯读派生，不落库。
+    """
+    from db import normalize_subject
+    from errors import queue_weight
+    subject = normalize_subject(subject)
+    if topics is None:
+        topics = rows("""
+            SELECT topic, COUNT(*) AS count, ROUND(AVG(mastery), 1) AS mastery
+            FROM problems WHERE subject = ? AND topic <> ''
+            GROUP BY topic ORDER BY mastery ASC, count DESC LIMIT 8
+        """, (subject,))
+    weak_ts = [t for t in topics if float(t["mastery"] or 0) < 3]
+    if not weak_ts:
+        return None
+    # 错因权重高者优先（知识空白/概念错 > 陷阱 > 执行类）；同权重取掌握度更低
+    tweight: dict[str, int] = {}
+    for p in rows(
+        "SELECT topic, error_type FROM problems WHERE subject = ? AND topic <> ''",
+        (subject,),
+    ):
+        w = queue_weight(p["error_type"])
+        if w > tweight.get(p["topic"], -1):
+            tweight[p["topic"]] = w
+    best = min(weak_ts, key=lambda t: (-tweight.get(t["topic"], 0), float(t["mastery"] or 5)))
+    return {"topic": best["topic"], "mastery": best["mastery"],
+            "error_weight": tweight.get(best["topic"], 0)}
+
+
+def next_step(subject: str = "physics") -> dict[str, Any]:
+    """U1 统一 next：由当前状态计算下一步（只读），任意入口得到同一条全局 next。
+
+    优先级（从掌握度/到期状态推导，非前端游标）：
+      待答问题（到期错题复习）→ 到期闪卡 → 薄弱主题口试(M2) → 下一未掌握概念(先修链) → 完成。
+    返回 next（当前应做的第一步）+ queue（全部可做步骤，按序）；每步带
+    action/label_key/参数，前端按 i18n 渲染，后端不硬编码文案。
+    完成某步后状态变化（如 due 清零），下次调用 next 自然前进——无需持久化游标。
+    """
+    from datetime import date
+    from db import normalize_subject
+    subject = normalize_subject(subject)
+    queue: list[dict[str, Any]] = []
+
+    # 1) 待答问题：到期错题复习
+    due = row(
+        "SELECT COUNT(*) AS count FROM reviews WHERE completed = 0 AND due_date <= ? "
+        "AND problem_id IN (SELECT id FROM problems WHERE subject = ?)",
+        (date.today().isoformat(), subject)) or {}
+    if int((due or {}).get("count") or 0) > 0:
+        queue.append({"action": "review", "page": "review",
+                      "label_key": "queue.reviewDue", "n": int(due["count"])})
+
+    # 2) 到期复习：到期闪卡（cards.stats 与卡片页同口径）
+    try:
+        from cards import stats as _card_stats
+        cdue = int(_card_stats(subject).get("due") or 0)
+    except Exception as exc:  # 卡片模块异常不拖垮 next_step
+        LOG.debug("next_step：闪卡到期读取失败已跳过: %s", exc)
+        cdue = 0
+    if cdue > 0:
+        queue.append({"action": "cards", "page": "cards",
+                      "label_key": "queue.reviewCards", "n": cdue})
+
+    # 3) 薄弱主题口试（M2 错因加权选题）
+    oral = weak_oral_topic(subject)
+    if oral:
+        queue.append({"action": "oral", "page": "oral", "topic": oral["topic"],
+                      "label_key": "queue.oralWeak", "s": oral["topic"]})
+
+    # 4) 下一未掌握概念（先修链推荐：可学的弱概念优先，被卡则先补最弱先修）
+    now = (learning_path(subject) or {}).get("now")
+    if now:
+        queue.append({"action": "learn", "page": "cards", "concept_id": now["concept_id"],
+                      "name": now["name"], "reason": now.get("reason", ""),
+                      "label_key": "queue.learnNext", "s": now["name"]})
+
+    nxt = queue[0] if queue else {"action": "done", "label_key": "queue.allDone"}
+    return {"subject": subject, "next": nxt, "queue": queue}
+
+
 def _concept_ids_of(problem: dict[str, Any]) -> list[int]:
     return concept_ids_to_list(problem.get("concept_ids") or "")
 
@@ -549,11 +759,14 @@ def bind_problem(problem_id: int) -> list[int]:
     if not problem:
         return []
     concept_ids = _local_bind(problem)
-    csv = ",".join(f",{cid}," for cid in concept_ids) or ""
+    # 旧写法 ",".join(f",{cid},") 对 [1,7] 产出 ",1,,,7,"（多出空段），
+    # 与 bind_concept 的 ",1,7," 不兼容 → 统一走 concept_csv。
+    csv = concept_csv(concept_ids)
     with DB_LOCK, db() as conn:
         conn.execute("UPDATE problems SET concept_ids = ? WHERE id = ?", (csv, problem_id))
     # 按题目实际学科重算掌握度（默认 physics 会导致非物理学科失更新）
-    update_progress(problem["subject"] or "physics", force=True)
+    update_progress(problem["subject"] or "physics", force=True, entry_point="bind",
+                    evidence=f"题目#{problem_id} 自动绑定 {len(concept_ids)} 个概念")
     return concept_ids
 
 
@@ -707,6 +920,47 @@ def revert_explanation(concept_id: int) -> bool:
     return update_explanation(concept_id, "")
 
 
+def update_evidence(concept_id: int, evidence: list[str] | None,
+                    assessment_prompt: str | None) -> bool:
+    """G2：更新概念达标判据 evidence[]（JSON 数组落库）与口试模板 assessment_prompt。
+
+    - evidence：可观察判据列表（每条一句，如「能独立写出 F=ma 并说明适用条件」），
+      作为 M1 定量判分的素材与详情页展示；None 表示不改动，[] 表示清空。
+    - assessment_prompt：口试/自测首问模板，可含 {{name}} 占位（口试时替换为概念名）。
+    概念不存在返回 False。
+    """
+    sets: list[str] = []
+    params: list[Any] = []
+    if evidence is not None:
+        items = [str(x).strip() for x in evidence if str(x).strip()][:20]  # 上限 20 条防滥用
+        sets.append("evidence = ?")
+        params.append(json.dumps(items, ensure_ascii=False))
+    if assessment_prompt is not None:
+        sets.append("assessment_prompt = ?")
+        params.append(str(assessment_prompt).strip()[:500])
+    if not sets:
+        cur = None
+    else:
+        with DB_LOCK, db() as conn:
+            cur = conn.execute(
+                f"UPDATE concepts SET {', '.join(sets)} WHERE id = ?",
+                (*params, concept_id))
+    return bool(cur and cur.rowcount > 0)
+
+
+def concept_evidence(concept_id: int) -> dict[str, Any]:
+    """G2：读取单个概念的判据与口试模板（evidence JSON → 列表）。"""
+    r = row("SELECT evidence, assessment_prompt FROM concepts WHERE id = ?", (concept_id,))
+    if not r:
+        return {"evidence": [], "assessment_prompt": ""}
+    try:
+        ev = json.loads(r["evidence"] or "[]")
+        ev = [str(x) for x in ev] if isinstance(ev, list) else []
+    except (json.JSONDecodeError, TypeError):
+        ev = []
+    return {"evidence": ev, "assessment_prompt": str(r["assessment_prompt"] or "")}
+
+
 _mentions_cache: dict[str, tuple[str, list[dict[str, Any]]]] = {}
 
 
@@ -778,21 +1032,25 @@ def bind_concept(problem_id: int, concept_id: int, subject: str = "physics") -> 
     concept = row("SELECT id FROM concepts WHERE id = ? AND subject = ?", (concept_id, subject))
     if not problem or not concept:
         return False
-    ids = [int(x) for x in str(problem["concept_ids"] or "").split(",") if x.strip().isdigit()]
+    ids = concept_ids_to_list(problem["concept_ids"])
     if concept_id in ids:
         return True
     ids.append(concept_id)
-    csv = f",{','.join(str(i) for i in ids)},"
+    csv = concept_csv(ids)
     with DB_LOCK, db() as conn:
         conn.execute("UPDATE problems SET concept_ids = ?, updated_at = ? WHERE id = ?",
                      (csv, now(), problem_id))
-    update_progress(subject, force=True)
+    update_progress(subject, force=True, entry_point="bind",
+                    evidence=f"题目#{problem_id} 绑定概念#{concept_id}")
     invalidate_mentions(subject)
     return True
 
 
 def delete_concept(concept_id: int) -> bool:
-    """删除概念（级联删除其关系边；chapter/unit 级需先确认）。"""
+    """删除概念（级联删除其关系边；chapter/unit 级需先确认）。
+
+    D3：删除前把概念 + 关系边（双向）+ 掌握度行全量快照入回收站，可原样恢复。
+    """
     with DB_LOCK, db() as conn:
         node = conn.execute("SELECT * FROM concepts WHERE id = ?", (concept_id,)).fetchone()
         if not node:
@@ -800,7 +1058,12 @@ def delete_concept(concept_id: int) -> bool:
         children = conn.execute("SELECT COUNT(*) AS c FROM concepts WHERE parent_id = ?", (concept_id,)).fetchone()["c"]
         if children:
             return False
-        bound = conn.execute("SELECT COUNT(*) AS c FROM problems WHERE concept_ids LIKE ?", (f"%,{concept_id},%",)).fetchone()["c"]
+        trash.snapshot(conn, "concept", concept_id, [
+            ("concepts", "SELECT * FROM concepts WHERE id = ?", (concept_id,)),
+            ("concept_links", "SELECT * FROM concept_links WHERE concept_a = ? OR concept_b = ?",
+             (concept_id, concept_id)),
+            ("concept_progress", "SELECT * FROM concept_progress WHERE concept_id = ?", (concept_id,)),
+        ])
         with conn:
             conn.execute("DELETE FROM concept_links WHERE concept_a = ? OR concept_b = ?", (concept_id, concept_id))
             conn.execute("DELETE FROM concept_progress WHERE concept_id = ?", (concept_id,))
@@ -814,12 +1077,16 @@ _LINK_RELATIONS = {"prerequisite", "related", "contrast", "analogy", "inclusion"
 _LINK_DIRECTED = {"prerequisite", "progression"}
 
 
-def link_concepts(a: int, b: int, relation: str, subject: str = "physics") -> tuple[bool, str]:
-    """在两个概念间建一条 relation 边（幂等）。
+def link_concepts(a: int, b: int, relation: str, subject: str = "physics",
+                  reason: str = "", strength: str = "soft",
+                  evidence_ref: str = "") -> tuple[bool, str]:
+    """在两个概念间建一条 relation 边（幂等，G1 溯源）。
 
     - prerequisite 保留方向：a 是 b 的先修（供学习路径/先修门正确读取）；
     - related/contrast 对称：规整为 (min, max) 防反向重复；
     - 校验关系白名单、两端存在且同学科、禁自环；`INSERT OR IGNORE` 幂等；
+    - G1：reason 必填（一句话依据，UI 强制/AI 附带），strength 限 hard|soft，
+      evidence_ref 可选教材锚点（"file:page" 形如 "physics.md:p42"）；
     - 建先修边后重算掌握度传播，使学习路径/进度即时反映。
     返回 (成功?, 错误信息)。
     """
@@ -828,6 +1095,12 @@ def link_concepts(a: int, b: int, relation: str, subject: str = "physics") -> tu
         return False, "不支持的关系类型（须为 prerequisite/related/contrast）"
     if a == b:
         return False, "不能与自身连线"
+    reason = str(reason or "").strip()
+    if not reason:
+        return False, "请填写连线理由（一句话依据，图谱溯源要求）"
+    strength = str(strength or "soft").strip().lower()
+    if strength not in ("hard", "soft"):
+        return False, "边强度须为 hard 或 soft"
     with DB_LOCK, db() as conn:
         na = conn.execute("SELECT subject FROM concepts WHERE id = ?", (a,)).fetchone()
         nb = conn.execute("SELECT subject FROM concepts WHERE id = ?", (b,)).fetchone()
@@ -842,8 +1115,10 @@ def link_concepts(a: int, b: int, relation: str, subject: str = "physics") -> tu
         else:
             ca, cb = (a, b) if a < b else (b, a)
         conn.execute(
-            "INSERT OR IGNORE INTO concept_links(concept_a, concept_b, relation) VALUES (?, ?, ?)",
-            (ca, cb, relation))
+            "INSERT OR IGNORE INTO concept_links(concept_a, concept_b, relation, strength, reason, evidence_ref) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (ca, cb, relation, strength, reason, str(evidence_ref or "").strip()))
     if relation == "prerequisite":
-        update_progress(subject, force=True)
+        update_progress(subject, force=True, entry_point="link",
+                        evidence=f"新增先修边：概念#{a} → 概念#{b}（{reason}）")
     return True, ""

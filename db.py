@@ -21,9 +21,20 @@ _TLS = threading.local()
 # 全局连接登记表 + 代次：文件级备份/还原前 `close_all_connections()` 关闭全部线程
 # 的连接（否则 Windows 上文件被占用 rename/copy 失败）；epoch 递增使各线程下次
 # 取连接时自动重建，避免复用已关闭的连接。
-_ALL_CONNS: set[sqlite3.Connection] = set()
+#
+# 结构为 {threading.get_ident(): conn}：
+#   早期用 set（强引用）持有连接，注释称「配合线程结束自然关闭」并不成立——
+#   set 的强引用让连接在线程死亡后仍被钉住，永不释放（sqlite3.Connection 不可
+#   weakref，无法用 WeakSet 兜底）。HTTP keep-alive 每条约 120s 回收一次线程，
+#   每个死线程留下一个打开句柄（含 64MB 页缓存），Windows 上还长期占用
+#   learnos.db / -wal 文件句柄。
+#   改为按线程 ident 建索引：ident 被新线程复用时旧条目自动被覆盖（旧连接随之释放），
+#   并由 _reap_dead_conns() 定期回收已退出的线程。
+_ALL_CONNS: dict[int, sqlite3.Connection] = {}
 _ALL_CONNS_LOCK = threading.Lock()
 _EPOCH = 0
+# 登记表容量软上限：超过则触发一次死线程连接回收（见 _reap_dead_conns）。
+_CONN_REAP_THRESHOLD = 8
 
 
 def now() -> str:
@@ -35,9 +46,15 @@ def now() -> str:
 _PROD_PRAGMAS = [
     "PRAGMA busy_timeout = 5000",          # 写竞争时等待而非立即报错
     "PRAGMA synchronous = NORMAL",         # WAL 下安全且显著降低 fsync 开销
-    "PRAGMA cache_size = -64000",          # 64MB 页缓存（负值为 KB）
+    # 16MB 页缓存（负值为 KB）。原为 64MB，但库本体仅约 14MB，且缓存是**每连接**
+    # 独立的——多线程叠加时（每请求一线程 + keep-alive）会成倍放大内存占用。
+    "PRAGMA cache_size = -16000",
     "PRAGMA temp_store = MEMORY",          # 临时表/索引常驻内存
     "PRAGMA wal_autocheckpoint = 1000",    # 每 1000 页自动 checkpoint
+    # WAL 文件体积上限（字节，64MB）：防止在两次 autocheckpoint 之间的高频写入
+    # 让 -wal 文件无限膨胀。达到上限后 SQLite 会在下次事务时强制 checkpoint。
+    # 库本体约 14MB，64MB 上限留有足够缓冲又不至于失控（超出会触发 checkpoint）。
+    "PRAGMA journal_size_limit = 67108864",
     "PRAGMA secure_delete = OFF",          # 非隐私删除场景，关掉安全擦除提性能
 ]
 
@@ -78,8 +95,48 @@ def _thread_conn() -> sqlite3.Connection:
         _TLS.db_path = str(DB_PATH)
         _TLS.epoch = _EPOCH
         with _ALL_CONNS_LOCK:
-            _ALL_CONNS.add(conn)
+            ident = threading.get_ident()
+            # ident 被新线程复用 → 旧线程确已退出，显式关闭其连接而非留给 GC：
+            # 否则会产生 ResourceWarning: unclosed database，且 WAL checkpoint
+            # 时机不可控（GC 可能在整库备份/还原的临界点才触发）。
+            old = _ALL_CONNS.get(ident)
+            if old is not None and old is not conn:
+                try:
+                    old.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                except sqlite3.Error:
+                    pass
+                try:
+                    old.close()
+                except sqlite3.Error:
+                    pass
+            _ALL_CONNS[ident] = conn
+            if len(_ALL_CONNS) > _CONN_REAP_THRESHOLD:
+                _reap_dead_conns()
     return conn
+
+
+def _reap_dead_conns() -> int:
+    """关闭并移除「所属线程已退出」的连接。返回回收数量。
+
+    调用方须已持有 _ALL_CONNS_LOCK。
+    """
+    live = {t.ident for t in threading.enumerate()}
+    dead = [ident for ident in _ALL_CONNS if ident not in live]
+    for ident in dead:
+        conn = _ALL_CONNS.pop(ident, None)
+        if conn is None:
+            continue
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error:
+            pass
+        try:
+            conn.close()
+        except sqlite3.Error:
+            pass
+    if dead:
+        LOG.info("回收 %d 个已退出线程残留的数据库连接", len(dead))
+    return len(dead)
 
 
 def close_thread_conn() -> None:
@@ -102,7 +159,7 @@ def close_thread_conn() -> None:
         except sqlite3.Error:
             pass
         with _ALL_CONNS_LOCK:
-            _ALL_CONNS.discard(conn)
+            _ALL_CONNS.pop(threading.get_ident(), None)
     _TLS.conn = None
     _TLS.db_path = None
     _TLS.depth = 0
@@ -116,7 +173,7 @@ def close_all_connections() -> None:
     """
     global _EPOCH
     with _ALL_CONNS_LOCK:
-        conns = list(_ALL_CONNS)
+        conns = list(_ALL_CONNS.values())
         _ALL_CONNS.clear()
     for c in conns:
         try:
@@ -150,6 +207,38 @@ def db():
             yield conn
         finally:
             _TLS.depth = depth
+
+
+def _v31_normalize_concept_ids(conn: sqlite3.Connection) -> int:
+    """v31：把 problems.concept_ids 的历史脏值统一为 ',1,7,'。返回清洗行数。
+
+    三种历史格式（'[]' / ',1,,,7,' / ',1,7,'）—— split+isdigit 已能容错读出，
+    故这里只是消除不一致：任何精确等值匹配、字符串长度假设、去重假设才可靠。
+    """
+    changed = 0
+    try:
+        rows = conn.execute(
+            "SELECT id, concept_ids FROM problems WHERE concept_ids IS NOT NULL").fetchall()
+    except sqlite3.Error as exc:  # 列不存在（理论不可能，v10 已建列）亦不阻断启动
+        LOG.warning("v31 读取 concept_ids 失败，跳过清洗: %s", exc)
+        return 0
+    for r in rows:
+        raw = r["concept_ids"]
+        ids = [int(x) for x in (raw or "").split(",") if x.strip().isdigit()]
+        seen: set[int] = set()
+        ordered: list[int] = []
+        for i in ids:  # 去重且保序
+            if i not in seen:
+                seen.add(i)
+                ordered.append(i)
+        normalized = f",{','.join(str(i) for i in ordered)}," if ordered else ""
+        if normalized != raw:
+            conn.execute("UPDATE problems SET concept_ids = ? WHERE id = ?",
+                         (normalized, r["id"]))
+            changed += 1
+    if changed:
+        LOG.info("v31 已清洗 %d 行 concept_ids 格式", changed)
+    return changed
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -691,6 +780,138 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (30, ?)", (now(),))
         LOG.info("数据库已迁移到 v30 (M8 向量检索 rag_embeddings)")
 
+    # v31: 清洗 problems.concept_ids 的历史脏值 + 补 concept_links/hints 索引
+    # 背景：库内曾同时存在三种互不兼容格式——
+    #   "[]"      ← v10 建列时的 DEFAULT '[]'（JSON 风格），INSERT 省略本列即落入
+    #   ",1,,,7," ← 旧 bind_problem 的 ",".join(f",{cid},") 多出空段
+    #   ",1,7,"   ← 正确格式
+    # 读取端靠 split+isdigit 侥幸不崩，但任何精确等值匹配都不可靠。
+    # 写入端已统一为 graph.concept_csv()，此处只做一次性数据清洗。
+    if current < 31:
+        _v31_normalize_concept_ids(conn)
+        # 索引取舍全部经实测（computer 学科，concept_links 10774 行 / hints）：
+        #
+        #   前向 concept_a = ?       0.012 ms → 无需建：表已有
+        #                            PRIMARY KEY (concept_a, concept_b, relation)，
+        #                            SQLite 的 sqlite_autoindex 已覆盖该方向。
+        #                            早期草稿曾加 idx_links_a，属冗余（浪费空间+写放大）。
+        #   反向 concept_b = ?       0.215 ms → 0.003 ms（67×）  ← 建 idx_links_b
+        #   relation = 'prereq'      1.581 ms → 不建：结果占表 33%~55%，选择性太差，
+        #                            索引 seek + 逐行回表反而比顺序全扫更贵
+        #                            （实测加索引后 1.238 → 2.006 ms，净退化）。
+        #                            该场景改用 JOIN concepts 在 SQL 侧过滤学科
+        #                            （实测 1.215 → 0.743 ms，且复用 idx_links_b）。
+        #   hints by problem_id      0.011 ms → 0.003 ms（3.6×） ← 建 idx_hints_problem
+        #                            关键不在绝对耗时，而在消除 handler_problems
+        #                            相关子查询「每道错题一次全表扫」。
+        for ddl in (
+            "CREATE INDEX IF NOT EXISTS idx_links_b ON concept_links(concept_b, relation)",
+            "CREATE INDEX IF NOT EXISTS idx_hints_problem ON hints(problem_id, level)",
+        ):
+            conn.execute(ddl)
+        # 清掉 v31 早期草稿里误建的冗余/负收益索引（若在旧副本上曾创建）
+        for stale in ("idx_links_rel", "idx_links_a"):
+            conn.execute(f"DROP INDEX IF EXISTS {stale}")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (31, ?)", (now(),))
+        LOG.info("数据库已迁移到 v31 (concept_ids 格式清洗 + 图谱/提示索引)")
+
+    # v32: D1 复习日志前后快照 — card_reviews 从「结果记录」升级为「不可变事实」
+    #      每行携带评分前完整记忆态快照（prev_ 八列，D2 撤销 = 原子恢复）+
+    #      评分后 FSRS 三态（cur_state/stability/difficulty，与 cards 行一致性校验用；
+    #      cur_due/cur_interval 复用既有 due_date/interval_days 列，不冗余建列）+
+    #      F2 参数指纹（fsrs_params_version；default 参数为空串）+
+    #      D2 撤销标记（undone：1=已作废，撤销只针对最近一行未作废日志）。
+    #      全部 ADD COLUMN 带 DEFAULT：旧库升级零损、旧代码可跑（回滚=撤代码不撤库）；
+    #      旧数据行的 prev_due 为空串 → 不可撤销（无快照语义，undo 显式拒绝）。
+    if current < 32:
+        # 列存在性检查保证幂等：v4 重放测试会带着 v32 结构库重跑全部迁移
+        rcols = {r[1] for r in conn.execute("PRAGMA table_info(card_reviews)").fetchall()}
+        for col, ddl in (
+            ("prev_state", "ALTER TABLE card_reviews ADD COLUMN prev_state INTEGER NOT NULL DEFAULT 0"),
+            ("prev_stability", "ALTER TABLE card_reviews ADD COLUMN prev_stability REAL NOT NULL DEFAULT 0.0"),
+            ("prev_difficulty", "ALTER TABLE card_reviews ADD COLUMN prev_difficulty REAL NOT NULL DEFAULT 0.0"),
+            ("prev_due", "ALTER TABLE card_reviews ADD COLUMN prev_due TEXT NOT NULL DEFAULT ''"),
+            ("prev_interval", "ALTER TABLE card_reviews ADD COLUMN prev_interval INTEGER NOT NULL DEFAULT 1"),
+            ("prev_repetition", "ALTER TABLE card_reviews ADD COLUMN prev_repetition INTEGER NOT NULL DEFAULT 0"),
+            ("prev_ease", "ALTER TABLE card_reviews ADD COLUMN prev_ease REAL NOT NULL DEFAULT 2.5"),
+            ("prev_last_review", "ALTER TABLE card_reviews ADD COLUMN prev_last_review TEXT NOT NULL DEFAULT ''"),
+            ("cur_state", "ALTER TABLE card_reviews ADD COLUMN cur_state INTEGER NOT NULL DEFAULT 0"),
+            ("cur_stability", "ALTER TABLE card_reviews ADD COLUMN cur_stability REAL NOT NULL DEFAULT 0.0"),
+            ("cur_difficulty", "ALTER TABLE card_reviews ADD COLUMN cur_difficulty REAL NOT NULL DEFAULT 0.0"),
+            ("fsrs_params_version", "ALTER TABLE card_reviews ADD COLUMN fsrs_params_version TEXT NOT NULL DEFAULT ''"),
+            ("undone", "ALTER TABLE card_reviews ADD COLUMN undone INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if col not in rcols:
+                conn.execute(ddl)
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (32, ?)", (now(),))
+        LOG.info("数据库已迁移到 v32 (复习日志前后快照 + 撤销标记)")
+
+    # v33: D3 回收站 — 删除前快照入 trash（payload_json 按表存全行），
+    #      保留期内（settings.trash_retention_days，默认 3 日）可原样恢复；
+    #      0 = 永不自动清理。恢复只标记 restored_at，不删行（审计可查）。
+    if current < 33:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS trash (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL,
+                entity_id INTEGER NOT NULL,
+                payload_json TEXT NOT NULL,
+                trashed_at TEXT NOT NULL,
+                restored_at TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_trash_entity ON trash(kind, entity_id, id)")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (33, ?)", (now(),))
+        LOG.info("数据库已迁移到 v33 (回收站 trash 表)")
+
+    # v34: D4 掌握度事件溯源 — update_progress 重算前后值落 mastery_events，
+    #      只记实际变化的行（谁改的/依据什么/改前改后），全量重算仍是唯一写路径。
+    if current < 34:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS mastery_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subject TEXT NOT NULL,
+                concept_id INTEGER NOT NULL,
+                entry_point TEXT NOT NULL DEFAULT 'other',
+                evidence TEXT NOT NULL DEFAULT '',
+                revision INTEGER NOT NULL DEFAULT 1,
+                prev_mastery REAL NOT NULL DEFAULT 0.0,
+                cur_mastery REAL NOT NULL DEFAULT 0.0,
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mastery_events_concept "
+            "ON mastery_events(subject, concept_id, id)")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (34, ?)", (now(),))
+        LOG.info("数据库已迁移到 v34 (掌握度事件溯源 mastery_events)")
+
+    # v35: G1/G2 图谱溯源 — 边可解释、概念可观察：
+    #   concept_links 增 strength(hard|soft)/reason(一句)/evidence_ref(file,page 锚点)；
+    #   concepts 增 evidence(达标判据 JSON 数组)/assessment_prompt(口试模板，含 {{name}})。
+    #   存量边落默认（soft/空理由），种子边在加载时标 evidence_ref='seed'；不回填。
+    if current < 35:
+        # 表存在性守卫：v10 之前的旧库 / 最小化构造库可能无 concepts/concept_links，
+        # 此时跳过加列（v10 迁移建表后，新库天然含最新列，无需补救）。
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        if "concept_links" in tables:
+            lcols = {r[1] for r in conn.execute("PRAGMA table_info(concept_links)").fetchall()}
+            if "strength" not in lcols:
+                conn.execute("ALTER TABLE concept_links ADD COLUMN strength TEXT NOT NULL DEFAULT 'soft'")
+            if "reason" not in lcols:
+                conn.execute("ALTER TABLE concept_links ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
+            if "evidence_ref" not in lcols:
+                conn.execute("ALTER TABLE concept_links ADD COLUMN evidence_ref TEXT NOT NULL DEFAULT ''")
+        if "concepts" in tables:
+            ccols = {r[1] for r in conn.execute("PRAGMA table_info(concepts)").fetchall()}
+            if "evidence" not in ccols:
+                conn.execute("ALTER TABLE concepts ADD COLUMN evidence TEXT NOT NULL DEFAULT ''")
+            if "assessment_prompt" not in ccols:
+                conn.execute("ALTER TABLE concepts ADD COLUMN assessment_prompt TEXT NOT NULL DEFAULT ''")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (35, ?)", (now(),))
+        LOG.info("数据库已迁移到 v35 (图谱溯源 concept_links 溯源列 + concepts 判据/口试模板)")
+
 
 # 内置三科的中文显示名（title）；user 自定义过的中文 title 不会被覆盖。
 _BUILTIN_SUBJECT_TITLES = {
@@ -793,6 +1014,8 @@ def init_db() -> None:
         )
     LOG.info("数据库已初始化: %s", DB_PATH)
     register_builtin_subjects()
+    import trash as _trash
+    _trash.startup_purge()  # D3：启动时清理过期回收站快照
 
     # 性能索引（幂等，已存在则跳过）
     with DB_LOCK, db() as conn:

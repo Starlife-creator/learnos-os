@@ -53,6 +53,7 @@ _QUESTION_SCHEMA = {
         "unit": {"type": "string"},
         "difficulty": {"type": "integer", "min": 1, "max": 5},
         "parts": {"type": "array", "items": {"type": "object"}},
+        "source": {"type": "string"},  # C3 来源标记（apply 时统一注入 material）
     }}},
 }
 
@@ -676,8 +677,11 @@ def apply_cards(cards: list[dict[str, Any]], subject: str) -> int:
             if not q or not a:
                 continue
             conn.execute(
+                # 必须显式写 concept_ids：省略时落到列默认值，而 v10 的 DEFAULT 是
+                # JSON 风格的 '[]'（config.py），与全代码约定的 CSV 格式不兼容。
                 "INSERT INTO problems(title, course, topic, content, my_attempt, "
-                "created_at, updated_at, subject, mastery) VALUES (?, '', ?, ?, '', ?, ?, ?, 1)",
+                "created_at, updated_at, subject, mastery, concept_ids) "
+                "VALUES (?, '', ?, ?, '', ?, ?, ?, 1, '')",
                 (q[:200], c.get("concept", "") or "", a[:2000], now(), now(), subject),
             )
             count += 1
@@ -740,7 +744,7 @@ def apply_draft(payload: dict[str, Any], subject: str) -> dict[str, Any]:
             cid = graph.add_concept(name, parent, subject=subject)
             if cid:
                 name_to_id[name] = cid
-        # 概念关联（related → concept_links，双向幂等）
+        # 概念关联（related → concept_links，双向幂等；G1 溯源：软性边 + 固定理由）
         with DB_LOCK, db() as conn:
             for c in cp.get("concepts", []):
                 a = name_to_id.get(str(c.get("name", "")).strip())
@@ -750,14 +754,20 @@ def apply_draft(payload: dict[str, Any], subject: str) -> dict[str, Any]:
                     b = name_to_id.get(str(rel_name).strip())
                     if b and b != a:
                         cur = conn.execute(
-                            "INSERT OR IGNORE INTO concept_links(concept_a, concept_b, relation) "
-                            "VALUES (?, ?, 'related')", (min(a, b), max(a, b)))
+                            "INSERT OR IGNORE INTO concept_links(concept_a, concept_b, relation, "
+                            "strength, reason, evidence_ref) VALUES (?, ?, 'related', 'soft', ?, 'material-import')",
+                            (min(a, b), max(a, b),
+                             f"资料导入向导：AI 提取「{str(c.get('name', '')).strip()[:20]}」与「{str(rel_name).strip()[:20]}」的关联"))
                         stats["links_added"] += cur.rowcount
         stats["concepts_added"] = len([n for n in name_to_id.values() if n])
 
     qs = payload.get("questions")
     if qs:
         import bank
+        # C3 来源标记：资料导入向导确认的题统一标 material（AI 从教材提取）
+        for q in qs:
+            if isinstance(q, dict):
+                q["source"] = "material"
         result = bank.import_questions(qs, subject)
         stats["questions_imported"] = result["imported"]
         stats["questions_errors"] = result["errors"]

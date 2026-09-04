@@ -113,7 +113,10 @@ async function loadLearningPath(containerId) {
     html += `<p>${t('cards.pathAllGood')}</p>`;
   }
   if ((d.ready_weak || []).length) {
-    html += `<div class="text-muted" style="margin:6px 0">${t('cards.pathWeak').replace('{n}', d.ready_weak.length)}</div>`;
+    html += `<div class="flex-between" style="margin:6px 0">
+      <div class="text-muted">${t('cards.pathWeak').replace('{n}', d.ready_weak.length)}</div>
+      <button class="btn btn-primary btn-sm" onclick="batchMakeCards()" data-i18n="cards.batchMake">⚡ 批量出卡</button>
+    </div>`;
     html += d.ready_weak.slice(0, 8).map(w => `
       <div class="flex gap-8" style="align-items:center;flex-wrap:wrap;padding:3px 0">
         <span>${escapeHtml(w.name)}</span>
@@ -143,6 +146,25 @@ async function doGenerateCardDrafts() {
   renderCardDrafts(drafts);
 }
 
+// C1：按薄弱概念里程碑清单批量出卡（逐概念独立生成，失败概念跳过）
+async function batchMakeCards() {
+  let d;
+  try { d = await api('/api/learn/path'); }
+  catch (e) { toast(e.message, 'error'); return; }
+  const ids = (d.ready_weak || []).map(w => w.concept_id).filter(Boolean);
+  if (!ids.length) { toast(t('cards.pathAllGood'), 'ok'); return; }
+  await openCardModal();
+  const statusEl = document.getElementById('cardGenStatus');
+  statusEl.textContent = t('cards.generating');
+  let out;
+  try {
+    out = await api('/api/cards/generate-batch', { method: 'POST', body: { concept_ids: ids, use_ai: true } });
+  } catch (e) { statusEl.textContent = ''; toast(e.message || t('cards.genFail'), 'error'); return; }
+  statusEl.textContent = '';
+  renderBatchDrafts(out.results || []);
+  if ((out.failed || []).length) toast(t('cards.batchPartial').replace('{n}', out.failed.length), 'warn');
+}
+
 function renderCardDrafts(drafts) {
   const wrap = document.getElementById('cardDrafts');
   if (!drafts.length) { wrap.innerHTML = `<p class="hint-text">${t('cards.genFail')}</p>`; return; }
@@ -154,6 +176,29 @@ function renderCardDrafts(drafts) {
         <div class="text-muted text-sm">[${escapeHtml(d.kind || 'qa')}] — ${t('cards.tapFill')}</div>
       </div>`).join('') + '</div>';
   window._cardDrafts = drafts;
+}
+
+// C1：批量草稿按概念分组渲染（组内点击填入，与单概念草稿共用 pickCardDraft）
+function renderBatchDrafts(results) {
+  const wrap = document.getElementById('cardDrafts');
+  if (!results.length) { wrap.innerHTML = `<p class="hint-text">${t('cards.genFail')}</p>`; return; }
+  const flat = [];
+  let html = `<div class="card"><div class="card-title" style="font-size:13px">${t('cards.draftPick')}</div>`;
+  for (const r of results) {
+    html += `<div class="text-muted text-sm" style="margin-top:10px">🧠 ${escapeHtml(r.concept_name)}</div>`;
+    for (const d of r.drafts) {
+      const i = flat.length;
+      flat.push(d);
+      html += `
+      <div class="card mt-8" style="cursor:pointer" onclick="pickCardDraft(${i})">
+        <div class="text-sm"><b>${escapeHtml(d.cue)}</b></div>
+        <div class="text-muted text-sm" style="white-space:pre-wrap">${escapeHtml(d.answer)}</div>
+        <div class="text-muted text-sm">[${escapeHtml(d.kind || 'qa')}] — ${t('cards.tapFill')}</div>
+      </div>`;
+    }
+  }
+  wrap.innerHTML = html + '</div>';
+  window._cardDrafts = flat;
 }
 
 function pickCardDraft(idx) {
@@ -207,6 +252,8 @@ function renderCardFlash() {
     `${r.concept_name ? '🧠 ' + r.concept_name + ' · ' : ''}${t('cards.reps')} ${r.repetition||0}`;
   document.getElementById('cardFlashCue').textContent = r.cue || t('cards.noContent');
   document.getElementById('cardFlashAnswer').textContent = r.answer || t('cards.noContent');
+  // D2：已有评分记录才可撤销（_cardIdx>0 说明本会话刚评过）
+  document.getElementById('cardFlashUndoBtn').classList.toggle('hidden', _cardIdx === 0);
   cardFlashFlip(true);
 }
 
@@ -222,6 +269,17 @@ async function cardFlashRate(rating) {
   try { await api(`/api/cards/${r.id}/review`, { method: 'POST', body: { rating } }); }
   catch (e) { toast(e.message, 'error'); }
   _cardIdx++;
+  renderCardFlash();
+}
+
+async function cardFlashUndo() {
+  // D2：撤销最近一次评分 → 原子恢复快照，队列退回该卡重看
+  const r = _cardQueue[_cardIdx - 1];
+  if (!r) return;
+  try { await api(`/api/cards/${r.id}/undo`, { method: 'POST' }); }
+  catch (e) { toast(e.message, 'error'); return; }
+  toast(t('cards.undone'), 'ok');
+  _cardIdx--;
   renderCardFlash();
 }
 

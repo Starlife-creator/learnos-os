@@ -22,6 +22,7 @@ from typing import Any
 
 from config import LOG
 from db import DB_LOCK, db, now, row, rows
+import trash
 
 # ── HTML 白名单消毒 ────────────────────────────────────────────────────────
 
@@ -374,10 +375,21 @@ def update_material(mid: int, subject: str | None = None, title: str | None = No
 
 
 def delete_material(mid: int) -> bool:
-    """删除注册记录（不动磁盘原文件）。"""
+    """删除注册记录（不动磁盘原文件）。
+
+    D3：教材 + 级联批注全量快照入回收站。批注 FK 无 ON DELETE 级联，
+    须先删批注再删教材（旧行为对含批注教材会 FK 报错，此处顺带修复）。
+    """
     with DB_LOCK, db() as conn:
-        cur = conn.execute("DELETE FROM materials WHERE id = ?", (mid,))
-        return cur.rowcount > 0
+        if not conn.execute("SELECT 1 FROM materials WHERE id = ?", (mid,)).fetchone():
+            return False
+        trash.snapshot(conn, "material", mid, [
+            ("materials", "SELECT * FROM materials WHERE id = ?", (mid,)),
+            ("annotations", "SELECT * FROM annotations WHERE material_id = ?", (mid,)),
+        ])
+        conn.execute("DELETE FROM annotations WHERE material_id = ?", (mid,))
+        conn.execute("DELETE FROM materials WHERE id = ?", (mid,))
+        return True
 
 
 def get_material(mid: int) -> dict[str, Any] | None:
@@ -582,8 +594,15 @@ def list_annotations(mid: int) -> list[dict[str, Any]]:
 
 
 def delete_annotation(aid: int) -> bool:
+    """D3：批注删除先入回收站（单行快照），保留期内可原样恢复。"""
     with DB_LOCK, db() as conn:
-        return conn.execute("DELETE FROM annotations WHERE id = ?", (aid,)).rowcount > 0
+        if not conn.execute("SELECT 1 FROM annotations WHERE id = ?", (aid,)).fetchone():
+            return False
+        trash.snapshot(conn, "annotation", aid, [
+            ("annotations", "SELECT * FROM annotations WHERE id = ?", (aid,)),
+        ])
+        conn.execute("DELETE FROM annotations WHERE id = ?", (aid,))
+        return True
 
 
 # ── 全文搜索（零依赖 LIKE；升级路径见模块 docstring）──────────────────────

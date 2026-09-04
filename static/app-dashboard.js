@@ -20,12 +20,12 @@ async function loadDashboard() {
     renderTodayActions(d);
 
     if (d.topics && d.topics.length) {
-      el.innerHTML = d.topics.map(t => `
+      el.innerHTML = d.topics.map(tp => `
         <div class="flex-between mb-8">
-          <span class="text-sm">${escapeHtml(t.topic)}</span>
+          <span class="text-sm">${escapeHtml(tp.topic)}</span>
           <span class="flex gap-8 items-center">
-            <span class="tag tag-gray">${t('dash.topicCount').replace('{n}', t.count)}</span>
-            ${masteryBar(t.mastery)}
+            <span class="tag tag-gray">${t('dash.topicCount').replace('{n}', tp.count)}</span>
+            ${masteryBar(tp.mastery)}
           </span>
         </div>`).join('');
     } else {
@@ -192,7 +192,7 @@ function drawForgetCurve(f) {
   const NS = 'http://www.w3.org/2000/svg';
   while (svg.firstChild) svg.removeChild(svg.firstChild);
   const mk = (tag, attrs) => { const el = document.createElementNS(NS, tag); for (const k in attrs) el.setAttribute(k, attrs[k]); return el; };
-  const xOf = t => padL + (t / 30) * plotW;
+  const xOf = d0 => padL + (d0 / 30) * plotW;
   const yOf = r => padT + (1 - r) * plotH;
   // 网格 + 轴
   for (const g of [0.5, 0.7, 0.9]) {
@@ -210,8 +210,8 @@ function drawForgetCurve(f) {
   // 实测桶点（蓝点）
   (f.buckets || []).forEach((b, i) => {
     if (!b.count) return;
-    const t = [1.5, 5.5, 11, 22, 45, 80][i] || 20;
-    const c = mk('circle', { cx: xOf(t), cy: yOf(b.avg_r), r: 4, fill: '#22c55e', stroke: '#fff', 'stroke-width': 1.5 });
+    const rad = [1.5, 5.5, 11, 22, 45, 80][i] || 20;
+    const c = mk('circle', { cx: xOf(rad), cy: yOf(b.avg_r), r: 4, fill: '#22c55e', stroke: '#fff', 'stroke-width': 1.5 });
     svg.appendChild(c);
   });
   // 目标保持率虚线
@@ -219,8 +219,8 @@ function drawForgetCurve(f) {
   const tl = mk('line', { x1: padL, y1: yOf(target), x2: W - padR, y2: yOf(target), stroke: '#f59e0b', 'stroke-width': 1, 'stroke-dasharray': '4 3' });
   svg.appendChild(tl);
   // 坐标点标
-  for (const t of [0, 10, 20, 30]) {
-    const lbl = mk('text', { x: xOf(t), y: H - 6, 'text-anchor': 'middle', 'font-size': '9px', fill: '#94a3b8' }, `${t}d`);
+  for (const day of [0, 10, 20, 30]) {
+    const lbl = mk('text', { x: xOf(day), y: H - 6, 'text-anchor': 'middle', 'font-size': '9px', fill: '#94a3b8' }, `${day}d`);
     svg.appendChild(lbl);
   }
   if (stats) {
@@ -317,7 +317,7 @@ function drawForgetPredict(f) {
   const pct = (r) => (r * 100).toFixed(0) + '%';
   el.innerHTML =
     `<div class="text-sm">${t('forget.overview').replace('{n}', f.count).replace('{r}', pct(f.avg_r)).replace('{h}', f.high_risk).replace('{m}', f.medium_risk)}</div>
-     ${f.top && f.top.length ? `<div class="mt-8 text-sm">${t('forget.top')}：${f.top.map(t => `<a href="#" onclick="event.preventDefault();viewProblem(${t.problem_id});return false;">${escapeHtml(t.title)}（R=${pct(t.r)}）</a>`).join('、')}</div>` : ''}
+     ${f.top && f.top.length ? `<div class="mt-8 text-sm">${t('forget.top')}：${f.top.map(tp => `<a href="#" onclick="event.preventDefault();viewProblem(${tp.problem_id});return false;">${escapeHtml(tp.title)}（R=${pct(tp.r)}）</a>`).join('、')}</div>` : ''}
      <p class="hint-text mt-8">${t('forget.rehint')}</p>`;
 }
 
@@ -397,8 +397,8 @@ async function loadProfile(dash) {
     const p = await api('/api/profile');
     const el = document.getElementById('profileBox');
     if (!el) return;
-    const topicLine = (p.topics || []).slice(0, 3).map(t =>
-      `${escapeHtml(t.topic)} ${t.avg_mastery}/5`).join('、');
+    const topicLine = (p.topics || []).slice(0, 3).map(tg =>
+      `${escapeHtml(tg.topic)} ${tg.avg_mastery}/5`).join('、');
     const errLine = (p.errors || []).slice(0, 4).map(e =>
       `${escapeHtml(errLabel(e.error_type))}×${e.count}`).join('、');
     const pace = p.pace || {};
@@ -434,42 +434,72 @@ async function saveProfile() {
 }
 
 // ── 统一学习队列（RemNote Queue 式）：按优先级逐项推进 ──
+// U1：队列改由后端 next_step 统一计算（任意入口同一结果），前端只渲染+跳转；
+// 接口字段缺失/异常时回退旧本地拼装（兜底，不因后端缺字段丢队列）。
 let _queueItems = [];
 let _queueIdx = 0;
+
+function _queueLabel(it) {
+  const s = t(it.label_key || 'today.bank');
+  return s.replace('{n}', it.n ?? 0).replace('{s}', it.s || '');
+}
+
+function _queueRun(it) {
+  switch (it.action) {
+    case 'review': return () => switchPage('review');
+    case 'cards': return () => switchPage('cards');
+    case 'oral': return () => { switchPage('oral'); setTimeout(() => startOralWith(it.topic), 300); };
+    case 'learn': return () => { window.__pendingCardConcept = it.concept_id; switchPage('cards'); };
+    default: return () => switchPage('bank');
+  }
+}
 
 function renderTodayActions(d) {
   const card = document.getElementById('todayActions');
   const list = document.getElementById('todayActionsList');
   if (!card || !list) return;
-  _queueItems = [];
   _queueIdx = 0;
-  if ((d.due || 0) > 0) {
-    _queueItems.push({
-      label: t('today.reviewDue').replace('{n}', d.due),
-      run: () => switchPage('review'),
-    });
-  }
-  const weak = (d.topics || []).find(x => parseFloat(x.avg_mastery) < 3);
-  if (weak) {
-    _queueItems.push({
-      label: t('queue.oralWeak').replace('{s}', weak.topic),
-      run: () => { switchPage('oral'); setTimeout(() => startOralWith(weak.topic), 300); },
-    });
-  }
-  const focus = (d.tasks || []).find(x => x.kind === 'error_focus');
-  if (focus) {
-    _queueItems.push({ label: focus.label, run: () => switchPage('problems') });
-  }
-  if ((d.stats && d.stats.total) || 0 > 0) {
-    _queueItems.push({
-      label: t('today.wrongbook').replace('{n}', d.stats.total || 0),
-      run: () => switchPage('problems'),
-    });
-  }
-  _queueItems.push({ label: t('today.bank'), run: () => switchPage('bank') });
-  if (_queueItems.length <= 1) {  // 只剩题库入口时不显示队列
-    card.style.display = 'none';
-    return;
+  const q = d.next_step && Array.isArray(d.next_step.queue) ? d.next_step.queue : null;
+  if (q) {
+    // U1 后端队列：待答错题 → 到期闪卡 → 薄弱口试 → 下一未掌握概念
+    _queueItems = q.map(it => ({ label: _queueLabel(it), run: _queueRun(it) }));
+    if (!_queueItems.length) {  // 状态全清 = 今日队列完成（正向反馈，保持可见）
+      card.style.display = '';
+      list.innerHTML = `<div class="text-sm text-muted">${t('queue.allDone')}</div>`;
+      return;
+    }
+  } else {
+    // 兜底：旧本地拼装（后端无 next_step 字段时）
+    _queueItems = [];
+    if ((d.due || 0) > 0) {
+      _queueItems.push({
+        label: t('today.reviewDue').replace('{n}', d.due),
+        run: () => switchPage('review'),
+      });
+    }
+    // M2：后端 oral_topic（薄弱主题中错因权重最高者）优先；回退旧 topics 首个薄弱项
+    const weak = d.oral_topic || (d.topics || []).find(x => parseFloat(x.mastery) < 3);
+    if (weak) {
+      _queueItems.push({
+        label: t('queue.oralWeak').replace('{s}', weak.topic),
+        run: () => { switchPage('oral'); setTimeout(() => startOralWith(weak.topic), 300); },
+      });
+    }
+    const focus = (d.tasks || []).find(x => x.kind === 'error_focus');
+    if (focus) {
+      _queueItems.push({ label: focus.label, run: () => switchPage('problems') });
+    }
+    if ((d.stats && d.stats.total) || 0 > 0) {
+      _queueItems.push({
+        label: t('today.wrongbook').replace('{n}', d.stats.total || 0),
+        run: () => switchPage('problems'),
+      });
+    }
+    _queueItems.push({ label: t('today.bank'), run: () => switchPage('bank') });
+    if (_queueItems.length <= 1) {  // 只剩题库入口时不显示队列
+      card.style.display = 'none';
+      return;
+    }
   }
   card.style.display = '';
   renderQueue();

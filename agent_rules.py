@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from config import LOG
 from db import row, rows
 
 # 规则优先级档位
@@ -146,10 +147,16 @@ def synthesize_plan(subject: str, use_ai: bool = False) -> dict[str, Any]:
             "你是学习教练。把下面的行动清单改写成一段鼓励性、可执行的中文今日计划，"
             "不要新增清单外的内容：\n" + items
         )
-        narrative = call_ai(prompt, max_tokens=400)
+        # call_ai 的 messages 形参是 list[dict[str, str]]；此前误传裸 str，
+        # 端点返回 400 后被下方 except 静默吞掉 → AI 增强从未真正生效（恒 mode="degraded"）。
+        narrative = call_ai(
+            [{"role": "user", "content": prompt}],
+            max_tokens=400,
+            route="agent",
+        )
         plan["narrative"] = narrative.strip()
         plan["mode"] = "ai_enhanced"
-    except Exception:
-        # AI 失败不影响降级功能
-        pass
+    except Exception as exc:
+        # AI 失败不影响降级功能，但必须留痕——静默 pass 曾让本 bug 长期不可见。
+        LOG.debug("AI 增强计划生成失败，降级为离线模板: %s", exc)
     return plan

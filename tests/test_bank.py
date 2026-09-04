@@ -107,6 +107,44 @@ class TestBankNormalize(unittest.TestCase):
                 {"type": "weird", "stem": "题干足够长内容", "choices": ["A", "B"], "answer": 0},
                 1, set(), "physics")
 
+    # ── C3：来源标记 + 题型自动判定 ──
+
+    def test_source_whitelist(self):
+        """C3：source 白名单落库，白名单外/缺省一律 manual。"""
+        ok = bank._normalize_question(
+            {"type": "single", "stem": "题干足够长内容", "choices": ["A", "B"], "answer": 0,
+             "source": "ai_generated"}, 1, set(), "physics")
+        self.assertEqual(ok["source"], "ai_generated")
+        mat = bank._normalize_question(
+            {"type": "single", "stem": "题干足够长内容", "choices": ["A", "B"], "answer": 0,
+             "source": "material"}, 2, set(), "physics")
+        self.assertEqual(mat["source"], "material")
+        # 白名单外 → manual；缺省 → manual
+        bad = bank._normalize_question(
+            {"type": "single", "stem": "题干足够长内容", "choices": ["A", "B"], "answer": 0,
+             "source": "hacker"}, 3, set(), "physics")
+        self.assertEqual(bad["source"], "manual")
+        none = bank._normalize_question(
+            {"type": "single", "stem": "题干足够长内容", "choices": ["A", "B"], "answer": 0},
+            4, set(), "physics")
+        self.assertEqual(none["source"], "manual")
+
+    def test_type_auto_inference(self):
+        """C3：导入题缺 type 时按结构推断——choices→single / 下划线→fill / 其余→subjective。"""
+        # 有 choices → single（向后兼容保留）
+        it = bank._normalize_question(
+            {"stem": "题干足够长内容", "choices": ["A", "B"], "answer": 0}, 1, set(), "physics")
+        self.assertEqual(it["type"], "single")
+        # 题干含下划线占位 + 字符串答案 → fill
+        it2 = bank._normalize_question(
+            {"stem": "光在真空中的速度为 ____ m/s。", "answer": "3×10^8"}, 2, set(), "physics")
+        self.assertEqual(it2["type"], "fill")
+        self.assertEqual(it2["answer"], "3×10^8")
+        # 判断/对错题（无选项无下划线）→ subjective（参考答案对/错自评）
+        it3 = bank._normalize_question(
+            {"stem": "判断题：合力一定大于分力。", "answer": "错误，合力可小于任一分力"}, 3, set(), "physics")
+        self.assertEqual(it3["type"], "subjective")
+
 
 class TestBankGrading(unittest.TestCase):
     def test_single_correct_wrong(self):
@@ -159,6 +197,52 @@ class TestBankGrading(unittest.TestCase):
         self.assertFalse(r["needs_review"])
 
 
+class TestM1AnswerMatchBoundaries(unittest.TestCase):
+    """M1 相似度判分边界（B3）：数值/归一化/短答案模糊/公式保护/开放题覆盖五通道。"""
+
+    def test_numeric_channel(self):
+        # ① 数值：浮点尾零、千分位、首尾空白等价
+        self.assertTrue(bank._answer_match("1000", "1,000"))
+        self.assertTrue(bank._answer_match("-5.50", "-5.5"))
+        self.assertTrue(bank._answer_match(" 3.14 ", "3.14"))
+        # 数值不相等 → 后续通道不得放行（含数字禁模糊）
+        self.assertFalse(bank._answer_match("3.14", "3.141"))
+
+    def test_normalization_channel(self):
+        # ② 归一化：大小写/首尾空白/尾标点；内部空白（F = ma vs F=ma）
+        self.assertTrue(bank._answer_match("  ANSWER。", "answer"))
+        self.assertTrue(bank._answer_match("F = ma", "F=ma"))
+        self.assertFalse(bank._answer_match("", "x"), "空作答不判对")
+
+    def test_short_answer_fuzzy(self):
+        # ③ 短答案序列相似度：7 字 1 处笔误 ratio=0.857 ≥0.85 判对
+        self.assertTrue(bank._answer_match("机械能守恒定率", "机械能守恒定律"))
+        # 6 字 1 处笔误 ratio=0.833 <0.85 保守判错；近音 2 字 ratio=0.5 判错
+        self.assertFalse(bank._answer_match("动量守恒定理", "动量守恒定律"))
+        self.assertFalse(bank._answer_match("波尔", "玻尔"))
+
+    def test_formula_and_digits_no_fuzzy(self):
+        # 公式/含数字：仅精确匹配，防近形误判（F=ma2、字母 l 冒充数字 1）
+        self.assertFalse(bank._answer_match("F=ma2", "F=ma"))
+        self.assertFalse(bank._answer_match("l00", "100"))
+        self.assertTrue(bank._answer_match("F=ma", "F=ma"), "精确匹配仍通过")
+
+    def test_open_answer_coverage(self):
+        # ④ 开放题（参考答案 >30 字符）：bigram 命中率 ≥0.6 判对
+        ref = "动能定理表述为合外力对物体所做的功等于物体动能的变化量，即外力做功等于末动能减去初动能"
+        self.assertTrue(bank._answer_match(ref, ref), "完整复述判对")
+        partial = ref[:int(len(ref) * 0.75)]
+        self.assertTrue(bank._answer_match(partial, ref), "覆盖约 3/4 关键词判对")
+        off = "这道题考查的是电磁感应定律与楞次定律的应用，与参考答案讨论的力学内容完全无关"
+        self.assertFalse(bank._answer_match(off, ref), "跑题作答判错")
+
+    def test_fill_grade_uses_match(self):
+        # 集成：填空逐空获得 M1 容错（笔误通过、公式保护不放松）
+        it = {"type": "fill", "stem": "s", "answer": ["机械能守恒定律", "F=ma"]}
+        self.assertTrue(bank.grade_item(it, ["机械能守恒定率", "F = ma"])["correct"])
+        self.assertFalse(bank.grade_item(it, ["机械能守恒定律", "F=ma2"])["correct"])
+
+
 class TestBankJudgeDB(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -185,6 +269,37 @@ class TestBankJudgeDB(unittest.TestCase):
         res = bank.judge("q-s1", 1, "physics")
         self.assertFalse(res["correct"])
         self.assertGreater(res["problem_id"], 0)  # 答错入错题库
+
+    def test_is_blank_answer_variants(self):
+        """M2 空白判定：None/纯空白串/空列表/全空白元素为空；数字 0 与非空作答不算空白。"""
+        self.assertTrue(bank._is_blank_answer(None))
+        self.assertTrue(bank._is_blank_answer(""))
+        self.assertTrue(bank._is_blank_answer("   "))
+        self.assertTrue(bank._is_blank_answer([]))
+        self.assertTrue(bank._is_blank_answer(["  ", ""]))
+        self.assertFalse(bank._is_blank_answer(["  ", "x"]))
+        self.assertFalse(bank._is_blank_answer(0), "选了选项 A（索引 0）是有效作答")
+        self.assertFalse(bank._is_blank_answer("abc"))
+
+    def test_judge_blank_answer_auto_error_type(self):
+        """M2 自动初判：空白作答建档自动标 blank_in_facts；非空白错答仍为待诊断。"""
+        it = bank._normalize_question(
+            {"type": "single", "id": "q-blank1", "stem": "题干足够长内容", "choices": ["A", "B"], "answer": 0},
+            1, set(), "physics")
+        self._inject(it)
+        res = bank.judge("q-blank1", "   ", "physics")  # 空白作答
+        self.assertFalse(res["correct"])
+        rows = db.rows("SELECT error_type FROM problems WHERE id = ?", (res["problem_id"],))
+        self.assertEqual(rows[0]["error_type"], "blank_in_facts")
+
+        it2 = bank._normalize_question(
+            {"type": "single", "id": "q-blank2", "stem": "题干足够长内容", "choices": ["A", "B"], "answer": 0},
+            1, set(), "physics")
+        self._inject(it2)
+        res2 = bank.judge("q-blank2", 1, "physics")  # 选了 B（非空白错答）
+        self.assertFalse(res2["correct"])
+        rows2 = db.rows("SELECT error_type FROM problems WHERE id = ?", (res2["problem_id"],))
+        self.assertEqual(rows2[0]["error_type"], "待诊断")
 
     def test_judge_subjective_no_archive(self):
         it = bank._normalize_question(

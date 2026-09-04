@@ -141,6 +141,48 @@ class TestRag(unittest.TestCase):
         self.assertEqual(sources[0]["name"], "光学笔记.md")
         self.assertIn("光学笔记", msgs[0]["content"])
 
+    def test_filter_noise_dual_channel(self):
+        """X1 低质命中双通道过滤：垃圾（低分+低覆盖）剔除；高分或高覆盖任一达标即保留。
+
+        分数通道兜词法量纲（实测垃圾 ≈1.0-1.6，真命中 ≥13）；
+        覆盖率通道兜向量量纲（RRF 融合分为小数量纲）。
+        """
+        query = "滑铁卢战役发生在哪一年"
+        noise = {"score": 1.6, "content": "牛顿第二定律：力是改变物体运动状态的原因。"}
+        real_by_score = {"score": 13.0, "content": "内容无关但词法分数达标"}
+        real_by_coverage = {"score": 0.01, "content": "滑铁卢战役发生在1815年，拿破仑战败。"}
+        out = rag.filter_noise([noise, real_by_score, real_by_coverage], query)
+        self.assertNotIn(noise, out, "低分+低覆盖的沾边命中必须剔除")
+        self.assertIn(real_by_score, out, "高分通道应保留")
+        self.assertIn(real_by_coverage, out, "覆盖率通道应保留（向量量纲兜底）")
+        self.assertEqual(rag.filter_noise([], query), [])
+
+    def test_rag_context_zero_hit_boundary(self):
+        """X1 越界抑制：资料库非空但零命中 → 注入「资料未覆盖」硬边界消息（探针用例）。
+
+        探针问题取教材未讲内容（滑铁卢战役），语料仅有物理笔记 → 检索必然零命中，
+        AI 提示必须携带「不得声称根据教材 + 教材外补充须标注」约束，防编造。
+        """
+        fp = self._write_note("边界探针.md", "狭义相对论：光速不变原理与相对性原理。")
+        rag.ingest_path(str(fp))
+        problem = {
+            "id": 0, "topic": "法国大革命", "title": "滑铁卢战役",
+            "content": "拿破仑滑铁卢战役发生在哪一年？（资料库未收录）",
+        }
+        msgs, sources = Handler._rag_context(Handler.__new__(Handler), problem)
+        self.assertEqual(sources, [], "零命中不得携带溯源标签")
+        self.assertTrue(msgs, "资料库非空时零命中应注入边界消息")
+        self.assertIn("资料", msgs[0]["content"])
+        self.assertIn("不得声称", msgs[0]["content"])
+        self.assertIn("AI 补充", msgs[0]["content"])
+
+    def test_rag_search_probe_out_of_corpus(self):
+        """X1 探针基准：教材未讲内容检索零命中（弃答率指标的正向探针）。"""
+        fp = self._write_note("探针语料.md", "热力学第二定律：孤立系统熵不减。")
+        rag.ingest_path(str(fp))
+        self.assertFalse(rag.search("滑铁卢战役 拿破仑", k=3), "语料外探针词必须零命中")
+        self.assertTrue(rag.search("热力学 熵", k=3), "语料内词仍正常命中（防误伤）")
+
     def test_direct_bm25(self):
         self._write_note("纯函数测试.md", "量子力学波函数描述粒子概率分布。")
         rag.ingest_path(str(self.materials))

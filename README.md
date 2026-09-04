@@ -140,10 +140,16 @@ learnos-os/
 ## 测试
 
 ```bash
-python -m unittest discover -s tests -v
+python run_tests.py
 ```
 
-覆盖范围：SM-2 / FSRS 算法、AI 提示词构造与降级、数据库 CRUD 与密钥遮蔽、HTTP 端点全路径、知识图谱、题库、RAG、口试、端到端学习循环。
+`run_tests.py` 是**唯一权威入口**（CI 与本地共用），它以 `-t .` 包模式启动测试，
+从而加载 `tests/__init__.py` 里的加固 shim（超时下限、沙箱临时目录兜底）。
+请勿改用 `python -m unittest discover -s tests` —— 那样会绕过 shim，
+使 16 个文件中 37 处 `timeout=N` 用例在慢机器上随机失败
+（该一致性由 `tests/test_fitness_functions.py` 断言守卫）。
+
+覆盖范围：SM-2 / FSRS 算法、AI 提示词构造与降级、数据库 CRUD 与密钥遮蔽、HTTP 端点全路径、知识图谱、题库、RAG、口试、端到端学习循环，以及架构守卫（全局符号遮蔽、路由元数、AI 配额覆盖、备份表完整性、性能预算）。
 
 ## 构建
 

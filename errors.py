@@ -64,5 +64,28 @@ def normalize_error_type(value: Any) -> str:
     return _ERROR_TYPE_MIGRATION.get(raw, "待诊断")
 
 
+# M2 队列错因权重（B3）：元认知类（公式/事实空白）与概念理解错最优先重考——
+# 「不会」与「算错」区别对待；粗心/时间压力属执行层问题，最低优先。
+# 仅用于复习队列排序（纯读，遵守 F1 出队零写入条款），不落库。
+ERROR_TYPE_QUEUE_WEIGHTS: dict[str, int] = {
+    "blank_in_facts": 3,        # 公式/事实空白：知识本身缺失
+    "concept_misunderstood": 3, # 概念理解错误：知识本身错误
+    "heuristic_trap": 2,        # 直觉陷阱：需要针对性纠正
+    "misread": 1,               # 审题错误
+    "calculation": 1,           # 计算错误
+    "careless": 0,              # 粗心笔误：重考收益低
+    "time_pressure": 0,         # 时间压力：非知识问题
+}
+
+
+def queue_weight(error_type: Any) -> int:
+    """错因 → 复习队列优先权重（M2）。
+
+    空白/概念错 3 > 陷阱 2 > 计算/审题 1 > 粗心/时间/待诊断 0。
+    未知错因（含「待诊断」与历史自由文本）不加权，避免老数据整体前置。
+    """
+    return ERROR_TYPE_QUEUE_WEIGHTS.get(str(error_type or ""), 0)
+
+
 def is_valid_error_type(value: Any) -> bool:
     return value in ERROR_TYPES or value == "待诊断"

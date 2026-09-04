@@ -92,7 +92,7 @@ def export_social(subject: str | None = None) -> dict[str, Any]:
     params = (subject,) if subject else ()
     stats = row(
         f"SELECT COUNT(*) AS total, COALESCE(AVG(mastery), 0) AS avg_mastery, "
-        f"SUM(CASE WHEN mastery >= 4 THEN 1 ELSE 0 END) AS mastered "
+        f"COALESCE(SUM(CASE WHEN mastery >= 4 THEN 1 ELSE 0 END), 0) AS mastered "
         f"FROM problems {where}",
         params,
     ) or {"total": 0, "avg_mastery": 0, "mastered": 0}

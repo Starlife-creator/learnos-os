@@ -156,6 +156,41 @@ class TestSocraticEngine(unittest.TestCase):
         s = db.row("SELECT * FROM oral_sessions WHERE id = ?", (sid,))
         self.assertEqual(s["mode"], "socratic")
 
+    def test_assessment_prompt_hint(self):
+        """G2：概念配置口试模板后，_assessment_hint 命中并替换 {{name}}；未配置返回空。"""
+        from oral import _assessment_hint, _evidence_context
+        with db.db() as conn:
+            conn.execute(
+                "INSERT INTO concepts(name, parent_id, chapter_id, subject, created_at, assessment_prompt) "
+                "VALUES ('万有引力定制概念', 0, 0, 'physics', ?, '请说明{{name}}的公式与适用条件')",
+                (db.now(),))
+        # 命中：{{name}} 占位替换为概念名
+        self.assertEqual(_assessment_hint("万有引力定制概念", "physics"),
+                         "请说明万有引力定制概念的公式与适用条件")
+        # 未配置模板的概念 / 不存在的概念 → 空串（走默认阶段问题）
+        self.assertEqual(_assessment_hint("牛顿第二定律", "physics"), "")
+        self.assertEqual(_assessment_hint("不存在概念", "physics"), "")
+        self.assertEqual(_assessment_hint("任何", ""), "")
+        # G2：判据素材（evidence[]）注入 _ai_followup 的素材文本
+        with db.db() as conn:
+            conn.execute(
+                "INSERT INTO concepts(name, parent_id, chapter_id, subject, created_at, evidence) "
+                "VALUES ('判据素材概念', 0, 0, 'physics', ?, ?)",
+                (db.now(), '["能独立写出 F=ma", "能说明适用条件"]'))
+        ctx = _evidence_context("判据素材概念", "physics")
+        self.assertIn("达标判据", ctx)
+        self.assertIn("能独立写出 F=ma", ctx)
+        self.assertIn("能说明适用条件", ctx)
+        # 未配置 / 非法 JSON / 学科为空 → 空串（静默降级）
+        self.assertEqual(_evidence_context("牛顿第二定律", "physics"), "")
+        self.assertEqual(_evidence_context("判据素材概念", ""), "")
+        with db.db() as conn:
+            conn.execute(
+                "INSERT INTO concepts(name, parent_id, chapter_id, subject, created_at, evidence) "
+                "VALUES ('坏判据概念', 0, 0, 'physics', ?, 'not-json')",
+                (db.now(),))
+        self.assertEqual(_evidence_context("坏判据概念", "physics"), "")
+
 
 class TestOralSubjectAwareness(unittest.TestCase):
     """v1 口试/费曼学科感知：非物理学科不出现物理专属措辞，physics 保留原行为。"""

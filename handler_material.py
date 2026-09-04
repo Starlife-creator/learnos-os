@@ -282,7 +282,8 @@ class MaterialMixin:
         aliases = str(data.get("aliases", "")).strip()
         if aliases:
             graph.update_aliases(cid, aliases)
-        graph.update_progress(subject, force=True)
+        graph.update_progress(subject, force=True, entry_point="concept_add",
+                              evidence=f"新增概念#{cid}")
         self.json_response({"id": cid})
 
     def _handle_graph_unlinked(self) -> None:
@@ -303,13 +304,21 @@ class MaterialMixin:
         self.json_response({"ok": True})
 
     def _handle_graph_link(self, a: int, data: dict[str, Any]) -> None:
-        """Phase 3：手动画线 — 在概念 a 与 data[b] 间建 relation 边（幂等）。"""
+        """Phase 3：手动画线 — 在概念 a 与 data[b] 间建 relation 边（幂等，G1 溯源）。
+
+        G1：reason 必填（一句话依据）；strength 可选 hard|soft（默认 soft）；
+        evidence_ref 可选教材锚点（"file:page"）。
+        """
         try:
             b = int(data.get("b", 0))
         except (TypeError, ValueError):
             self.json_response({"error": "参数不合法"}, 400)
             return
-        ok, err = graph.link_concepts(a, b, str(data.get("relation", "")), self.subject)
+        ok, err = graph.link_concepts(
+            a, b, str(data.get("relation", "")), self.subject,
+            reason=str(data.get("reason", "")),
+            strength=str(data.get("strength", "soft") or "soft"),
+            evidence_ref=str(data.get("evidence_ref", "")))
         if not ok:
             self.json_response({"error": err}, 400)
             return

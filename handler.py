@@ -87,6 +87,7 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         (r"/api/cards/due", "_handle_list_due_cards"),
         (r"/api/cards", "_handle_list_cards"),
         (r"/api/learn/path", "_handle_learning_path"),
+        (r"/api/learn/next-step", "_handle_next_step"),
         (r"/api/settings", "_handle_settings"),
         (r"/api/trend", "_handle_trend"),
         (r"/api/analytics", "_handle_analytics"),
@@ -106,6 +107,7 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         (r"/api/rag/docs", "_handle_rag_docs"),
         (r"/api/rag/search", "_handle_rag_search"),
         (r"/api/rag/open", "_handle_rag_open"),
+        (r"/api/trash", "_handle_trash_list"),
         (r"/api/learn/materials", "_handle_learn_materials"),
         (r"/api/learn/materials/(\d+)/content", "_handle_learn_content"),
         (r"/api/learn/materials/(\d+)/annotations", "_handle_learn_annotations"),
@@ -126,7 +128,9 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         (r"/api/social/checkins", "_handle_social_checkins"),
         (r"/api/social/streak", "_handle_social_streak"),
         (r"/api/export/social", "_handle_export_social"),
-        (r"/api/export/seed", "_handle_export_seed"),
+        # 注：/api/export/seed 仅保留 POST（见 POST_ROUTES）。此前误注册进 GET_ROUTES，
+        # 而 _handle_export_seed(self, data) 需 1 个位置参数 → do_GET 以 args=() 调用
+        # 必然 TypeError → 500。该端点写 data/ 目录，本就属写操作。
     ]
 
     POST_ROUTES: list[tuple[str, str, bool]] = [
@@ -183,8 +187,12 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         (r"/api/render-config", "_handle_set_render_config", True),
         (r"/api/cards", "_handle_create_card", True),
         (r"/api/cards/generate", "_handle_generate_card_drafts", True),
+        (r"/api/cards/generate-batch", "_handle_generate_card_batch", True),
         (r"/api/cards/(\d+)/review", "_handle_review_card", True),
+        (r"/api/cards/(\d+)/undo", "_handle_undo_card_review", False),
+        (r"/api/trash/(\d+)/restore", "_handle_trash_restore", False),
         (r"/api/cards/(\d+)/delete", "_handle_delete_card", False),
+        (r"/api/agent/orchestrate", "_handle_agent_orchestrate_ai", True),
     ]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -566,13 +574,31 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
 
     # ── 智能体规则编排（§32 降级态）──
     def _handle_agent_orchestrate(self) -> None:
-        """GET /api/agent/orchestrate?subject=&ai=0|1：今日行动清单（离线可用）。"""
+        """GET /api/agent/orchestrate?subject=：今日行动清单（离线可用，永不调 AI）。
+
+        安全约束：AI 增强**只**走 POST /api/agent/orchestrate（见 _handle_agent_orchestrate_ai）。
+        GET 侧恒 use_ai=False——GET 不经过 _write_auth_ok()，任意网页用
+        `<img src="http://127.0.0.1:8765/api/agent/orchestrate?ai=1">` 即可跨源刷 AI 额度
+        （同 handler.py 早前把 fsrs/train 从 GET 挪走的同一类问题）。
+        """
         import agent_rules
         from urllib.parse import parse_qs, urlparse
         qs = parse_qs(urlparse(self.path).query)
         subj = qs.get("subject", [""])[0] or self.subject
-        use_ai = (qs.get("ai", ["0"])[0] or "0") in ("1", "true")
-        plan = agent_rules.synthesize_plan(subj, use_ai=use_ai)
+        plan = agent_rules.synthesize_plan(subj, use_ai=False)
+        self.json_response(plan)
+
+    def _handle_agent_orchestrate_ai(self, data: dict[str, Any]) -> None:
+        """POST /api/agent/orchestrate：AI 增强版今日计划。
+
+        body: {subject?}。经 do_POST 的 _write_auth_ok() 闸门（CSRF 头 / 暴露模式 Bearer）
+        + R3 AI 配额守卫，杜绝跨源滥用。
+        """
+        import agent_rules
+        if not self._ai_quota("fast"):
+            return
+        subj = str(data.get("subject", "") or "").strip() or self.subject
+        plan = agent_rules.synthesize_plan(subj, use_ai=True)
         self.json_response(plan)
 
     # ── PWA 清单（§19.4，标准 webmanifest MIME）──
@@ -821,20 +847,59 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
             return
         self.json_response(result)
 
+    # ── D3 回收站 ──────────────────────────────────────────────────────
+
+    def _handle_trash_list(self) -> None:
+        """GET /api/trash：回收站列表（新→旧，含恢复可用标记）。"""
+        import trash
+        self.json_response({"items": trash.list_trash()})
+
+    def _handle_trash_restore(self, trash_id: int) -> None:
+        """POST /api/trash/(id)/restore：原样恢复一条回收站快照。"""
+        import sqlite3
+        import trash
+        try:
+            result = trash.restore_by_id(trash_id)
+        except sqlite3.IntegrityError:
+            self.json_response({"error": "恢复冲突（原 id/唯一键已被占用）"}, 409)
+            return
+        if not result:
+            self.json_response({"error": "回收站记录不存在或已恢复"}, 404)
+            return
+        auth.audit("restore_trash", ip=self._client_ip(),
+                   detail=f"{result['kind']}#{result['entity_id']}")
+        self.json_response({"ok": True, "kind": result["kind"],
+                            "entity_id": result["entity_id"]})
+
     def _handle_bank_generate(self, data: dict[str, Any]) -> None:
-        """POST /api/bank/generate：按题型 AI 出题，返回与 bank 模型一致的题目 dict。"""
+        """POST /api/bank/generate：按题型 AI 出题，返回与 bank 模型一致的题目 dict。
+
+        C3 定向出题：topic 为空时自动取学习路径最弱概念（可学的弱概念优先，
+        其次被卡概念），出题命中薄弱知识点；返回 target 概念名供前端展示。
+        """
+        topic = str(data.get("topic", "")).strip()
+        target = ""
+        if not topic:
+            try:
+                lp = graph.learning_path(self._subject_of(data))
+                cand = (lp.get("now") or {}).get("name") or \
+                       ((lp.get("ready_weak") or [{}])[0] or {}).get("name") or ""
+                if cand:
+                    topic, target = cand, cand
+            except Exception as exc:
+                LOG.debug("定向出题：学习路径读取失败，回退自选: %s", exc)
         try:
             import ai
             q = ai.generate_bank_question(
                 self._subject_of(data),
-                str(data.get("topic", "")).strip(),
+                topic,
                 str(data.get("type", "single")).strip() or "single",
                 str(data.get("context", "")).strip(),
             )
         except ValueError as exc:
             self.json_response({"error": str(exc)}, 400)
             return
-        self.json_response({"question": q})
+        self.json_response({"question": q, "target": target})
 
     def _handle_bank_review(self, data: dict[str, Any]) -> None:
         """POST /api/bank/review：AI 审题。body: {question, subject}。"""
@@ -1002,6 +1067,12 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
                     ok = graph.update_explanation(cid, str(data.get("explanation", ""))) and ok
                 if "aliases" in data:
                     ok = graph.update_aliases(cid, str(data.get("aliases", ""))) and ok
+                # G2：达标判据 evidence[]（数组，每条一句）+ 口试模板 assessment_prompt
+                if "evidence" in data or "assessment_prompt" in data:
+                    ev = data.get("evidence")
+                    if not isinstance(ev, list):
+                        ev = [str(x) for x in str(ev or "").splitlines() if str(x).strip()]
+                    ok = graph.update_evidence(cid, ev, data.get("assessment_prompt")) and ok
                 if not ok:
                     self.json_response({"error": "概念不存在"}, 404)
                     return
@@ -1053,7 +1124,9 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
                     if cursor.rowcount == 0:
                         self.json_response({"error": "题目不存在"}, 404)
                         return
-                graph.update_progress((subj_row["subject"] if subj_row else None) or "physics", force=True)
+                graph.update_progress((subj_row["subject"] if subj_row else None) or "physics",
+                                      force=True, entry_point="problem_delete",
+                                      evidence=f"删除题目#{match.group(1)}")
                 auth.audit("delete_problem", ip=self._client_ip(), detail=match.group(1))  # R5 审计
                 self.json_response({"ok": True})
                 return

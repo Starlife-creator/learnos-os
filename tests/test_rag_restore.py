@@ -44,8 +44,9 @@ class RagRestoreTest(unittest.TestCase):
                 [(doc_id, 0, 0, "first chunk"), (doc_id, 1, 0, "second chunk")],
             )
             cls.doc_id = doc_id
-        import rag
-        rag._UNDO.clear()
+        # 清空回收站，保持干净（D3 后删除快照落 trash 表，不再是进程内存态）
+        with db.DB_LOCK, db.db() as conn:
+            conn.execute("DELETE FROM trash")
 
     @classmethod
     def tearDownClass(cls):

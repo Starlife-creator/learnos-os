@@ -91,8 +91,8 @@ async function respondOral() {
   _oralAbort = new AbortController();
   try {
     const r = await api('/api/oral/respond', { method: 'POST', body: { session_id: oralSessionId, answer }, signal: _oralAbort.signal });
-    const t = document.getElementById('oralThinking');
-    if (t) t.remove();
+    const thinkEl = document.getElementById('oralThinking');
+    if (thinkEl) thinkEl.remove();
     oralTurn++;
     chatEl.innerHTML += `<div class="chat-msg assistant"><div class="bubble">${escapeHtml(r.reply)}</div></div>`;
     renderMath(chatEl);

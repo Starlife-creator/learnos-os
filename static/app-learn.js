@@ -224,9 +224,9 @@ async function openPdf(id) {   // P1.5：内嵌查看器取代 window.open
     const tb = document.createElement('div');
     tb.className = 'pdf-toolbar';
     tb.innerHTML =
-      ['select', 'arrow', 'rect', 'ellipse', 'pen'].map(t =>
-        `<button class="pdf-tool${t === 'select' ? ' active' : ''}" data-tool="${t}" ` +
-        `onclick="setPdfTool('${t}')">${esc(t_('learn.tool' + t.charAt(0).toUpperCase() + t.slice(1)))}</button>`).join('') +
+      ['select', 'arrow', 'rect', 'ellipse', 'pen'].map(tName =>
+        `<button class="pdf-tool${tName === 'select' ? ' active' : ''}" data-tool="${tName}" ` +
+        `onclick="setPdfTool('${tName}')">${esc(t_('learn.tool' + tName.charAt(0).toUpperCase() + tName.slice(1)))}</button>`).join('') +
       ['e11d48', 'f59e0b', '4f7cff'].map((c, i) =>
         `<button class="pdf-color${i === 0 ? ' active' : ''}" style="background:#${c}" ` +
         `onclick="setShapeColor(this,'${c}')"></button>`).join('');

@@ -19,7 +19,11 @@ jobs:
       - name: Verify zero-dependency (vendored FSRS must load without third-party packages)
         run: python -c "import sys; sys.modules['typing_extensions']=None; import fsrs_bridge; assert fsrs_bridge._FSRS_AVAILABLE, 'FSRS must be available in a clean environment'"
       - name: Run unit tests
-        run: python -m unittest discover -s tests -v
+        # 必须走 run_tests.py（唯一权威入口）：它以 `-t .` 包模式启动，
+        # 从而加载 tests/__init__.py 的加固 shim（60s 超时下限、沙箱 rmtree 兜底）。
+        # 直接 `unittest discover -s tests` 会绕过该 shim，使 16 个文件里的
+        # 37 处 timeout=N 在慢 runner 上随机失败（CI 与本地行为不一致）。
+        run: python run_tests.py
 
   lint:
     # P8（Tier C）：可选增量 lint，非阻塞（continue-on-error），不拦合并。

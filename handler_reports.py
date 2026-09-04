@@ -27,6 +27,10 @@ class ReportsMixin:
             SELECT topic, COUNT(*) AS count, ROUND(AVG(mastery), 1) AS mastery
             FROM problems WHERE subject = ? AND topic <> '' GROUP BY topic ORDER BY mastery ASC, count DESC LIMIT 8
         """, (subj,))
+        # M2（B3）：薄弱错因知识点最高优先进口试——选题逻辑已抽到
+        # graph.weak_oral_topic（U1 next_step 复用同一函数，保证不因入口分叉）。
+        import graph
+        oral_topic = graph.weak_oral_topic(subj, topics)
         recent = rows("SELECT id, title, course, topic, error_type, mastery, created_at, starred FROM problems WHERE subject = ? ORDER BY id DESC LIMIT 5", (subj,))
         recent_activity = rows("""
             SELECT r.id, r.result, r.created_at, p.id AS problem_id, p.title, p.course, p.topic
@@ -42,8 +46,12 @@ class ReportsMixin:
         # C6 合并仪表盘数据：趋势 / 分析 / 错因分布（单请求）
         trend = self._trend_data(subj)
         analytics = self._analytics_data(subj)
+        # U1：统一 next_step（与 /api/learn/next-step 同函数，队列消费同一结果）
+        next_step = graph.next_step(subj)
         self.json_response({
             "stats": stats, "due": due["count"] if due else 0, "topics": topics,
+            "oral_topic": oral_topic,
+            "next_step": next_step,
             "recent": recent, "recent_activity": recent_activity, "course_stats": course_stats,
             "points": trend["points"], "summary": trend["summary"],
             "due_7d": analytics["due_7d"], "deck_health": analytics["deck_health"],
@@ -515,7 +523,8 @@ class ReportsMixin:
         }
 
     def _handle_trend(self) -> None:
-        self.json_response(self._trend_data())
+        # 此前未传 subject，恒返回 physics → 切换学科后趋势数据不跟随。
+        self.json_response(self._trend_data(self.subject))
 
     def _analytics_data(self, subject: str = "physics") -> dict[str, Any]:
         """D4 复习面展开：未来 7 天压力 / 卡组健康度 / 近 30 天复习记录。"""
@@ -620,7 +629,8 @@ class ReportsMixin:
         return {"buckets": bucket_data, "curve": curve, "avg_stability": round(stability_sum / stability_n, 2) if stability_n else 0.0}
 
     def _handle_analytics(self) -> None:
-        self.json_response(self._analytics_data())
+        # 同 _handle_trend：此前忽略 ?subject=，多学科场景下恒显示 physics。
+        self.json_response(self._analytics_data(self.subject))
 
     def _handle_gamification(self) -> None:
         from gamification import state as game_state

@@ -1,9 +1,17 @@
 """测试 SM-2 间隔复习算法。"""
-import unittest
+import json
 import sys
+import tempfile
+import unittest
+from http.client import HTTPConnection
+from http.server import ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import config
+import db
+from handler import Handler
 from review import compute_review, clamp_mastery, ReviewResult
 
 
@@ -72,6 +80,84 @@ class TestComputeReview(unittest.TestCase):
         """间隔天数至少为1。"""
         r = compute_review(rating=4, prev_interval=1, prev_ease=1.3, prev_repetition=0)
         self.assertGreaterEqual(r.interval_days, 1)
+
+
+class TestQueueReadOnly(unittest.TestCase):
+    """F1 守恒条款锁定：复习/卡片队列拉取必须纯读——读取前后库内零变化。
+
+    任何新增的队列排序/过滤/惩罚逻辑（如 M2 错因加权）都不得在出队路径写库。
+    """
+
+    server: ThreadingHTTPServer
+    thread: Thread
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory(
+            prefix="review_ro_", dir=Path(__file__).resolve().parent / ".tmp")
+        cls._orig_db = config.DB_PATH
+        config.DB_PATH = Path(cls._tmp.name) / "review_ro_test.db"
+        db.DB_PATH = config.DB_PATH
+        db.init_db()
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.server.server_address[1]
+        cls.thread = Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls._tmp.cleanup()
+        db.DB_PATH = cls._orig_db
+        config.DB_PATH = cls._orig_db
+
+    def _request(self, method, path, body=None):
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        data = json.dumps(body) if body else None
+        headers = {"Content-Type": "application/json", "X-Requested-With": "LearnOS"}
+        conn.request(method, path, data, headers)
+        resp = conn.getresponse()
+        raw = resp.read().decode("utf-8")
+        conn.close()
+        return resp.status, json.loads(raw)
+
+    def _snapshot(self) -> dict:
+        """全表快照：行数 + 每行完整内容（防任何隐式写）。"""
+        out = {}
+        for table in ("problems", "reviews", "cards", "card_reviews",
+                      "concepts", "concept_progress", "mastery_log"):
+            rows = db.rows(f"SELECT * FROM {table}")
+            out[table] = [dict(r) for r in rows]
+        return out
+
+    def test_review_and_card_queues_are_readonly(self):
+        # 造数：2 道题（建题自动排复习任务）+ 2 张到期卡
+        for i, title in enumerate(("力学守恒题", "电磁感应题"), start=1):
+            status, data = self._request("POST", "/api/problems", {
+                "title": title, "course": "测试课程", "topic": "测试主题",
+                "content": f"第{i}题内容：求物理量。",
+            })
+            self.assertEqual(status, 201, data)
+        for i in range(2):
+            status, data = self._request("POST", "/api/cards", {
+                "cue": f"测试卡{i}的提示", "answer": f"测试卡{i}的答案",
+            })
+            self.assertEqual(status, 200, data)
+
+        before = self._snapshot()
+        # 两条出队路径各拉取一次
+        status, rv = self._request("GET", "/api/reviews")
+        self.assertEqual(status, 200)
+        self.assertGreaterEqual(len(rv["items"]), 2, "复习队列应含新建题")
+        status, cards_due = self._request("GET", "/api/cards/due")
+        self.assertEqual(status, 200)
+        self.assertGreaterEqual(len(cards_due["items"]), 2, "卡片队列应含新卡")
+        after = self._snapshot()
+        # 守恒断言：拉取前后所有相关表逐行一致（零写入）
+        for table in before:
+            self.assertEqual(before[table], after[table],
+                             f"拉取队列后 {table} 表发生变化（违反 F1 纯读条款）")
 
 
 if __name__ == "__main__":

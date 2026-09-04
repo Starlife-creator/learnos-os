@@ -1,4 +1,11 @@
 // 真题：新建试卷 / 详情 / 题目管理
+
+// 详情弹窗由本文件命令式创建（不在 index.html 的声明式弹窗注册表内），
+// 因此必须自己持有句柄：早期版本用 document.querySelector('.modal-overlay')
+// 全局查找来关闭它，结果命中 DOM 里第一个遮罩（#searchModal），把 Ctrl+K
+// 全局搜索永久移出 DOM。持引用后该问题不可能复现。
+let _examDetailOverlay = null;
+
 // ── B4 考试就绪度 ──
 async function createExamPaper() {
   const name = document.getElementById('examName').value.trim();
@@ -63,7 +70,7 @@ async function loadExamDetail(id) {
         <td>${escapeHtml(q.qno || i + 1)}</td>
         <td>${escapeHtml(q.topic)}</td>
         <td>${q.weight}</td>
-        <td><span class="tag ${(p.readiness >= p.target || true) ? 'tag-gray' : ''}">—</span></td>
+        <td><span class="tag ${p.readiness >= p.target ? 'tag-gray' : ''}">—</span></td>
       </tr>`).join('');
     const html = `<div class="modal" role="dialog" style="max-width:640px">
       <div class="modal-header">
@@ -80,9 +87,13 @@ async function loadExamDetail(id) {
     </div>`;
     const ov = document.createElement('div');
     ov.className = 'modal-overlay active';
+    // 给它一个 id，让 app-core 的 Esc 处理器（对每个 active 遮罩调 closeModal(m.id)）
+    // 也能关掉它 —— 此前的空 id 导致 Esc 与滚动锁对它全部失效。
+    ov.id = 'examDetailModal';
     ov.innerHTML = `<div style="position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;padding:16px">${html}</div>`;
-    ov.addEventListener('click', e => { if (e.target === ov.firstElementChild) ov.remove(); });
+    ov.addEventListener('click', e => { if (e.target === ov.firstElementChild) closeExamDetail(); });
     document.body.appendChild(ov);
+    _examDetailOverlay = ov;
   } catch(e) { toast(e.message, 'error'); }
 }
 
@@ -100,9 +111,14 @@ async function saveExamQuestions(paperId) {
     await api(`/api/exam/papers/${paperId}/questions`, { method: 'POST', body: { questions } });
     toast(t('exam.added').replace('{n}', questions.length));
     loadExam();
-    const ov = document.querySelector('.modal-overlay');
-    if (ov) ov.remove();
+    closeExamDetail();
   } catch(e) { toast(e.message, 'error'); }
+}
+
+function closeExamDetail() {
+  if (!_examDetailOverlay) return;
+  _examDetailOverlay.remove();
+  _examDetailOverlay = null;
 }
 
 async function deleteExamPaper(id) {

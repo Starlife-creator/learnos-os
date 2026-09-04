@@ -324,5 +324,108 @@ class TestBorrowedFeatures(unittest.TestCase):
         self.assertIn("points", data)
 
 
+class TestB3QueueSignals(unittest.TestCase):
+    """B3 M2+M3：复习队列错因权重/记忆脆弱排序 + 仪表盘口试选题错因优先。
+
+    M2 验收：含知识性错因（空白/概念错）的题在同掌握度下排前。
+    M3 验收：同错因同掌握度下，FSRS 稳定性低（记忆脆弱）者优先重考。
+    """
+
+    server: ThreadingHTTPServer
+    thread: Thread
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory(prefix="b3q_", dir=_TMP)
+        cls._orig_db = config.DB_PATH
+        config.DB_PATH = Path(cls._tmp.name) / "b3q_test.db"
+        db.DB_PATH = config.DB_PATH
+        db.init_db()
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.server.server_address[1]
+        cls.thread = Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        db.close_all_connections()  # 释放临时库句柄，避免 Windows 文件锁阻碍清理
+        cls._tmp.cleanup()
+        db.DB_PATH = cls._orig_db
+        config.DB_PATH = cls._orig_db
+
+    def _request(self, method, path, body=None):
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=10)
+        data = json.dumps(body) if body is not None else None
+        headers = {"Content-Type": "application/json", "X-Requested-With": "LearnOS"}
+        conn.request(method, path, data, headers)
+        resp = conn.getresponse()
+        result = json.loads(resp.read().decode("utf-8"))
+        conn.close()
+        return resp.status, result
+
+    def _create(self, title, topic, error_type):
+        status, data = self._request("POST", "/api/problems", {
+            "title": title, "content": "题目内容：求物理量。", "course": "B3测试",
+            "topic": topic, "error_type": error_type, "subject": "physics",
+        })
+        self.assertIn(status, (200, 201), data)
+        return data["id"]
+
+    def _set(self, pid, **cols):
+        """直改题目列（mastery/stability 等，POST 不接受这些字段）。"""
+        assignments = ", ".join(f"{k} = ?" for k in cols)
+        with db.DB_LOCK, db.db() as conn:
+            conn.execute(f"UPDATE problems SET {assignments} WHERE id = ?",
+                         (*cols.values(), pid))
+
+    def test_m2_error_weight_orders_queue(self):
+        """M2：同掌握度下，错因权重 空白(3) > 审题(1) > 粗心(0)。"""
+        for title, et in (("粗心题B3", "careless"),
+                          ("空白题B3", "blank_in_facts"),
+                          ("审题题B3", "misread")):
+            pid = self._create(title, "排序主题", et)
+            self._set(pid, mastery=4.0)  # 统一掌握度，且不干扰口试选题测试
+        status, data = self._request("GET", "/api/reviews?mode=plain")
+        self.assertEqual(status, 200)
+        titles = [it["title"] for it in data["items"]]
+        self.assertLess(titles.index("空白题B3"), titles.index("审题题B3"),
+                        "错因权重 3（知识空白）应排在 1（审题）前")
+        self.assertLess(titles.index("审题题B3"), titles.index("粗心题B3"),
+                        "错因权重 1（审题）应排在 0（粗心）前")
+
+    def test_m3_low_stability_first(self):
+        """M3：同错因同掌握度，低稳定性（记忆脆弱）先出队。"""
+        p_fragile = self._create("脆弱题B3", "排序主题", "careless")
+        p_sturdy = self._create("稳固题B3", "排序主题", "careless")
+        self._set(p_fragile, mastery=4.0, stability=2.0)
+        self._set(p_sturdy, mastery=4.0, stability=20.0)
+        status, data = self._request("GET", "/api/reviews?mode=plain")
+        self.assertEqual(status, 200)
+        titles = [it["title"] for it in data["items"]]
+        self.assertLess(titles.index("脆弱题B3"), titles.index("稳固题B3"),
+                        "同错因同掌握度下，低 FSRS 稳定性应先出队")
+
+    def test_dashboard_oral_topic_m2(self):
+        """M2：薄弱主题中错因权重最高者优先入口试；无薄弱主题时为 null。"""
+        # 甲掌握度更低但仅执行类错因；乙稍高但含知识性错因 → 乙胜出
+        pa = self._create("甲题B3", "甲主题", "careless")
+        pb = self._create("乙题B3", "乙主题", "blank_in_facts")
+        self._set(pa, mastery=2.0)
+        self._set(pb, mastery=2.9)
+        status, data = self._request("GET", "/api/dashboard")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["oral_topic"]["topic"], "乙主题",
+                         "薄弱主题中错因权重高者优先入口试，而非掌握度最低者")
+        self.assertEqual(data["oral_topic"]["error_weight"], 3)
+        # 全部主题掌握度 ≥3（无薄弱）→ oral_topic 为 None（前端回退旧逻辑）
+        self._set(pa, mastery=4.0)
+        self._set(pb, mastery=4.0)
+        status, data = self._request("GET", "/api/dashboard")
+        self.assertEqual(status, 200)
+        self.assertIsNone(data["oral_topic"])
+
+
 if __name__ == "__main__":
     unittest.main()

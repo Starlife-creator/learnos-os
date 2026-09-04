@@ -128,7 +128,10 @@ CREATE TABLE IF NOT EXISTS problems (
     tags_suggested TEXT NOT NULL DEFAULT '[]',
     tags_status TEXT NOT NULL DEFAULT '',
     variants TEXT NOT NULL DEFAULT '[]',
-    concept_ids TEXT NOT NULL DEFAULT '[]',
+    -- 注意：这里是 CSV（'', ',1,7,'），不是 JSON。v10 误设为 '[]'（JSON 风格），
+    -- 与全代码约定的两侧逗号 CSV 不兼容；新库已改为 ''，存量库由迁移 v31 清洗。
+    -- 所有写入点必须走 graph.concept_csv()，且 INSERT 不得省略本列（见守卫测试）。
+    concept_ids TEXT NOT NULL DEFAULT '',
     media_path TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS hints (
@@ -196,6 +199,8 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     # response_format={"type":"json_object"}，把「只返回 JSON」从提示词约束升级为协议约束。
     # 本地/严格 OpenAI 兼容端点不支持时由 400 剥离重试降级回纯提示词约束 + validate_object。
     "json_response_format": {"type": "bool", "default": "0"},
+    # D3 回收站保留期（日）：删除快照过期后物理清理；0 = 永不自动清理
+    "trash_retention_days": {"type": "int", "min": 0, "max": 365, "default": "3"},
 }
 
 

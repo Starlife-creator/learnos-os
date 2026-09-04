@@ -458,6 +458,10 @@ class ProblemsMixin:
             self.json_response({"content": existing["content"], "source": "saved", "cached": True,
                                 "diagnose": diagnose})
             return
+        # R3 配额守卫：必须在命中缓存之后、SSE 分支之前拦截——
+        # 缓存命中不消耗 AI 额度（不计费），SSE 与非 SSE 两条通路都要付费，故在分叉前统一拦。
+        if not self._ai_quota("fast"):
+            return
         # 提示缓存用户可控（R3）：关闭后 AI 生成的提示不落库
         cache_enabled = get_cached_settings().get("hint_cache_enabled", "1") != "0"
         rag_messages, rag_sources = self._rag_context(problem)
@@ -615,14 +619,17 @@ class ProblemsMixin:
     def _rag_context(self, problem: dict[str, Any]) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
         """B3：检索个人资料（教材/笔记）相关片段，注入 AI 上下文；返回 (注入消息, 溯源列表)。
 
-        检索 k=5 后按相对分阈值过滤（剔除沾边低质片段）；提示场景保持"优先基于"
-        软约束（教材未覆盖的题仍需正常给提示），仅追加反虚构与无关片段忽略规则。
+        检索 k=5 后按相对分阈值过滤（剔除沾边低质片段）；X1 增补：
+        ① filter_noise 低质命中兜底（单字分词下共享常用字的假 Source）；
+        ② 零命中且资料库非空时注入「资料未覆盖」硬边界，防 AI 谎称根据教材。
         """
         try:
             import rag
-            hits = rag.search(f"{problem.get('topic', '')} {problem.get('title', '')} "
-                              f"{str(problem.get('content', ''))[:200]}", k=5)
+            query = (f"{problem.get('topic', '')} {problem.get('title', '')} "
+                     f"{str(problem.get('content', ''))[:200]}")
+            hits = rag.search(query, k=5)
             hits = rag.filter_relevant(hits)
+            hits = rag.filter_noise(hits, query)  # X1：低质命中判噪声（宁可漏注入不假注入）
         except Exception:
             return [], []
         docs = {d["id"]: d for d in rag.list_docs()}
@@ -639,6 +646,15 @@ class ProblemsMixin:
             frags.append(f"[Source {len(sources)}｜{src['name']}"
                          + (f" 第{page}页" if page else "") + f"] {hit['content']}")
         if not frags:
+            # X1 越界抑制：资料库非空但零命中 → 注入硬边界消息——资料未覆盖须显式声明，
+            # 教材外补充必须标注，防 AI 谎称「根据教材」。空库保持原行为（RAG 未启用，不制造噪音）。
+            if docs:
+                return [{"role": "system", "content": (
+                    "用户个人资料库中未检索到与本题相关的内容（资料未覆盖本题）。\n"
+                    "硬性要求：① 不得声称「根据教材/资料/笔记」；"
+                    "② 如需补充资料之外的知识，必须以「🟡 AI 补充（非资料内容）」开头标注；"
+                    "③ 其余内容仅基于题目本身作答。"
+                )}], []
             return [], []
         return [{"role": "system", "content": (
             "以下是用户个人资料（教材/课件/笔记）中检索到的相关片段：\n" + "\n".join(frags)

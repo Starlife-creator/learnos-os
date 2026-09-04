@@ -62,12 +62,51 @@ class CardsMixin:
             return
         self.json_response({"drafts": drafts, "concept_id": concept_id})
 
+    def _handle_generate_card_batch(self, data: dict[str, Any]) -> None:
+        """POST /api/cards/generate-batch：C1 按概念里程碑清单批量出卡草稿（不落库）。
+
+        body: {concept_ids: [概念id...], use_ai: bool}。逐概念独立出卡（单概念
+        失败跳过），返回 {results: [{concept_id, concept_name, drafts}], failed}。
+        """
+        ids = data.get("concept_ids")
+        if not isinstance(ids, list) or not ids:
+            self.json_response({"error": "请提供概念 id 列表（concept_ids）"}, 400)
+            return
+        use_ai = bool(data.get("use_ai", True))
+        if use_ai:
+            try:
+                from ai import ai_configured
+                if ai_configured() and not self._ai_quota("heavy"):
+                    return
+            except Exception as exc:  # pragma: no cover - 防御性
+                LOG.debug("AI 可用性探测失败，按离线处理: %s", exc)
+                use_ai = False
+        try:
+            out = cards.generate_batch_drafts(self.subject, ids, use_ai=use_ai)
+        except ValueError as exc:
+            self.json_response({"error": str(exc)}, 400)
+            return
+        if not out["results"]:
+            self.json_response({"error": "全部概念均未产出草稿", "failed": out["failed"]}, 400)
+            return
+        self.json_response(out)
+
     def _handle_review_card(self, card_id: int, data: dict[str, Any]) -> None:
         """POST /api/cards/(卡片id)/review：评分（1-4）并调度下次。"""
         try:
             result = cards.review_card(card_id, int(data.get("rating", 2)))
         except ValueError as exc:
             self.json_response({"error": str(exc)}, 404 if "不存在" in str(exc) else 400)
+            return
+        self.json_response(result)
+
+    def _handle_undo_card_review(self, card_id: int) -> None:
+        """POST /api/cards/(卡片id)/undo：撤销最近一次评分（D2，原子恢复 prev 快照）。"""
+        try:
+            result = cards.undo_review(card_id)
+        except ValueError as exc:
+            self.json_response({"error": str(exc)},
+                               404 if "没有可撤销" in str(exc) else 400)
             return
         self.json_response(result)
 
@@ -80,6 +119,16 @@ class CardsMixin:
             threshold = 0.6
         import graph
         self.json_response(graph.learning_path(self.subject, threshold))
+
+    def _handle_next_step(self) -> None:
+        """GET /api/learn/next-step：U1 统一下一步（只读）。
+
+        由状态计算（到期错题→到期闪卡→薄弱口试→下一未掌握→完成），
+        任意入口（卡片/答题/口试/地图）调用得到同一条全局 next；
+        与仪表盘内嵌的 next_step 字段走同一 graph.next_step，不因入口分叉。
+        """
+        import graph
+        self.json_response(graph.next_step(self.subject))
 
     def _handle_delete_card(self, card_id: int) -> None:
         """POST /api/cards/(卡片id)/delete：删除卡片（评分日志级联）。"""

@@ -209,8 +209,8 @@ async function viewProblem(id) {
         ${masteryTag(p.mastery)}
       </div>`;
     if (Array.isArray(p.tags) && p.tags.length) {
-      html += `<div class="flex gap-8 mb-8" style="flex-wrap:wrap">${p.tags.map(t =>
-        `<span class="chip${p.tags_status === 'suggested' ? ' pending' : ''}">${escapeHtml(String(t))}</span>`).join('')}</div>`;
+      html += `<div class="flex gap-8 mb-8" style="flex-wrap:wrap">${p.tags.map(tName =>
+        `<span class="chip${p.tags_status === 'suggested' ? ' pending' : ''}">${escapeHtml(String(tName))}</span>`).join('')}</div>`;
     }
     // A2 先修告警：绑定概念的先修掌握度低时提示
     if (Array.isArray(p.prereq_warnings) && p.prereq_warnings.length) {
@@ -293,8 +293,12 @@ async function viewProblem(id) {
       else if (e.key === 'e') editProblem(id);
       else if (e.key === 'd') deleteProblem(id);
     };
-    modal._onKey = onKey;
-    document.addEventListener('keydown', onKey);
+    // 用 AbortController 绑定监听器生命周期：注册与注销共用同一 signal，
+    // 关闭弹窗时 closeModalDirect 会 abort 它。旧写法先覆盖 _onKey 再 addEventListener，
+    // 旧句柄丢失 → 监听器只增不减。这里改名前先 abort，双保险。
+    if (modal._keyAc) modal._keyAc.abort();
+    modal._keyAc = new AbortController();
+    document.addEventListener('keydown', onKey, { signal: modal._keyAc.signal });
   } catch(e) { toast(e.message, 'error'); }
 }
 
@@ -438,7 +442,7 @@ async function editProblem(id) {
       document.getElementById('editErrorType').value = p.error_type || t('common.pendingDiag');
       document.getElementById('editMastery').value = p.mastery || 1;
       document.getElementById('editStarred').checked = p.starred === 1;
-      currentTags = Array.isArray(p.tags) ? p.tags.map(t => ({ text: String(t), pending: p.tags_status === 'suggested' })) : [];
+      currentTags = Array.isArray(p.tags) ? p.tags.map(tName => ({ text: String(tName), pending: p.tags_status === 'suggested' })) : [];
       renderTags();
       document.getElementById('editTagInput').value = '';
       renderEditPhotos(Array.isArray(p.media_list) ? p.media_list : []);
@@ -552,7 +556,7 @@ async function saveProblem() {
     error_type: document.getElementById('editErrorType').value,
     mastery: parseInt(document.getElementById('editMastery').value, 10),
     starred: document.getElementById('editStarred').checked ? 1 : 0,
-    tags: currentTags.map(t => t.text).filter(Boolean),
+    tags: currentTags.map(tName => tName.text).filter(Boolean),
     media_path: document.getElementById('editMediaPath').value,
   };
   if (!body.title.trim() || !body.content.trim()) { toast(t('toast.titleRequired'), 'error'); return; }

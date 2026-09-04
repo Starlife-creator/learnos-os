@@ -295,9 +295,9 @@ async function withButtonLock(btn, fn) {
 const _TELE_KEY = 'learnos.telemetry';
 function trackEvent(name) {
   try {
-    const t = JSON.parse(localStorage.getItem(_TELE_KEY) || '{}');
-    t[name] = (t[name] || 0) + 1;
-    localStorage.setItem(_TELE_KEY, JSON.stringify(t));
+    const tele = JSON.parse(localStorage.getItem(_TELE_KEY) || '{}');
+    tele[name] = (tele[name] || 0) + 1;
+    localStorage.setItem(_TELE_KEY, JSON.stringify(tele));
   } catch (e) { /* 存储异常，静默 */ }
 }
 function telemetryReport() {
@@ -427,7 +427,7 @@ function editSnapshot() {
   const vals = ['editTitle','editCourse','editTopic','editContent','editAttempt','editErrorType','editMastery','editMediaPath']
     .map(i => { const el = document.getElementById(i); return el ? el.value : ''; });
   const star = document.getElementById('editStarred');
-  return JSON.stringify([vals, star ? (star.checked ? 1 : 0) : 0, (currentTags || []).map(t => t.text)]);
+  return JSON.stringify([vals, star ? (star.checked ? 1 : 0) : 0, (currentTags || []).map(tg => tg.text)]);
 }
 function editDirty() { return _editModalLast !== null && editSnapshot() !== _editModalLast; }
 // 草稿自动保存（P1-c2，nudge 优于硬拦截）：关闭/刷新时自动写 localStorage（key 限学科），重开新建弹窗时回填
@@ -443,7 +443,7 @@ function saveDraft() {
       error_type: document.getElementById('editErrorType').value,
       mastery: document.getElementById('editMastery').value,
       starred: document.getElementById('editStarred').checked ? 1 : 0,
-      tags: (currentTags || []).map(t => t.text),
+      tags: (currentTags || []).map(tg => tg.text),
       media_path: document.getElementById('editMediaPath').value,
     }));
   } catch (e) { /* 存储满/隐私模式，静默 */ }
@@ -521,11 +521,15 @@ function closeModalDirect(id) {
   overlay.classList.remove('active');
   unlockOverlay();
   if (_lastFocus && _lastFocus.focus) _lastFocus.focus();
-  // 清理详情弹窗的键盘快捷键监听
-  if (id === 'problemModal' && overlay._onKey) {
-    document.removeEventListener('keydown', overlay._onKey);
-    overlay._onKey = null;
+  // 清理弹窗的键盘快捷键监听。
+  // 旧实现依赖 overlay._onKey 句柄，但注册端每次都覆盖该句柄，导致旧监听器无法移除、
+  // 连开 N 题即累积 N 个（按 1/2/3/4 会向多个旧题目并发发请求）。
+  // 改用 AbortController：注册与注销共用同一个 signal，物理上不可能失同步。
+  if (overlay._keyAc) {
+    overlay._keyAc.abort();
+    overlay._keyAc = null;
   }
+  overlay._onKey = null;
   // 通知等待中的 Promise（如确认弹窗被遮罩/Esc 关闭时 resolve 为取消）
   overlay.dispatchEvent(new Event('close'));
 }
@@ -562,8 +566,8 @@ async function extractTags() {
         topic: document.getElementById('editTopic').value,
       },
     });
-    currentTags = (data.tags || []).map(t => ({
-      text: String(t),
+    currentTags = (data.tags || []).map(tg => ({
+      text: String(tg),
       pending: data.confidence < 0.9 || data.pending === true,
     }));
     renderTags();

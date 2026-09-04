@@ -27,6 +27,8 @@ class OralMixin:
             self.json_response({"error": "请输入口试主题"}, 400)
             return
         subject = str(data.get("subject", "")).strip()
+        if not self._ai_quota("heavy"):
+            return  # R3：start_oral 会调 AI 出首题，与 respond 同为 heavy 档
         session_id, question = start_oral(topic, subject)
         self.json_response({"session_id": session_id, "reply": question})
 
@@ -57,6 +59,8 @@ class OralMixin:
         problem = self._get_or_404("problems", int(data.get("problem_id", 0) or 0), "题目不存在")
         if problem is None:
             return
+        if not self._ai_quota("heavy"):
+            return  # R3：start_feynman 会调 AI 生成首问
         session_id, question = start_feynman(problem)
         self.json_response({"session_id": session_id, "reply": question})
 

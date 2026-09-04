@@ -22,6 +22,8 @@ from config import LOG
 from db import DB_LOCK, db, now, row, rows
 from review import compute_review
 import fsrs_bridge
+import graph
+import trash
 
 _QA_SUFFIX = "请先合上资料，用自己的话解释或默写答案，再翻面对照。"
 
@@ -87,13 +89,59 @@ def stats(subject: str) -> dict[str, int]:
     return {"total": int(total), "active": int(active), "due": int(due), "learned": int(learned)}
 
 
+# ── C2 语义契约：先查后写 + 泄题检查 ──────────────────────
+
+def _norm_cue(text: str) -> str:
+    """cue 归一化：casefold（Unicode 全折叠，SQLite NOCASE 只折 ASCII）+ 空白折叠。"""
+    return " ".join(str(text or "").split()).casefold()
+
+
+def _norm_dense(text: str) -> str:
+    """泄题探测用归一化：casefold + 去除所有空白（子串探测对空白差异鲁棒）。"""
+    return "".join(str(text or "").split()).casefold()
+
+
+def find_duplicate_card(subject: str, cue: str, exclude_id: int | None = None) -> dict[str, Any] | None:
+    """C2 先查后写：同学科下 cue 归一化相同的已有卡（含 draft，防草稿重复确认）。
+
+    返回重复卡行（含 id/cue/status），无重复返回 None。归一化在应用层做：
+    SQLite NOCASE 排序规则只折叠 ASCII，中文/全角场景必须逐行比对。
+    """
+    key = _norm_cue(cue)
+    if not key:
+        return None
+    for c in rows("SELECT id, cue, kind, status FROM cards WHERE subject = ?", (subject,)):
+        if c["id"] != exclude_id and _norm_cue(c["cue"]) == key:
+            return c
+    return None
+
+
+def leaks_answer(cue: str, answer: str) -> bool:
+    """C2 泄题检查：正面（cue）含完整答案（answer）即泄题。
+
+    归一化（casefold + 去全部空白）子串探测；答案过短（<4 字符，如符号/年份）
+    不判泄题，避免「答案=F」误伤所有正面。
+    """
+    a = _norm_dense(answer)
+    return len(a) >= 4 and a in _norm_dense(cue)
+
+
 def create_card(card_id: int | None, subject: str, concept_id: int, cue: str, answer: str,
                 kind: str = "qa", source: str = "manual", status: str = "active") -> int:
-    """新建（或覆盖同 id 的草稿）为一张启用状态卡片。返回 card id。"""
+    """新建（或覆盖同 id 的草稿）为一张启用状态卡片。返回 card id。
+
+    C2 语义契约：①先查后写——同学科下 cue 归一化重复（大小写/空白差异视为相同）
+    拒绝并提示编辑原卡；②泄题检查——正面含完整答案拒绝，要求改写正面。
+    """
     cue = str(cue or "").strip()
     answer = str(answer or "").strip()
     if not cue:
         raise ValueError("卡片正面（cue）不能为空")
+    if leaks_answer(cue, answer):
+        raise ValueError("正面包含完整答案（泄题），请改写正面或拆短背面")
+    dup = find_duplicate_card(subject, cue, exclude_id=card_id)
+    if dup:
+        raise ValueError(f"已存在相同正面的卡片 #{dup['id']}（{dup['status']}），请编辑原卡而非重复新建")
     kind = kind if kind in ("qa", "cloze", "note") else "qa"
     s = status if status in ("active", "draft", "disabled") else "active"
     with DB_LOCK, db() as conn:
@@ -111,9 +159,16 @@ def create_card(card_id: int | None, subject: str, concept_id: int, cue: str, an
 
 
 def delete_card(card_id: int) -> bool:
+    """D3：删除先入回收站（卡片 + 级联评分日志全量快照），保留期内可原样恢复。"""
     with DB_LOCK, db() as conn:
-        cur = conn.execute("DELETE FROM cards WHERE id = ?", (card_id,))
-    return cur.rowcount > 0
+        if not conn.execute("SELECT 1 FROM cards WHERE id = ?", (card_id,)).fetchone():
+            return False
+        trash.snapshot(conn, "card", card_id, [
+            ("cards", "SELECT * FROM cards WHERE id = ?", (card_id,)),
+            ("card_reviews", "SELECT * FROM card_reviews WHERE card_id = ?", (card_id,)),
+        ])
+        conn.execute("DELETE FROM cards WHERE id = ?", (card_id,))  # 评分日志随 FK 级联
+    return True
 
 
 # ── 草稿生成（AI / 离线降级）─────────────────────────────
@@ -176,14 +231,23 @@ def generate_drafts(subject: str, concept_id: int, use_ai: bool = True) -> list[
                 data = validate_object(raw, _CARD_SCHEMA)
                 out: list[dict[str, str]] = []
                 for d in data.get("cards", [])[:4]:
-                    out.append({
+                    item = {
                         "cue": str(d["cue"]).strip()[:300],
                         "answer": str(d["answer"]).strip()[:2000],
                         "kind": d["kind"] if d["kind"] in ("qa", "cloze", "note") else "qa",
-                    })
+                    }
+                    # C2 语义契约（草稿回炉）：泄题（正面含完整答案）或与已有卡
+                    # 重复的草稿直接丢弃；前端只看到干净草稿，全滤光则回退离线。
+                    if leaks_answer(item["cue"], item["answer"]):
+                        LOG.warning("AI 草稿泄题（正面含完整答案），已回炉丢弃: %.60s", item["cue"])
+                        continue
+                    if find_duplicate_card(subject, item["cue"]):
+                        LOG.warning("AI 草稿与已有卡重复，已丢弃: %.60s", item["cue"])
+                        continue
+                    out.append(item)
                 if out:
                     return out
-                LOG.warning("AI 卡片生成返回空，回退离线草稿")
+                LOG.warning("AI 卡片生成返回空（或全部泄题/重复），回退离线草稿")
         except (SchemaError, ValueError) as exc:
             LOG.warning("AI 卡片生成校验失败，回退离线草稿: %s", exc)
         except Exception as exc:
@@ -191,6 +255,42 @@ def generate_drafts(subject: str, concept_id: int, use_ai: bool = True) -> list[
     if not name:
         raise ValueError("概念不存在")
     return offline_drafts(concept_id)
+
+
+def generate_batch_drafts(subject: str, concept_ids: list[int],
+                          use_ai: bool = True) -> dict[str, Any]:
+    """C1 制卡 Pipeline 分层：按概念里程碑清单逐块出卡（而非整本硬塞）。
+
+    输入是「课纲步骤」产出的概念 id 清单（资料导入向导的课纲提取 / 学习路径的
+    薄弱概念），逐概念独立调用 generate_drafts（单概念小上下文，质量更高且
+    失败互不影响）；单概念失败仅跳过并记入 failed，不中断整批。
+    AI 层重试/降级由 generate_drafts 内部约定负责（call_ai 自带重试 + 离线模板降级）。
+    返回 {results: [{concept_id, concept_name, drafts}], failed: [{concept_id, error}]}。
+    """
+    results: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for cid in concept_ids[:60]:  # 上限 60 概念防失控账单
+        try:
+            cid = int(cid)
+        except (TypeError, ValueError):
+            continue
+        if cid in seen:
+            continue
+        seen.add(cid)
+        try:
+            drafts = generate_drafts(subject, cid, use_ai=use_ai)
+            name = (concept_lookup(cid) or {}).get("name") or f"概念#{cid}"
+            if drafts:
+                results.append({"concept_id": cid, "concept_name": name, "drafts": drafts})
+            else:
+                failed.append({"concept_id": cid, "error": "未产出草稿"})
+        except ValueError as exc:
+            failed.append({"concept_id": cid, "error": str(exc)})
+        except Exception as exc:  # 单概念异常不拖垮整批
+            LOG.warning("批量制卡：概念#%d 失败已跳过: %s", cid, exc)
+            failed.append({"concept_id": cid, "error": str(exc)})
+    return {"results": results, "failed": failed}
 
 
 # ── 复习（FSRS 调度）────────────────────────────────────
@@ -234,10 +334,32 @@ def review_card(card_id: int, rating: int) -> dict[str, Any]:
     fs_state, fs_stability, fs_difficulty = 0, 0.0, 0.0
     if fs is not None and overdue < 21:
         fs_state, fs_stability, fs_difficulty = fs.state, fs.stability, fs.difficulty
+    # D1：评分前完整记忆态快照（撤销=原子恢复；审计=可重放）
+    prev_snap = {
+        "state": int(card["state"] or 0),
+        "stability": float(card["stability"] or 0.0),
+        "difficulty": float(card["difficulty"] or 0.0),
+        "due": card["due_date"] or "",
+        "interval": int(card["interval_days"] or 1),
+        "repetition": int(card["repetition"] or 0),
+        "ease": float(card["ease_factor"] or 2.5),
+        "last_review": card["last_review"] or "",
+    }
     with DB_LOCK, db() as conn:
-        conn.execute("INSERT INTO card_reviews(card_id, due_date, interval_days, rating, created_at) "
-                     "VALUES (?, ?, ?, ?, ?)",
-                     (card_id, next_due, result.interval_days, rating, now()))
+        # D1+F2：评分日志写「不可变事实」——prev 快照 + cur FSRS 三态 + 参数指纹
+        # （cur_due/cur_interval 复用既有 due_date/interval_days 列）
+        conn.execute(
+            "INSERT INTO card_reviews(card_id, due_date, interval_days, rating, created_at, "
+            "prev_state, prev_stability, prev_difficulty, prev_due, prev_interval, "
+            "prev_repetition, prev_ease, prev_last_review, "
+            "cur_state, cur_stability, cur_difficulty, fsrs_params_version) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (card_id, next_due, result.interval_days, rating, now(),
+             prev_snap["state"], prev_snap["stability"], prev_snap["difficulty"],
+             prev_snap["due"], prev_snap["interval"], prev_snap["repetition"],
+             prev_snap["ease"], prev_snap["last_review"],
+             fs_state, fs_stability, fs_difficulty,
+             fsrs_bridge.current_params_hash()))
         conn.execute(
             "UPDATE cards SET due_date = ?, interval_days = ?, ease_factor = ?, repetition = ?, "
             "state = ?, stability = ?, difficulty = ?, last_review = ? WHERE id = ?",
@@ -245,9 +367,42 @@ def review_card(card_id: int, rating: int) -> dict[str, Any]:
              fs_state, fs_stability, fs_difficulty, date.today().isoformat(), card_id))
     # Phase 2：卡片评分实时回写图谱掌握度（双驱动）
     try:
-        import graph
-        graph.update_progress(card["subject"], force=True)
+        graph.update_progress(card["subject"], force=True, entry_point="card",
+                              evidence=f"闪卡#{card_id} 评分{rating}")
     except Exception as exc:
         LOG.debug("卡片评分后图谱掌握度重算失败（可忽略）: %s", exc)
     return {"card_id": card_id, "next_due": next_due, "interval_days": result.interval_days,
             "mastery": result.mastery}
+
+
+def undo_review(card_id: int) -> dict[str, Any]:
+    """D2 撤销最近一次评分：原子恢复 prev 全字段到 cards，并作废末行日志（undone=1）。
+
+    只撤最近一行未作废日志——连撤按行数自然递减（不越界：无行可撤报错）；
+    旧版本数据行（prev_due 为空串，无快照语义）显式拒绝；
+    撤销后触发掌握度重算（与评分路径对称）。
+    """
+    with DB_LOCK, db() as conn:
+        last = conn.execute(
+            "SELECT * FROM card_reviews WHERE card_id = ? AND undone = 0 "
+            "ORDER BY id DESC LIMIT 1", (card_id,)).fetchone()
+        if not last:
+            raise ValueError("没有可撤销的评分记录")
+        if not last["prev_due"]:
+            raise ValueError("该评分记录无快照（旧版本数据），不可撤销")
+        conn.execute(
+            "UPDATE cards SET due_date = ?, interval_days = ?, repetition = ?, ease_factor = ?, "
+            "state = ?, stability = ?, difficulty = ?, last_review = ? WHERE id = ?",
+            (last["prev_due"], last["prev_interval"], last["prev_repetition"],
+             last["prev_ease"], last["prev_state"], last["prev_stability"],
+             last["prev_difficulty"], last["prev_last_review"], card_id))
+        conn.execute("UPDATE card_reviews SET undone = 1 WHERE id = ?", (last["id"],))
+    card = row("SELECT subject FROM cards WHERE id = ?", (card_id,))
+    if card:
+        try:
+            graph.update_progress(card["subject"], force=True, entry_point="card_undo",
+                                  evidence=f"撤销闪卡#{card_id}评分（评分{last['rating']}）")
+        except Exception as exc:
+            LOG.debug("撤销评分后图谱掌握度重算失败（可忽略）: %s", exc)
+    return {"card_id": card_id, "restored_due": last["prev_due"],
+            "undone_review_id": last["id"]}

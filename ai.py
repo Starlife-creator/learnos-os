@@ -245,6 +245,18 @@ def display_settings() -> dict[str, str]:
     }
 
 
+def estimate_tokens(text: str) -> int:
+    """U2 上下文 token 估算（零依赖启发式，与 material.batch_chars 同口径）。
+
+    中文 ≈ 1.1 字符/token，ASCII ≈ 4 字符/token（混合文本按字符类分别累计）。
+    仅用于「引用面板」的预算展示与注入前的粗裁剪，不追求分词器级精确。
+    """
+    s = str(text or "")
+    cjk = sum(1 for ch in s if "\u4e00" <= ch <= "\u9fff")
+    other = len(s) - cjk
+    return int(cjk / 1.1 + other / 4) + 1
+
+
 def api_endpoint(base: str) -> str:
     """拼接 chat/completions 端点。仅允许 http/https 协议（防 file:/data: 等任意 URI 读取）。
 
@@ -1255,9 +1267,12 @@ def explain_concept(
     prereq: str = "",
     succ: str = "",
     contrast: str = "",
+    context_ref: str = "",
 ) -> str:
     """生成概念详解（词条式释义），纯 AI，不落库；由前端编辑后决定是否保存为 explanation。
 
+    context_ref：U2 引用面板注入的资料段落（用户确认后传入），详解须优先依据该资料，
+    资料未覆盖处才用模型知识（越界内容由前端溯源标注兜底，见 X1）。
     失败抛 RuntimeError（上层 handler 捕获降级）；无 AI 配置时调用方应已通过 _ai_quota 拦截。
     """
     ctx = []
@@ -1270,6 +1285,12 @@ def explain_concept(
     if contrast.strip():
         ctx.append(f"对比概念：{contrast.strip()}")
     ctx_block = "\n".join(ctx) if ctx else "（无额外上下文）"
+    ref_block = ""
+    if context_ref.strip():
+        ref_block = (
+            f"\n\n引用资料（优先依据；资料未讲的内容需基于学科常识并保持简洁准确）：\n"
+            f"{context_ref.strip()}"
+        )
     prompt = (
         f"你是{subject}学科助教。请为概念「{name}」写一段极简、准确、面向学生的概念详解。\n"
         f"硬性要求：\n"
@@ -1493,13 +1514,14 @@ _BANK_Q_PROMPT = (
 
 
 def local_bank_question(subject: str, topic: str, qtype: str) -> dict[str, Any]:
-    """离线降级：产出一道开放式自评占位题（零依赖）。"""
+    """离线降级：产出一道开放式自评占位题（零依赖）。source=manual：非 AI 生成不冒充。"""
     return {
         "type": "single",
         "stem": f"【{topic or '知识点'}】请用自己的话简述其核心要点并举例说明。",
         "choices": ["能正确表述并举例", "部分正确", "概念混淆", "完全错误"],
         "answer": 0,
         "explain": "离线模式仅提供开放式自评占位，建议联网后重新生成。",
+        "source": "manual",
     }
 
 
@@ -1528,6 +1550,10 @@ def generate_bank_question(subject: str, topic: str, qtype: str = "single",
             "type": qtype_r,
             "stem": str(q.get("stem", "")).strip(),
             "explain": str(q.get("explain", "")).strip(),
+            # C3 来源标记：AI 出题成功路径带 ai_generated（导入题库后界面可区分/追溯）
+            "source": "ai_generated",
+            # C3 定向出题：落用户指定的知识点，导入题库后命中目标概念
+            "concept": str(topic or "").strip()[:40] or "其他",
         }
         if qtype_r in ("single", "multiple"):
             item["choices"] = [str(c).strip() for c in (q.get("choices") or [])]
