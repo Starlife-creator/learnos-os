@@ -259,7 +259,7 @@ function renderCardFlash() {
   const fam = r.familiarity;
   const famTag = fam ? `<span class="tag ${_famTagClass(fam)}" title="${escapeHtml(t('fsrs.fam' + fam[0].toUpperCase() + fam.slice(1)))}（R=${(r.retrievability||0).toFixed(2)}）">${escapeHtml(t('fsrs.fam' + fam[0].toUpperCase() + fam.slice(1)))}</span>` : '';
   document.getElementById('cardFlashMeta').innerHTML =
-    `${r.concept_name ? '🧠 ' + r.concept_name + ' · ' : ''}${t('cards.reps')} ${r.repetition||0} ${famTag}`;
+    `${r.concept_name ? '🧠 ' + escapeHtml(r.concept_name) + ' · ' : ''}${escapeHtml(t('cards.reps'))} ${Number(r.repetition)||0} ${famTag}`;
   document.getElementById('cardFlashCue').textContent = r.cue || t('cards.noContent');
   document.getElementById('cardFlashAnswer').textContent = r.answer || t('cards.noContent');
   // D2：已有评分记录才可撤销（_cardIdx>0 说明本会话刚评过）
