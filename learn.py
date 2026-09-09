@@ -369,6 +369,8 @@ def update_material(mid: int, subject: str | None = None, title: str | None = No
         return False
     sets.append("updated_at = ?"); args.append(now())
     args.append(mid)
+    # P2 纵深防御：SET 片段均为上方硬编码字面量，拼接前断言形态，防误引用户输入
+    assert all(re.fullmatch(r"[a-z_]+ = \?", _f) for _f in sets), "非法 SET 片段: %r" % (sets,)
     with DB_LOCK, db() as conn:
         cur = conn.execute(f"UPDATE materials SET {', '.join(sets)} WHERE id = ?", tuple(args))
         return cur.rowcount > 0

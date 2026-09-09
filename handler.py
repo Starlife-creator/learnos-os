@@ -19,7 +19,7 @@ from pathlib import Path
 from config import STATIC_DIR, LOG, DB_PATH, MEDIA_DIR, SETTINGS_SCHEMA, coerce_setting
 import auth
 import ratelimit
-from db import DB_LOCK, db, now, row, rows, settings_dict, subject_exists, list_subjects
+from db import DB_LOCK, db, now, row, rows, settings_dict, subject_exists, list_subjects, safe_ident
 from ai import (
     call_ai, call_ai_stream, fallback_hint, problem_prompt, extract_tags, generate_variants,
     invalidate_settings_cache, set_runtime_key, set_master_password,
@@ -282,13 +282,29 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
             # 客户端已断开连接（浏览器取消请求 / 关标签页）：无处可写，直接放弃
             pass
 
+    # 慢速 body 防护（P1 加固）：socket 层每次 recv 有 self.timeout 上限，但
+    # 慢速攻击可每次只发几字节、每 119s 一发来无限占住线程。此处加分块读取
+    # 的总时长预算兜底，超时按 ValueError 400 处理并断开。
+    _BODY_READ_BUDGET = 30.0
+
     def read_json(self, max_bytes: int = 1_000_000) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))
         if length < 0:
             raise ValueError("无效的 Content-Length")  # 负数会使 read(-1) 阻塞到对端关闭
         if length > max_bytes:
             raise ValueError("请求内容过大")
-        raw = self.rfile.read(length)
+        deadline = time.monotonic() + self._BODY_READ_BUDGET
+        chunks: list[bytes] = []
+        remaining = length
+        while remaining > 0:
+            chunk = self.rfile.read(min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+            if time.monotonic() > deadline:
+                raise ValueError("请求体读取超时")
+        raw = b"".join(chunks)
         return json.loads(raw.decode("utf-8")) if raw else {}
 
     def _safe_error(self, exc: Exception, status: int = 500) -> None:
@@ -302,6 +318,14 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
             # C2：校验类消息可回显，但抹掉其中可能带出的本地路径（OSError 等被上层包装进 ValueError 时）
             msg = re.sub(r"[A-Za-z]:[\\/][^\s\"'，。]*", "<path>", str(exc))
             self.json_response({"error": msg}, 400)
+        elif isinstance(exc, RuntimeError):
+            # P1 优化：AI 层等抛出的 RuntimeError 是受控的中文成因提示
+            # （如「AI 返回了空内容」「仅推理未生成答案」「无法连接 AI 接口」），
+            # 不含堆栈/路径/密钥，回显给前端便于用户自助排障；
+            # 仍统一抹路径 + 限长，敏感细节只进服务端日志。
+            msg = re.sub(r"[A-Za-z]:[\\/][^\s\"'，。]*", "<path>", str(exc))[:300]
+            LOG.warning("请求处理失败（已回显成因）: %s", msg)
+            self.json_response({"error": msg}, status)
         else:
             LOG.error("请求处理异常: %s", exc, exc_info=True)
             self.json_response({"error": "服务器内部错误，请查看日志"}, status)
@@ -705,6 +729,9 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         deleted: dict[str, int] = {}
         with DB_LOCK, db() as conn:
             for tbl in tables:
+                # 纵深防御（P2）：tbl 本就来自上方硬编码白名单，拼接前仍断言标识符
+                # 合法，防未来有人把用户可控表名引入此路径造成注入。
+                tbl = safe_ident(tbl)
                 if tbl == "subjects":
                     cur = conn.execute("DELETE FROM subjects WHERE id = ?", (subject_id,))
                 elif tbl == "concept_links":
@@ -1029,13 +1056,19 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
             return
         ext = fp.suffix.lower()
         ctype = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(ext, "application/octet-stream")
-        body = fp.read_bytes()
+        # P2 优化：流式发送，不再 read_bytes() 全量入内存（大图/拍照附件并发时
+        # 内存峰值 = 文件大小 × 并发数）；按 256KB 分块直写 socket。
+        size = fp.stat().st_size
         self.send_response(200)
         self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Length", str(size))
         self.send_header("Cache-Control", "private, max-age=3600")
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            with fp.open("rb") as f:
+                shutil.copyfileobj(f, self.wfile, length=256 * 1024)
+        except OSError:
+            pass  # 客户端断开：与 json_response 同等忽略
 
     def do_PUT(self) -> None:
         if not self._write_auth_ok():

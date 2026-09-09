@@ -51,8 +51,26 @@ LOG_FILE = APP_DIR / "learnos.log"
 MEDIA_DIR = APP_DIR / "media"
 
 
+# 已知密钥值精确脱敏注册表（P2 加固，形状正则的兜底）：
+# 形状匹配只能盖住 sk-/Bearer/key= 等带可识别前缀的密钥；无前缀或自定义格式的
+# 密钥混进异常串时会漏脱敏。这里按「已知密钥值本身」做精确子串替换。
+# 模块加载时登记 API_TOKEN/EXPORT_TOKEN/API_KEY_ENV；AI 层解析出运行密钥后再追加。
+_KNOWN_SECRETS = set()
+
+
+def register_secret(value: str) -> None:
+    """登记一个已知密钥值，供 SecretRedactor 精确脱敏（幂等；仅登记 >=8 字符）。"""
+    v = (value or "").strip()
+    if len(v) >= 8:
+        _KNOWN_SECRETS.add(v)
+
+
+for _s in (API_TOKEN, EXPORT_TOKEN, API_KEY_ENV):
+    register_secret(_s)
+
+
 class SecretRedactor(logging.Filter):
-    """脱敏过滤器：遮蔽日志中的 API Key 等敏感片段。"""
+    """脱敏过滤器：遮蔽日志中的 API Key 等敏感片段（形状 + 已知值双保险）。"""
 
     _PATTERNS = [
         re.compile(r"sk-[A-Za-z0-9_\-]{8,}"),
@@ -65,6 +83,9 @@ class SecretRedactor(logging.Filter):
         msg = str(record.getMessage())
         for pat in self._PATTERNS:
             msg = pat.sub(lambda m: m.group(1) + "***REDACTED***" if m.groups() else "***REDACTED***", msg)
+        for secret in tuple(_KNOWN_SECRETS):
+            if secret and secret in msg:
+                msg = msg.replace(secret, "***REDACTED***")
         record.msg = msg
         record.args = ()
         return True

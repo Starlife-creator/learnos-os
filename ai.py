@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ipaddress
 import copy
+import random
 import json
 import os
 import re
@@ -145,6 +146,9 @@ def set_runtime_key(key: str | None) -> None:
     """设置内存密钥（会话级，重启后失效）。"""
     global _runtime_key
     _runtime_key = (key or "").strip() or None
+    if _runtime_key:
+        from config import register_secret
+        register_secret(_runtime_key)  # P2：已知密钥值纳入日志精确脱敏
     invalidate_settings_cache()
 
 
@@ -211,6 +215,10 @@ def get_cached_settings() -> dict[str, str]:
         s["api_base"] = API_BASE_ENV
     if MODEL_ENV:
         s["model"] = MODEL_ENV
+    _ak = s.get("api_key", "")
+    if _ak:
+        from config import register_secret
+        register_secret(_ak)  # P2：无论密钥来自 env/keys.enc/内存，均纳入日志精确脱敏
     _settings_cache = s
     _settings_cache_time = time.time()
     return s
@@ -548,6 +556,20 @@ def _cached_tokens(usage: dict[str, Any]) -> int:
         return 0
 
 
+# P1 优化：重试退避参数。base 按 2^attempt 指数增长并封顶；抖动避免并发同步重打上游。
+# 模块级常数便于测试下调提速（retries 默认 1，本地故障转移场景最多多等 ~1.5s）。
+_RETRY_BASE_DELAY = 1.0
+_RETRY_MAX_DELAY = 30.0
+
+
+def _retry_sleep(attempt: int, extra: float = 0.0) -> float:
+    """指数退避 + 抖动，返回实际休眠秒数（extra 为下限，如 Retry-After）。"""
+    delay = min(_RETRY_MAX_DELAY, _RETRY_BASE_DELAY * (2 ** attempt)) + random.uniform(0.0, 0.5)
+    delay = max(delay, float(extra or 0.0))
+    time.sleep(delay)
+    return delay
+
+
 def _post_json(url: str, payload: bytes, headers: dict[str, str], timeout: int = 45) -> dict[str, Any]:
     """发送 POST 并解析 JSON（入口过 _check_ai_target，经 _OPENER 禁重定向）。"""
     _check_ai_target(url)
@@ -642,7 +664,8 @@ def call_ai(
             last_error = RuntimeError("AI 接口响应格式不兼容。")
             break
         if attempt < retries:
-            LOG.warning("AI 调用第 %d 次失败，正在重试...", attempt + 1)
+            delay = _retry_sleep(attempt)
+            LOG.warning("AI 调用第 %d 次失败，%.1fs 后重试...", attempt + 1, delay)
 
     record(route=route, model=model, ok=False,
            error_kind=type(last_error).__name__ if last_error else "unknown",
@@ -1299,8 +1322,7 @@ def explain_concept(
         f"3. 用清晰短句，可分 2-4 行：第一行给核心定义；若上下文给出了前置/后继概念，"
         f"用一行点出关系；如有典型直觉或易错点，用一行简要点出；\n"
         f"4. 总字数控制在 80-160 字，不要 Markdown 标题，纯文本换行即可。\n"
-        f"已知上下文：\n{ctx_block}"
-        f"{ref_block}"
+        f"已知上下文：\n{ctx_block}{ref_block}"
     )
     return call_ai([{"role": "user", "content": prompt}], max_tokens=500, tier="heavy", route="material")
 

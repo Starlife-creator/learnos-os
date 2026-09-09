@@ -908,5 +908,92 @@ class TestEndpoints(unittest.TestCase):
         self.assertEqual(m2["month_revs"], m["month_revs"])
 
 
+class TestQAEntryReadOnly(unittest.TestCase):
+    """U3 入口差异化：问答/AI 草稿入口必须只读——调用前后学习状态零变化。
+
+    约束对象是 FSRS/学习状态表（problems/reviews/cards/concepts/掌握度日志/口试会话），
+    与 F1 出队纯读同口径；ai_telemetry（运维日志）与 hints（用户可控缓存）不在
+    守恒范围。制卡/复习/口试等写入入口不受此约束。
+    """
+
+    server: ThreadingHTTPServer
+    thread: Thread
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory(
+            prefix="qa_ro_", dir=_TEST_TMP_DIR)
+        cls._orig_db = config.DB_PATH
+        config.DB_PATH = Path(cls._tmp.name) / "qa_ro_test.db"
+        db.DB_PATH = config.DB_PATH
+        db.init_db()
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.server.server_address[1]
+        cls.thread = Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls._tmp.cleanup()
+        db.DB_PATH = cls._orig_db
+        config.DB_PATH = cls._orig_db
+
+    def _request(self, method, path, body=None):
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        data = json.dumps(body) if body else None
+        headers = {"Content-Type": "application/json", "X-Requested-With": "LearnOS"}
+        conn.request(method, path, data, headers)
+        resp = conn.getresponse()
+        result = json.loads(resp.read().decode("utf-8"))
+        conn.close()
+        return resp.status, result
+
+    def _snapshot(self) -> dict:
+        """学习状态全表快照：行数 + 每行完整内容（防任何隐式写）。"""
+        out = {}
+        for table in ("problems", "reviews", "cards", "card_reviews",
+                      "concepts", "concept_progress", "mastery_log", "oral_sessions"):
+            rs = db.rows(f"SELECT * FROM {table}")
+            out[table] = [dict(r) for r in rs]
+        return out
+
+    def test_qa_entries_do_not_mutate_learning_state(self):
+        # 造数：1 道题 + 1 张卡（让 next_step/检索/仪表盘都有真实状态可读）
+        status, _ = self._request("POST", "/api/problems", {
+            "title": "U3只读探针题", "course": "测试课程", "topic": "牛顿定律",
+            "content": "求合外力大小。"})
+        self.assertEqual(status, 201)
+        status, _ = self._request("POST", "/api/cards", {
+            "cue": "U3只读卡的提示", "answer": "U3只读卡的答案"})
+        self.assertEqual(status, 200)
+
+        before = self._snapshot()
+        # 问答/草稿/推荐类入口逐个调用（AI 未配置走降级路径，同样不得写库）
+        calls = [
+            ("GET", "/api/learn/next-step", None),
+            ("GET", "/api/learn/path", None),
+            ("GET", "/api/dashboard", None),
+            ("GET", "/api/rag/search?q=%E7%89%9B%E9%A1%BF", None),  # q=牛顿
+            ("POST", "/api/ai/context/estimate", {"text": "牛顿第二定律的完整表述"}),
+            ("POST", "/api/ai/concept-explanation",
+             {"name": "牛顿第二定律", "subject": "physics"}),
+            ("POST", "/api/ai/extract-tags",
+             {"title": "牛顿第二定律", "content": "求合外力大小。"}),
+            ("POST", "/api/bank/generate", {"type": "single", "topic": "牛顿第二定律"}),
+        ]
+        for method, path, body in calls:
+            status, data = self._request(method, path, body)
+            # 400=AI 未配置守卫 / 429=配额 / 502=AI 失败降级——均为零写入的合法路径
+            self.assertIn(status, (200, 202, 400, 429, 502),
+                          f"{path} 返回意外状态 {status}: {data}")
+        after = self._snapshot()
+        # 守恒断言：问答入口调用前后学习状态逐行一致（零写入）
+        for table in before:
+            self.assertEqual(before[table], after[table],
+                             f"问答入口调用后 {table} 表发生变化（违反 U3 只读条款）")
+
+
 if __name__ == "__main__":
     unittest.main()

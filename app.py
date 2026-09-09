@@ -38,6 +38,36 @@ def _check_exposed_token() -> bool:
     return True
 
 
+class _BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    """带并发上限的 ThreadingHTTPServer（P1 加固）。
+
+    默认实现每连接创建一线程且无上限：慢速 body / 慢速连接洪泛会让线程数
+    无限增长直至进程资源耗尽。此处用信号量把并发处理线程限制在
+    _MAX_CONCURRENT，超出的连接留在内核 accept 队列中等待（不新建线程），
+    本地使用完全无感，暴露模式下显著抬高慢速攻击成本。
+    """
+
+    _MAX_CONCURRENT = 32
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._slots = threading.BoundedSemaphore(self._MAX_CONCURRENT)
+
+    def process_request(self, request, client_address):  # noqa: D102
+        self._slots.acquire()
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):  # noqa: D102
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+
 def main() -> None:
     setup_logging()
     # R2（P1-1 根因）：暴露模式必须显式配置 LEARNOS_API_TOKEN，否则拒绝启动。
@@ -52,7 +82,7 @@ def main() -> None:
     except Exception as exc:
         LOG.warning("自动备份失败（可忽略）: %s", exc)
 
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    server = _BoundedThreadingHTTPServer((HOST, PORT), Handler)
     url = f"http://{HOST}:{PORT}"
     LOG.info("LearnOS 已启动: %s", url)
     LOG.info("按 Ctrl+C 停止。")

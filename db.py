@@ -10,6 +10,20 @@ from typing import Any
 
 from config import DB_PATH, SCHEMA, DEFAULT_SETTINGS, LOG
 
+_SQL_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def safe_ident(name: str) -> str:
+    """SQL 标识符白名单断言（P2 纵深防御）。
+
+    极少数路径必须用 f-string 拼接表名/列名/索引名（迁移 DDL、学科删除等）。
+    这些标识符本应全部来自代码内硬编码白名单；此断言确保一旦未来误把
+    用户可控输入传进来，会在拼接前立即抛错，而不是拼出可注入 SQL。
+    """
+    if not _SQL_IDENT_RE.fullmatch(name or ""):
+        raise ValueError(f"非法 SQL 标识符: {name!r}")
+    return name
+
 # RLock（可重入）：消除"持锁中再次请求锁"潜在的死锁隐患；对现有串行语义无改变。
 DB_LOCK = threading.RLock()
 
@@ -295,7 +309,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(problems)").fetchall()}
         for col in ("error_path", "trap_note", "shortcut", "fix_action"):
             if col not in cols:
-                conn.execute(f"ALTER TABLE problems ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
+                conn.execute(f"ALTER TABLE problems ADD COLUMN {safe_ident(col)} TEXT NOT NULL DEFAULT ''")
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (5, ?)", (now(),))
         LOG.info("数据库已迁移到 v5 (错因结构化字段 error_path/trap_note/shortcut/fix_action)")
 
@@ -811,7 +825,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute(ddl)
         # 清掉 v31 早期草稿里误建的冗余/负收益索引（若在旧副本上曾创建）
         for stale in ("idx_links_rel", "idx_links_a"):
-            conn.execute(f"DROP INDEX IF EXISTS {stale}")
+            conn.execute(f"DROP INDEX IF EXISTS {safe_ident(stale)}")
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (31, ?)", (now(),))
         LOG.info("数据库已迁移到 v31 (concept_ids 格式清洗 + 图谱/提示索引)")
 
