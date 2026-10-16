@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import config
 import db
+import ai_client  # 传输层实现所在模块（ADR 0008）：patch 必须打在实现层
 import rag
 
 
@@ -68,7 +69,7 @@ class TestCacheBreakpoint(unittest.TestCase):
     def test_flag_off_by_default_in_payload(self):
         """默认关闭：payload 中不得出现 cache_control。"""
         import ai
-        with patch.object(ai, "get_cached_settings", return_value={
+        with patch.object(ai_client, "get_cached_settings", return_value={
                 "api_key": "k", "api_base": "https://api.example.com/v1",
                 "model": "m", "prompt_cache_control": "0"}):
             _, _, payload, _, _ = ai._prepare_ai_request(
@@ -81,7 +82,7 @@ class TestCacheBreakpoint(unittest.TestCase):
         import ai
         cfg = {"api_key": "k", "api_base": "https://api.example.com/v1",
                "model": "m", "prompt_cache_control": "1"}
-        with patch.object(ai, "get_cached_settings", return_value=cfg):
+        with patch.object(ai_client, "get_cached_settings", return_value=cfg):
             _, _, payload, _, _ = ai._prepare_ai_request(
                 [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],
                 max_tokens=256, tier=None, route="test", stream=False)
@@ -275,7 +276,7 @@ class TestStructuredOutputGate(unittest.TestCase):
         import ai
         cfg = dict(self._BASE)
         cfg.update(cfg_extra)
-        with patch.object(ai, "get_cached_settings", return_value=cfg):
+        with patch.object(ai_client, "get_cached_settings", return_value=cfg):
             _, _, payload, _, _ = ai._prepare_ai_request(
                 [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],
                 max_tokens=256, tier=None, route="test", stream=False, **kw)
@@ -302,7 +303,8 @@ class TestStructuredOutputGate(unittest.TestCase):
         self.assertNotIn("response_format", body)
 
     def test_400_retry_keywords_cover_response_format(self):
-        src = (Path(__file__).resolve().parent.parent / "ai.py").read_text(encoding="utf-8")
+        # 400 降级重试在传输层（ADR 0008 后为 ai_client.py）
+        src = (Path(__file__).resolve().parent.parent / "ai_client.py").read_text(encoding="utf-8")
         for kw in ("response_format", "json_object"):
             self.assertIn(f'"{kw}"', src)
 
@@ -313,6 +315,7 @@ class TestStructuredOutputGate(unittest.TestCase):
         mat_src = (root / "material.py").read_text(encoding="utf-8")
         cards_src = (root / "cards.py").read_text(encoding="utf-8")
         # ai.py 6 处 + material.py 6 处 + cards.py 1 处
+        # （ai.py 的 6 处全在应用层编排函数里；传输层 ai_client.py 不含调用点）
         self.assertGreaterEqual(ai_src.count("json_mode=True"), 6)
         self.assertGreaterEqual(mat_src.count("json_mode=True"), 6)
         self.assertGreaterEqual(cards_src.count("json_mode=True"), 1)
@@ -342,7 +345,7 @@ class TestSettingsSchemaReachable(unittest.TestCase):
     def test_display_settings_exposes_switches(self):
         """设置页需能读回开关状态，否则 UI 每次加载都显示"关"。"""
         import ai
-        with patch.object(ai, "get_cached_settings", return_value={
+        with patch.object(ai_client, "get_cached_settings", return_value={
                 "prompt_cache_control": "1", "json_response_format": "1"}):
             s = ai.display_settings()
         self.assertIs(s["prompt_cache_control"], True)

@@ -112,7 +112,10 @@ learnos-os/
   app.py           # 主入口：启动服务器
   config.py        # 全局配置、路径常量、Schema、日志脱敏
   db.py            # 数据访问层：SQLite 连接、查询、迁移
-  ai.py            # AI 调用层：OpenAI 兼容接口、流式、提示词、降级
+  ai.py            # AI 应用层：对外入口（标签/变式题/出题/审题/评分）+ 三层再导出
+  ai_client.py     # AI 传输层：结果缓存、设置与密钥、HTTP 调用、模型预设
+  ai_prompts.py    # AI 提示词层：学科档案、阶段提示词、结构化 schema
+  ai_fallback.py   # AI 降级层：断网/未配置时的本地启发式提示与产出
   review.py        # SM-2 间隔复习算法
   fsrs_bridge.py   # FSRS-6 调度桥接（vendor 优先，SM-2 降级）
   scheduler.py     # 统一复习调度入口（题目/闪卡共用；FSRS 全权，SM-2 支做逾期顺延）

@@ -1064,11 +1064,52 @@ def init_db() -> None:
 
 
 def rows(query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-    # 持 DB_LOCK（RLock，重入安全）：防止与 close_all_connections/close_thread_conn
-    # 并发时 execute 命中已关闭连接；代价是读串行化，单用户场景可接受。
-    with DB_LOCK:
-        with db() as conn:
-            return [dict(row) for row in conn.execute(query, params).fetchall()]
+    """只读查询：**不**持 DB_LOCK。
+
+    连接安全由代次（epoch）+ 重试保证：`close_all_connections()` 递增 _EPOCH 并关闭
+    旧连接；本线程若正撞上这一刻，execute 会抛 ProgrammingError（已关闭）/OperationalError
+    （无法打开），此时清掉线程本地连接重建一次即可。写路径仍持 DB_LOCK（见各调用点），
+    所以读不再与其它读串行化，但仍会等待写事务（SQLite busy_timeout）。
+    """
+    last: Exception | None = None
+    for _attempt in range(2):
+        try:
+            with db() as conn:
+                return [dict(r) for r in conn.execute(query, params).fetchall()]
+        except (sqlite3.ProgrammingError, sqlite3.OperationalError) as exc:
+            # 仅对「连接已失效」类错误重试；SQL 语法/表不存在等错误直接上抛。
+            # 嵌套事务内（depth != 0）不重试：丢弃连接会破坏外层事务边界。
+            if not _is_conn_gone(exc) or getattr(_TLS, "depth", 0):
+                raise
+            last = exc
+            _discard_thread_conn()
+    raise last  # type: ignore[misc]
+
+
+def _is_conn_gone(exc: Exception) -> bool:
+    """连接因并发 close_all_connections/close_thread_conn 失效的判定。"""
+    msg = str(exc).lower()
+    return any(s in msg for s in (
+        "closed database", "cannot operate on a closed", "no such table",
+        "unable to open database", "disk i/o error",
+    ))
+
+
+def _discard_thread_conn() -> None:
+    """丢弃线程本地连接（不 checkpoint：它可能已被别的线程关闭）。下次取用时重建。"""
+    conn = getattr(_TLS, "conn", None)
+    _TLS.conn = None
+    _TLS.db_path = None
+    _TLS.epoch = -1
+    if conn is None:
+        return
+    with _ALL_CONNS_LOCK:
+        if _ALL_CONNS.get(threading.get_ident()) is conn:
+            _ALL_CONNS.pop(threading.get_ident(), None)
+    try:
+        conn.close()
+    except sqlite3.Error:
+        pass
 
 
 def row(query: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:

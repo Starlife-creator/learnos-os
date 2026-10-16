@@ -437,6 +437,84 @@ class TestMasteryWriteGuard(unittest.TestCase):
                          + ", ".join(offenders))
 
 
+class TestAiLayerBoundaries(unittest.TestCase):
+    """ADR 0008：ai 四层单向依赖 + 旧名可经 ai.* 拿到。
+
+    历史问题：ai.py 单文件 1882 行，传输/提示词/降级/编排混装，改提示词要读全部。
+    拆分后最容易出的错是「漏 re-export」（运行时才炸）和「层间反向 import」（循环依赖）。
+    """
+
+    LAYERS = ("ai_client", "ai_prompts", "ai_fallback")
+    # 可变模块级状态：不走 from-import（否则读到值拷贝），由 __getattr__ 实时回退。
+    LIVE_STATE_ONLY = {
+        "_result_mem", "_cache_metrics_lock", "cache_hits", "cache_misses",
+        "_settings_cache", "_settings_cache_time", "_runtime_key", "_master_password",
+        "_probe_cache",
+    }
+
+    @staticmethod
+    def _top_level_names(path: Path) -> list[str]:
+        out: list[str] = []
+        for node in ast.parse(path.read_text(encoding="utf-8")).body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                out.append(node.name)
+            elif isinstance(node, ast.Assign):
+                out.extend(t.id for t in node.targets if isinstance(t, ast.Name))
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                out.append(node.target.id)
+        return out
+
+    def test_every_layer_name_reachable_from_ai(self) -> None:
+        import ai
+        missing = []
+        for layer in self.LAYERS:
+            for name in self._top_level_names(ROOT / f"{layer}.py"):
+                try:
+                    getattr(ai, name)
+                except AttributeError:
+                    missing.append(f"{layer}.{name}")
+        self.assertEqual(missing, [], "ai 未透出以下名字，旧调用方会 ImportError："
+                         + ", ".join(sorted(missing)))
+
+    def test_reexported_objects_are_identical(self) -> None:
+        """函数/类必须同一对象；可变状态允许（也应）是实时读取的代理。"""
+        import ai
+        drift = []
+        for layer in self.LAYERS:
+            mod = __import__(layer)
+            for name in self._top_level_names(ROOT / f"{layer}.py"):
+                if name in self.LIVE_STATE_ONLY:
+                    continue
+                if getattr(ai, name) is not getattr(mod, name):
+                    drift.append(f"{layer}.{name}")
+        self.assertEqual(drift, [], "re-export 不是同一对象（值拷贝会静默读到旧值）："
+                         + ", ".join(sorted(drift)))
+
+    def test_layer_dependencies_are_one_way(self) -> None:
+        """ai_client→无、ai_prompts→无、ai_fallback→ai_prompts、ai→三层。"""
+        allowed = {
+            "ai_client": set(),
+            "ai_prompts": set(),
+            "ai_fallback": {"ai_prompts"},
+            "ai": {"ai_client", "ai_prompts", "ai_fallback"},
+        }
+        watched = {"ai", *self.LAYERS}
+        bad = []
+        for mod_name, ok in allowed.items():
+            tree = ast.parse((ROOT / f"{mod_name}.py").read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    deps = [a.name.split(".")[0] for a in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    deps = [(node.module or "").split(".")[0]]
+                else:
+                    continue
+                for dep in deps:
+                    if dep in watched and dep != mod_name and dep not in ok:
+                        bad.append(f"{mod_name}.py → {dep}")
+        self.assertEqual(bad, [], "ai 分层出现反向/越层依赖：" + ", ".join(sorted(set(bad))))
+
+
 class TestPerformanceBudget(unittest.TestCase):
     """性能预算型 fitness function：把性能决策锁进 CI。
 

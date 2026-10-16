@@ -270,6 +270,119 @@ class TestV35MigrationReplay(unittest.TestCase):
                 db.DB_PATH = orig
 
 
+class TestV36MigrationReplay(unittest.TestCase):
+    """v36：mastery_events 增 item_type/item_id（ADR 0004 题目掌握度事件）。"""
+
+    def test_v35_to_v36_upgrade(self):
+        import sqlite3
+        orig = config.DB_PATH
+        with tempfile.TemporaryDirectory(prefix="db_v36_", dir=_TEST_TMP_DIR) as td:
+            old = Path(td) / "v35.db"
+            conn = sqlite3.connect(old)
+            conn.executescript("""
+                CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+                INSERT INTO schema_version(version, applied_at) VALUES (35, '2026-01-01T00:00:00');
+                CREATE TABLE subjects (
+                    id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '',
+                    builtin INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+                CREATE TABLE seed_versions (
+                    subject TEXT PRIMARY KEY, seed_version INTEGER NOT NULL DEFAULT 0,
+                    applied_at TEXT NOT NULL);
+                CREATE TABLE trash (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL,
+                    entity_id INTEGER NOT NULL, payload_json TEXT NOT NULL,
+                    trashed_at TEXT NOT NULL, restored_at TEXT NOT NULL DEFAULT '');
+                CREATE TABLE mastery_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    subject TEXT NOT NULL DEFAULT 'physics',
+                    concept_id INTEGER NOT NULL,
+                    entry_point TEXT NOT NULL DEFAULT '',
+                    evidence TEXT NOT NULL DEFAULT '',
+                    revision INTEGER NOT NULL DEFAULT 1,
+                    prev_mastery REAL NOT NULL DEFAULT 0.0,
+                    cur_mastery REAL NOT NULL DEFAULT 0.0,
+                    created_at TEXT NOT NULL DEFAULT ''
+                );
+                INSERT INTO mastery_events(subject, concept_id, entry_point, evidence,
+                    revision, prev_mastery, cur_mastery, created_at)
+                VALUES ('physics', 7, 'review', '旧事件', 1, 0.0, 0.6, '2026-01-01T00:00:00');
+            """)
+            conn.commit()
+            conn.close()
+            config.DB_PATH = old
+            db.DB_PATH = old
+            try:
+                db.init_db()
+                cols = {r["name"] for r in db.rows("PRAGMA table_info(mastery_events)")}
+                for c in ("item_type", "item_id"):
+                    self.assertIn(c, cols, f"v36 mastery_events 应新增列 {c}")
+                # 存量概念事件回填 item_id = concept_id，item_type 落默认 concept
+                ev = db.row("SELECT * FROM mastery_events WHERE entry_point = 'review'")
+                self.assertEqual(ev["item_type"], "concept")
+                self.assertEqual(ev["item_id"], 7, "存量事件 item_id 应回填为 concept_id")
+                self.assertAlmostEqual(ev["cur_mastery"], 0.6, places=2)
+                top = db.row("SELECT MAX(version) AS v FROM schema_version")["v"]
+                self.assertGreaterEqual(int(top), 36)
+                # 旧代码写入路径兼容：不带新列的 INSERT 仍可执行
+                with db.DB_LOCK, db.db() as c2:
+                    c2.execute("INSERT INTO mastery_events(subject, concept_id, entry_point, evidence, "
+                               "revision, prev_mastery, cur_mastery, created_at) "
+                               "VALUES ('physics', 7, 'legacy', '', 2, 0.6, 0.7, '')")
+                self.assertEqual(db.row("SELECT COUNT(*) AS c FROM mastery_events "
+                                        "WHERE entry_point = 'legacy'")["c"], 1)
+            finally:
+                db.close_all_connections()
+                config.DB_PATH = orig
+                db.DB_PATH = orig
+
+
+class TestReadPathNoGlobalLock(unittest.TestCase):
+    """#9：只读查询不再持 DB_LOCK；连接被并发关闭时靠 epoch + 重试自愈。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory(prefix="db_read_", dir=_TEST_TMP_DIR)
+        cls._orig_db = config.DB_PATH
+        config.DB_PATH = Path(cls._tmp.name) / "read_test.db"
+        db.DB_PATH = config.DB_PATH
+
+    @classmethod
+    def tearDownClass(cls):
+        db.close_all_connections()
+        config.DB_PATH = cls._orig_db
+        db.DB_PATH = cls._orig_db
+        cls._tmp.cleanup()
+
+    def test_rows_recovers_after_close_all_connections(self):
+        db.init_db()
+        self.assertEqual(db.row("SELECT COUNT(*) AS c FROM problems")["c"], 0)
+        # 模拟「读线程即将 execute 时，备份线程关掉了它的连接」
+        import threading
+        captured = {}
+
+        def reader():
+            captured["result"] = db.rows("SELECT COUNT(*) AS c FROM settings")
+
+        # 先让主线程与子线程都建立连接，再在子线程读之前 close_all_connections
+        db.rows("SELECT 1")  # 预热主线程连接
+        t = threading.Thread(target=reader)
+        db.close_all_connections()
+        t.start()
+        # 主线程此刻持有的是已关闭连接：必须能自愈而非抛 ProgrammingError
+        self.assertGreater(db.row("SELECT COUNT(*) AS c FROM settings")["c"], 0)
+        t.join()
+        self.assertGreater(captured["result"][0]["c"], 0)
+
+    def test_rows_inside_transaction_does_not_retry(self):
+        """嵌套事务内不复用重试逻辑（避免丢弃连接破坏外层事务边界）。"""
+        db.init_db()
+        with db.DB_LOCK, db.db() as conn:
+            self.assertIsNotNone(db.row("SELECT COUNT(*) AS c FROM settings"))
+            conn.execute("INSERT INTO settings(key, value) VALUES ('read_tx_probe', '1') "
+                         "ON CONFLICT(key) DO UPDATE SET value = '1'")
+        self.assertEqual(db.row("SELECT value FROM settings WHERE key = 'read_tx_probe'")["value"], "1")
+
+
 class TestSettingsDict(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

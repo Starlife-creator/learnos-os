@@ -51,7 +51,7 @@ BACKUP_TABLES = [
     # v33/v34 增量（B2 批 D3/D4）：
     "trash",              # D3 回收站快照（丢失 = 未恢复的误删不可找回）
     "mastery_events",     # D4 掌握度事件溯源（丢失 = 掌握度变化证据链断层）
-    # 注：`ai_result_cache` **不**纳入备份。它由 ai.py:58 在模块导入时以
+    # 注：`ai_result_cache` **不**纳入备份。它由 ai_client.py 在首次读写时以
     # CREATE TABLE IF NOT EXISTS 惰性创建，既不属于 config.SCHEMA 也不在迁移体系内；
     # 且它本质是带 TTL 的派生缓存（可再生），备份它只会让备份文件无谓膨胀。
     # 原则：备份业务数据，不备份派生缓存。
@@ -139,10 +139,13 @@ def auto_backup_if_due() -> Path | None:
         return None
     if not _db_path.is_file():
         return None
-    close_all_connections()  # R4：连接复用后必须落盘 WAL + 释放文件锁，才能安全拷库
-    stamp = time.strftime("%H%M%S")
-    target = backups_dir / f"auto_{today}_{stamp}.db"
-    shutil.copy2(_db_path, target)
+    # 与写入/还原串行化：close_all_connections 会递增 epoch 并关闭其它线程的连接，
+    # 持 DB_LOCK 可避免与正在进行的写事务交错（A1 同类问题）。
+    with DB_LOCK:
+        close_all_connections()  # R4：连接复用后必须落盘 WAL + 释放文件锁，才能安全拷库
+        stamp = time.strftime("%H%M%S")
+        target = backups_dir / f"auto_{today}_{stamp}.db"
+        shutil.copy2(_db_path, target)
     keep = sorted(backups_dir.glob("auto_*.db"))
     for old in keep[:-7]:
         try:

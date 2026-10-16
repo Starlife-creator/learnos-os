@@ -190,10 +190,11 @@ class TestBorrowedFeatures(unittest.TestCase):
         self.assertEqual(s["ai_context_tokens"], 262144)
         # 空返回 → 可读错误（而非 "JSON 解析失败"）
         import ai
-        with mock.patch("ai._prepare_ai_request", return_value=(
+        import ai_client  # 传输层实现所在模块（ADR 0008）
+        with mock.patch.object(ai_client, "_prepare_ai_request", return_value=(
                 "test-model", "https://example.test/v1/chat/completions",
                 b"{}", {"Authorization": "Bearer x"}, 0.0)):
-            with mock.patch("ai._post_json", return_value={
+            with mock.patch.object(ai_client, "_post_json", return_value={
                     "choices": [{"message": {"content": ""}}], "usage": {}}):
                 with self.assertRaises(RuntimeError) as ctx:
                     ai.call_ai([{"role": "user", "content": "hi"}], route="test")

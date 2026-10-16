@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import config
 import db
 import ai
+import ai_client  # 传输层实现所在模块（ADR 0008）：patch 必须打在实现层，否则不生效
 import bank
 
 _TMP = Path(__file__).resolve().parent / ".tmp"
@@ -248,7 +249,7 @@ class TestEnableThinking(unittest.TestCase):
             "temperature": "0.3", "disable_thinking": "1",
         }
         cfg.update(overrides)
-        with mock.patch.object(ai, "get_cached_settings", return_value=cfg):
+        with mock.patch.object(ai_client, "get_cached_settings", return_value=cfg):
             _, _, payload, _, _ = ai._prepare_ai_request(
                 [{"role": "user", "content": "hi"}], 100, None, "test", stream=False)
         return json.loads(payload)
@@ -266,7 +267,7 @@ class TestEnableThinking(unittest.TestCase):
         cfg = {"api_base": "https://xxx.maas.aliyuncs.com/compatible-mode/v1",
                "api_key": "sk-test", "model": "deepseek-v4-flash-0731",
                "temperature": "0.3", "disable_thinking": "0"}
-        with mock.patch.object(ai, "get_cached_settings", return_value=cfg):
+        with mock.patch.object(ai_client, "get_cached_settings", return_value=cfg):
             _, _, payload, _, _ = ai._prepare_ai_request(
                 [{"role": "user", "content": "hi"}], 100, None, "test", stream=True)
         self.assertIsNone(json.loads(payload).get("enable_thinking"))
@@ -392,8 +393,8 @@ class TestPresetDropRetry(unittest.TestCase):
         cfg = {"api_base": "https://x.maas.aliyuncs.com/compatible-mode/v1",
                "api_key": "sk", "model": "deepseek-v4-flash-0731",
                "temperature": "0.3", "disable_thinking": "1"}
-        with mock.patch.object(ai, "get_cached_settings", return_value=cfg):
-            with mock.patch.object(ai, "_post_json", side_effect=fake_post):
+        with mock.patch.object(ai_client, "get_cached_settings", return_value=cfg):
+            with mock.patch.object(ai_client, "_post_json", side_effect=fake_post):
                 result = ai.call_ai([{"role": "user", "content": "hi"}], route="test")
         self.assertEqual(result, "ok")
         self.assertEqual(calls["n"], 2)
@@ -414,8 +415,8 @@ class TestPresetDropRetry(unittest.TestCase):
         cfg = {"api_base": "https://x.maas.aliyuncs.com/compatible-mode/v1",
                "api_key": "sk", "model": "deepseek-v4-flash-0731",
                "temperature": "0.3", "disable_thinking": "1"}
-        with mock.patch.object(ai, "get_cached_settings", return_value=cfg):
-            with mock.patch.object(ai, "_post_json", side_effect=fake_post):
+        with mock.patch.object(ai_client, "get_cached_settings", return_value=cfg):
+            with mock.patch.object(ai_client, "_post_json", side_effect=fake_post):
                 with self.assertRaises(RuntimeError):
                     ai.call_ai([{"role": "user", "content": "hi"}], retries=0, route="test")
         self.assertEqual(calls["n"], 1)
