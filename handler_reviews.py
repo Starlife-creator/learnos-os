@@ -9,10 +9,9 @@ from urllib.parse import parse_qs, urlparse
 from config import LOG
 from db import DB_LOCK, db, now, row, rows
 from ai import get_cached_settings
-from review import compute_review
 from errors import ERROR_TYPE_LABELS, queue_weight
-import fsrs_bridge
-from fsrs_bridge import next_interval_days
+from scheduler import schedule_review
+from mastery import set_problem_mastery
 from handler_base import (X_HEADER, X_VALUE, _IDEMPOTENCY, _IDEMPOTENCY_TTL,
                           _as_str_list, _interleave, _prune_idempotency)
 
@@ -102,53 +101,36 @@ class ReviewsMixin:
             self.json_response({"error": "复习任务不存在"}, 404)
             return
         rating = max(1, min(4, int(data.get("rating", 2))))
-        problem = row("SELECT ease_factor, repetition, state, stability, difficulty FROM problems WHERE id = ?", (review["problem_id"],))
-        prev_ease = problem["ease_factor"] if problem else 2.5
-        prev_rep = problem["repetition"] if problem else 0
-        prev_state = int(problem["state"] or 0) if problem else 0
-        prev_stability = float(problem["stability"] or 0) if problem else 0.0
-        prev_difficulty = float(problem["difficulty"] or 0) if problem else 0.0
-
-        result = compute_review(rating, review["interval_days"], prev_ease, prev_rep)
-        fsrs_interval = next_interval_days(
-            rating, review["interval_days"], prev_state, prev_stability, prev_difficulty,
+        problem = row("SELECT ease_factor, repetition, state, stability, difficulty FROM problems WHERE id = ?", (review["problem_id"],)) or {}
+        # 调度统一走 scheduler：FSRS 可用时 FSRS 全权决定，SM-2 降级支才做逾期顺延（ADR 0007）。
+        # 本条复习任务的 created_at 即上一次复习完成时间（新建错题时为录入时间）。
+        result = schedule_review(
+            rating,
+            prev_interval=review["interval_days"],
+            prev_ease=problem.get("ease_factor") or 2.5,
+            prev_repetition=problem.get("repetition") or 0,
+            state=problem.get("state") or 0,
+            stability=problem.get("stability") or 0.0,
+            difficulty=problem.get("difficulty") or 0.0,
+            due_date=review["due_date"],
+            last_review=review["created_at"],
+            subject=self.subject,
         )
-        if fsrs_interval != result.interval_days:
-            result.interval_days = fsrs_interval
-        # C6 逾期顺延（Forgiveness）：迟到复习按间隔减半重排；长逾期降级为新学
-        overdue_days = max(0, (date.today() - date.fromisoformat(review["due_date"])).days)
-        if overdue_days >= 21:
-            result.repetition = 0
-            result.ease_factor = min(result.ease_factor, 2.5)
-            result.interval_days = 1
-            result.mastery = max(1, result.mastery - 1)
-        elif overdue_days >= 5:
-            result.interval_days = max(1, result.interval_days // 2)
-        next_due = (date.today() + timedelta(days=result.interval_days)).isoformat()
-        # A1：FSRS 可用时同步持久化调度状态；否则状态列保留 0（SM-2 模式）
-        # C6：长逾期降级为新学时不写 FSRS 成熟态，避免与新间隔矛盾
-        if fsrs_bridge.fsrs_available() and overdue_days < 21:
-            fs = fsrs_bridge.compute_fsrs_review(
-                rating, review["interval_days"], prev_state, prev_stability, prev_difficulty,
-            )
-        else:
-            fs = None
+        next_due = result.next_due
         with DB_LOCK, db() as conn:
             conn.execute("UPDATE reviews SET completed = 1, result = ? WHERE id = ?", (str(rating), review_id))
             conn.execute(
                 "INSERT INTO reviews(problem_id, due_date, interval_days, variant_id, created_at) VALUES (?, ?, ?, ?, ?)",
                 (review["problem_id"], next_due, result.interval_days, int(review["variant_id"] or 0), now()),
             )
-            if fs:
-                conn.execute(
-                    "UPDATE problems SET mastery = ?, ease_factor = ?, repetition = ?, state = ?, stability = ?, difficulty = ?, updated_at = ? WHERE id = ?",
-                    (result.mastery, result.ease_factor, result.repetition, fs.state, fs.stability, fs.difficulty, now(), review["problem_id"]),
-                )
-            else:
-                conn.execute(
-                    "UPDATE problems SET mastery = ?, ease_factor = ?, repetition = ?, updated_at = ? WHERE id = ?",
-                    (result.mastery, result.ease_factor, result.repetition, now(), review["problem_id"]),
-                )
+            conn.execute(
+                "UPDATE problems SET ease_factor = ?, repetition = ?, state = ?, stability = ?, difficulty = ?, updated_at = ? WHERE id = ?",
+                (result.ease_factor, result.repetition, result.state, result.stability,
+                 result.difficulty, now(), review["problem_id"]),
+            )
+            # ADR 0004：掌握度经单一写入口落事件
+            set_problem_mastery(conn, review["problem_id"], result.mastery, "review",
+                                f"题目#{review['problem_id']} 评分{rating}（{result.engine}）")
             self._log_variant_result(conn, review, rating)
             self._log_mastery(conn, self.subject)
         import graph

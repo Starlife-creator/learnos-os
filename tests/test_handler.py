@@ -469,25 +469,36 @@ class TestEndpoints(unittest.TestCase):
         self.assertLess(Handler._similarity("天南地北毫无关系", "甲乙丙丁无关紧要"), 0.3)
         self.assertEqual(Handler._similarity("", "abc"), 0.0)
 
-    def test_overdue_review_halved_interval(self):
-        """C6：逾期 5-20 天复习，间隔减半重排。"""
+    def test_review_complete_uses_scheduler(self):
+        """ADR 0007：复习完成的间隔/记忆态与 scheduler.schedule_review 完全一致（无二次逾期惩罚）。"""
         from datetime import date, timedelta
-        from fsrs_bridge import next_interval_days
+        from scheduler import schedule_review
         pid = self._create_problem()
         _, _rv = self._request("GET", "/api/reviews"); reviews = _rv["items"]
         rid = next(r["id"] for r in reviews if r["problem_id"] == pid)
+        due = (date.today() - timedelta(days=16)).isoformat()
+        created = (date.today() - timedelta(days=32)).isoformat()
         with db.DB_LOCK, db.db() as conn:
-            conn.execute("UPDATE reviews SET due_date = ?, interval_days = 16 WHERE id = ?",
-                         ((date.today() - timedelta(days=16)).isoformat(), rid))
+            conn.execute("UPDATE reviews SET due_date = ?, interval_days = 16, created_at = ? WHERE id = ?",
+                         (due, created, rid))
+        p0 = db.row("SELECT ease_factor, repetition, state, stability, difficulty FROM problems WHERE id = ?", (pid,))
+        expected = schedule_review(3, prev_interval=16, prev_ease=p0["ease_factor"],
+                                   prev_repetition=p0["repetition"], state=p0["state"],
+                                   stability=p0["stability"], difficulty=p0["difficulty"],
+                                   due_date=due, last_review=created)
         status, result = self._request("POST", f"/api/reviews/{rid}/complete", {"rating": 3})
         self.assertEqual(status, 200)
-        expected = max(1, next_interval_days(3, 16) // 2)
-        self.assertEqual(result["interval_days"], expected)
-        self.assertLessEqual(result["interval_days"], 16)
+        self.assertEqual(result["interval_days"], expected.interval_days)
+        self.assertEqual(result["next_due"], expected.next_due)
+        p = db.row("SELECT state, stability FROM problems WHERE id = ?", (pid,))
+        self.assertEqual(p["state"], expected.state)
+        self.assertAlmostEqual(p["stability"], expected.stability, places=3)
 
-    def test_overdue_review_reset_after_21_days(self):
-        """C6：逾期 >=21 天 → 降级为新学：interval=1、repetition=0、掌握度减一。"""
+    def test_overdue_forgiveness_sm2_fallback(self):
+        """C6（仅 SM-2 降级支）：FSRS 不可用时，逾期 >=21 天降级为新学、5-20 天间隔减半。"""
         from datetime import date, timedelta
+        from unittest import mock
+        import fsrs_bridge
         pid = self._create_problem()
         _, _rv = self._request("GET", "/api/reviews"); reviews = _rv["items"]
         rid = next(r["id"] for r in reviews if r["problem_id"] == pid)
@@ -495,7 +506,8 @@ class TestEndpoints(unittest.TestCase):
             conn.execute("UPDATE reviews SET due_date = ?, interval_days = 30 WHERE id = ?",
                          ((date.today() - timedelta(days=22)).isoformat(), rid))
             conn.execute("UPDATE problems SET repetition = 4, mastery = 3 WHERE id = ?", (pid,))
-        status, result = self._request("POST", f"/api/reviews/{rid}/complete", {"rating": 3})
+        with mock.patch.object(fsrs_bridge, "fsrs_available", return_value=False):
+            status, result = self._request("POST", f"/api/reviews/{rid}/complete", {"rating": 3})
         self.assertEqual(status, 200)
         self.assertEqual(result["interval_days"], 1)
         p = db.row("SELECT repetition, mastery FROM problems WHERE id = ?", (pid,))

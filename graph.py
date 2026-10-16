@@ -24,6 +24,7 @@ from typing import Any
 
 from config import LOG, BUNDLE_ROOT
 from db import db, now, row, rows, DB_LOCK
+from mastery import level_to_unit
 import trash
 
 SEED_PATH = BUNDLE_ROOT / "data" / "seed_concepts.json"
@@ -484,7 +485,7 @@ def update_progress(subject: str = "physics", force: bool = False,
             "WHERE subject = ? AND concept_ids IS NOT NULL AND concept_ids <> ''",
             (subject,),
         ).fetchall():
-            val = float(p["mastery"] or 0) / 5.0
+            val = level_to_unit(p["mastery"])
             for cid in concept_ids_to_list(p["concept_ids"]):
                 if cid in id_set:
                     acc.setdefault(cid, []).append(val)
@@ -548,9 +549,9 @@ def update_progress(subject: str = "physics", force: bool = False,
                 "SELECT concept_id, COUNT(*) AS n FROM mastery_events "
                 "WHERE subject = ? GROUP BY concept_id", (subject,)).fetchall()}
             conn.executemany(
-                "INSERT INTO mastery_events(subject, concept_id, entry_point, evidence, "
-                "revision, prev_mastery, cur_mastery, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [(subject, cid, entry_point, evid, revs.get(cid, 0) + 1, p, c, now())
+                "INSERT INTO mastery_events(subject, concept_id, item_type, item_id, entry_point, evidence, "
+                "revision, prev_mastery, cur_mastery, created_at) VALUES (?, ?, 'concept', ?, ?, ?, ?, ?, ?, ?)",
+                [(subject, cid, cid, entry_point, evid, revs.get(cid, 0) + 1, p, c, now())
                  for cid, p, c in delta_rows],
             )
 
@@ -590,10 +591,10 @@ def record_audit_event(subject: str, topic: str, entry_point: str,
             ).fetchone()
             revision = int(rev["n"]) + 1 if rev else 1
             conn.execute(
-                "INSERT INTO mastery_events(subject, concept_id, entry_point, evidence, "
+                "INSERT INTO mastery_events(subject, concept_id, item_type, item_id, entry_point, evidence, "
                 "revision, prev_mastery, cur_mastery, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (subject, cid, entry_point, (evidence or "")[:200],
+                "VALUES (?, ?, 'concept', ?, ?, ?, ?, ?, ?, ?)",
+                (subject, cid, cid, entry_point, (evidence or "")[:200],
                  revision, cur_v, cur_v, now()),
             )
             return 1

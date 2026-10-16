@@ -416,6 +416,27 @@ class TestReadmeStructure(unittest.TestCase):
         self.assertEqual(unlisted, [], f"根目录模块未写进 README 项目结构：{unlisted}")
 
 
+class TestMasteryWriteGuard(unittest.TestCase):
+    """ADR 0004：problems.mastery 只能经 mastery.set_problem_mastery() 修改。
+
+    历史问题：十多处直接 `UPDATE problems SET mastery`，事件日志只覆盖约 15% 的变化，
+    且用户手动编辑与算法结果混在一起无法区分。新建题目（INSERT）不受限。
+    """
+
+    _PAT = re.compile(r"UPDATE\s+problems\s+SET[^;\"']*?\bmastery\s*=", re.I | re.S)
+
+    def test_no_direct_problem_mastery_update(self) -> None:
+        offenders = []
+        for py in sorted(ROOT.glob("*.py")):
+            if py.name == "mastery.py":
+                continue
+            text = py.read_text(encoding="utf-8")
+            for m in self._PAT.finditer(text):
+                offenders.append(f"{py.name}:{text.count(chr(10), 0, m.start()) + 1}")
+        self.assertEqual(offenders, [], "直接写 problems.mastery，请改用 mastery.set_problem_mastery()："
+                         + ", ".join(offenders))
+
+
 class TestPerformanceBudget(unittest.TestCase):
     """性能预算型 fitness function：把性能决策锁进 CI。
 

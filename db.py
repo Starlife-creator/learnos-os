@@ -926,6 +926,25 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (35, ?)", (now(),))
         LOG.info("数据库已迁移到 v35 (图谱溯源 concept_links 溯源列 + concepts 判据/口试模板)")
 
+    # v36: ADR 0004 掌握度单一写入口 — mastery_events 从「仅概念」扩展到「概念 + 题目」：
+    #   增 item_type('concept'|'problem')/item_id；存量行回填为概念事件（item_id=concept_id）。
+    #   题目事件 concept_id 记 0。旧代码不带新列的 INSERT 落默认 concept，仍可执行。
+    if current < 36:
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        if "mastery_events" in tables:
+            mcols = {r[1] for r in conn.execute("PRAGMA table_info(mastery_events)").fetchall()}
+            if "item_type" not in mcols:
+                conn.execute("ALTER TABLE mastery_events ADD COLUMN item_type TEXT NOT NULL DEFAULT 'concept'")
+            if "item_id" not in mcols:
+                conn.execute("ALTER TABLE mastery_events ADD COLUMN item_id INTEGER NOT NULL DEFAULT 0")
+            conn.execute("UPDATE mastery_events SET item_id = concept_id "
+                         "WHERE item_type = 'concept' AND item_id = 0")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_mastery_events_item "
+                         "ON mastery_events(item_type, item_id, id)")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (36, ?)", (now(),))
+        LOG.info("数据库已迁移到 v36 (mastery_events 增 item_type/item_id，覆盖题目掌握度)")
+
 
 # 内置三科的中文显示名（title）；user 自定义过的中文 title 不会被覆盖。
 _BUILTIN_SUBJECT_TITLES = {

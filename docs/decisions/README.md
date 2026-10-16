@@ -12,3 +12,4 @@
 | [0004](0004-mastery-event-sourcing.md) | 掌握度变更事件溯源，单一写入口 | 生效（收敛进行中） |
 | [0005](0005-explicit-non-goals.md) | 明确不做清单 | 生效 |
 | [0006](0006-test-infrastructure.md) | 测试入口、临时目录与日志隔离 | 生效 |
+| [0007](0007-scheduler-split.md) | 复习调度：FSRS 与 SM-2 分轨 | 生效 |

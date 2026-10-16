@@ -22,6 +22,7 @@ from ai import (call_ai, call_ai_stream, fallback_hint, problem_prompt, extract_
                 generate_variants, invalidate_settings_cache, get_cached_settings)
 from errors import normalize_error_type
 from review import clamp_mastery
+from mastery import set_problem_mastery
 from handler_base import (X_HEADER, X_VALUE, _IDEMPOTENCY, _IDEMPOTENCY_TTL, _IDEMPOTENCY_LOCK,
                           _as_str_list, _interleave, _prune_idempotency)
 import graph
@@ -328,13 +329,16 @@ class ProblemsMixin:
         methods = existing["methods"]
         if data.get("methods") is not None:
             methods = json.dumps(_as_str_list(data["methods"]), ensure_ascii=False)
+        content_fields = [f for f in fields if f != "mastery"]
         with DB_LOCK, db() as conn:
             conn.execute("""
                 UPDATE problems SET title=?, course=?, topic=?, content=?, my_attempt=?, error_type=?,
                                     error_path=?, trap_note=?, shortcut=?, fix_action=?,
-                                    mastery=?, starred=?, tags=?, tags_status=?, methods=?, updated_at=?
+                                    starred=?, tags=?, tags_status=?, methods=?, updated_at=?
                 WHERE id=?
-            """, tuple(merged[field] for field in fields) + (tags, tags_status, methods, now(), problem_id))
+            """, tuple(merged[field] for field in content_fields) + (tags, tags_status, methods, now(), problem_id))
+            # ADR 0004：掌握度只经单一写入口（手动修改记 entry_point=edit，与算法结果可区分）
+            set_problem_mastery(conn, problem_id, merged["mastery"], "edit", "用户手动编辑")
         self.json_response({"ok": True})
 
     def _handle_batch(self, data: dict[str, Any]) -> None:

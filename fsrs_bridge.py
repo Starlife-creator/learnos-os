@@ -183,14 +183,27 @@ def compute_fsrs_review(
 ) -> FsrsState:
     """FSRS-6 调度。返回下一次复习状态（供 problems 表持久化）。
     subject 用于 §46.5C 学科分层保持率（无则全局）。
-    last_review（ISO 日期，可选）：C5 语义修正——elapsed_days 应为「距上次复习的真实天数」，
-    此前误用调度间隔（与 scheduled_days 同源）。调用方可传上次复习日期以获得正确值；
-    不传则为 0。该字段当前无消费方。
+    last_review（ISO 日期，可选）：上次复习日期，FSRS 据此计算真实检索率 R 来更新稳定性；
+    不传时对已有记忆态的卡按「准时复习」估算（today - prev_interval）。
     """
     today = today or date.today()
     card = _state_to_card(state, stability, difficulty, prev_interval)
     scheduler = _scheduler(subject)
     review_dt = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
+    # 修复：此前从不设置 card.last_review，FSRS 视检索率 R=0，每次复习都按「已遗忘」更新稳定性。
+    # 有上次复习日期则用真实值；否则对已有记忆态的卡按「准时复习」估算（今天 - 上次间隔）。
+    if card.stability:  # 全新卡（stability=None）无「上次复习」
+        last_dt = None
+        if last_review:
+            try:
+                last_dt = datetime.combine(date.fromisoformat(str(last_review)[:10]),
+                                           datetime.min.time(), tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                last_dt = None
+        if last_dt is None:
+            last_dt = review_dt - timedelta(days=max(1, int(prev_interval or 1)))
+        if last_dt is not None:
+            card.last_review = min(last_dt, review_dt)
     updated, _log = scheduler.review_card(
         card,
         Rating(rating),

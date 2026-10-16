@@ -11,6 +11,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from db import DB_LOCK, db, now, row, rows
+from mastery import level_to_unit
 
 
 def _topic_mastery(conn: Any) -> dict[str, float]:
@@ -21,7 +22,7 @@ def _topic_mastery(conn: Any) -> dict[str, float]:
         "WHERE topic != '' GROUP BY topic"
     ).fetchall():
         if r["m"] is not None:
-            out[r["topic"]] = min(1.0, max(0.0, float(r["m"]) / 5.0))
+            out[r["topic"]] = level_to_unit(r["m"])
     return out
 
 

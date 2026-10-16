@@ -115,6 +115,8 @@ learnos-os/
   ai.py            # AI 调用层：OpenAI 兼容接口、流式、提示词、降级
   review.py        # SM-2 间隔复习算法
   fsrs_bridge.py   # FSRS-6 调度桥接（vendor 优先，SM-2 降级）
+  scheduler.py     # 统一复习调度入口（题目/闪卡共用；FSRS 全权，SM-2 支做逾期顺延）
+  mastery.py       # 掌握度单一写入口（题目 1-5 级 ↔ 0-1 换算 + mastery_events 落事件）
   graph.py         # 知识图谱（概念/关联/进度）
   bank.py          # 题库（单元/作答）
   cards.py         # 知识卡

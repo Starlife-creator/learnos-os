@@ -18,6 +18,7 @@ from typing import Any
 
 from config import LOG
 from db import DB_LOCK, db, now, rows
+from mastery import set_problem_mastery
 
 CUSTOM_FILE = Path(__file__).resolve().parent / "data" / "bank_custom.json"
 _BANK: dict[str, dict[str, Any]] = {}
@@ -465,7 +466,7 @@ def _ensure_problem(conn: Any, item: dict[str, Any], error_type: str = "待诊�
     if existing:
         pid = int(existing[0])
         # 再次答错：掌握度回到 1，且若无待复习任务则补排一次
-        conn.execute("UPDATE problems SET mastery = 1, updated_at = ? WHERE id = ?", (now(), pid))
+        set_problem_mastery(conn, pid, 1, "bank", f"题库 {item['id']} 再次答错")
         pending = conn.execute(
             "SELECT COUNT(*) FROM reviews WHERE problem_id = ? AND completed = 0", (pid,)
         ).fetchone()[0]

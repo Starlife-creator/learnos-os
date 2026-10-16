@@ -15,12 +15,12 @@
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
+from datetime import date
 from typing import Any
 
 from config import LOG
 from db import DB_LOCK, db, now, row, rows
-from review import compute_review
+from scheduler import schedule_review
 import fsrs_bridge
 import graph
 import trash
@@ -323,37 +323,21 @@ def review_card(card_id: int, rating: int) -> dict[str, Any]:
     if not card:
         raise ValueError("卡片不存在")
     rating = max(1, min(4, int(rating or 2)))
-    prev = card["interval_days"] or 1
-    result = compute_review(rating, prev, float(card["ease_factor"] or 2.5), int(card["repetition"] or 0))
-    # FSRS 可用 → 使用 FSRS 间隔；否则 SM-2 间隔
-    # C2b：只算一次并复用（原实现双算 compute_fsrs_review，参数完全相同）
-    fs = None
-    if fsrs_bridge.fsrs_available():
-        try:
-            fs = fsrs_bridge.compute_fsrs_review(
-                rating, prev,
-                int(card["state"] or 0),
-                float(card["stability"] or 0),
-                float(card["difficulty"] or 0),
-            )
-            result.interval_days = max(1, fs.scheduled_days)
-        except Exception as exc:
-            LOG.warning("卡片 FSRS 调度异常，回退 SM-2: %s", exc)
-    # 逾期顺延（与题目复习一致）：长逾期降级为新学
-    try:
-        overdue = (date.today() - date.fromisoformat(card["due_date"])).days
-    except (ValueError, TypeError):
-        overdue = 0
-    if overdue >= 21:
-        result.repetition = 0
-        result.ease_factor = min(result.ease_factor, 2.5)
-        result.interval_days = 1
-    elif overdue >= 5:
-        result.interval_days = max(1, result.interval_days // 2)
-    next_due = (date.today() + timedelta(days=result.interval_days)).isoformat()
-    fs_state, fs_stability, fs_difficulty = 0, 0.0, 0.0
-    if fs is not None and overdue < 21:
-        fs_state, fs_stability, fs_difficulty = fs.state, fs.stability, fs.difficulty
+    # 调度统一走 scheduler（与题目复习同一实现，ADR 0007）
+    result = schedule_review(
+        rating,
+        prev_interval=card["interval_days"] or 1,
+        prev_ease=float(card["ease_factor"] or 2.5),
+        prev_repetition=int(card["repetition"] or 0),
+        state=int(card["state"] or 0),
+        stability=float(card["stability"] or 0),
+        difficulty=float(card["difficulty"] or 0),
+        due_date=card["due_date"],
+        last_review=card["last_review"],
+        subject=card["subject"] or "",
+    )
+    next_due = result.next_due
+    fs_state, fs_stability, fs_difficulty = result.state, result.stability, result.difficulty
     # D1：评分前完整记忆态快照（撤销=原子恢复；审计=可重放）
     prev_snap = {
         "state": int(card["state"] or 0),

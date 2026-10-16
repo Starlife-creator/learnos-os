@@ -199,6 +199,25 @@ class TestGraphCore(unittest.TestCase):
         self.assertEqual(ev2[2]["revision"], 3, "同概念第三次变化 revision 应递增")
         self.assertAlmostEqual(ev2[2]["prev_mastery"], 0.6, places=2)
         self.assertAlmostEqual(ev2[2]["cur_mastery"], 1.0, places=2)
+        self.assertEqual(ev2[2]["item_type"], "concept")
+        self.assertEqual(ev2[2]["item_id"], cid)
+
+    def test_problem_mastery_single_entry(self):
+        """ADR 0004：题目掌握度经 set_problem_mastery 写入并落 item_type='problem' 事件。"""
+        import mastery
+        pid = self._make_problem("单一入口题", "无关主题", "内容", 2)
+        with db.DB_LOCK, db.db() as conn:
+            self.assertTrue(mastery.set_problem_mastery(conn, pid, 4, "edit", "手动"))
+            self.assertFalse(mastery.set_problem_mastery(conn, pid, 4, "edit", "无变化不记"))
+            self.assertTrue(mastery.set_problem_mastery(conn, pid, 9, "review", "越界钳到 5"))
+        self.assertEqual(db.row("SELECT mastery FROM problems WHERE id = ?", (pid,))["mastery"], 5)
+        ev = db.rows("SELECT * FROM mastery_events WHERE item_type = 'problem' AND item_id = ? "
+                     "ORDER BY id", (pid,))
+        self.assertEqual([e["entry_point"] for e in ev], ["edit", "review"])
+        self.assertEqual([e["revision"] for e in ev], [1, 2])
+        self.assertAlmostEqual(ev[0]["prev_mastery"], 0.4)
+        self.assertAlmostEqual(ev[0]["cur_mastery"], 0.8)
+        self.assertEqual(ev[0]["concept_id"], 0)
 
     def test_mastery_evidence_caps_m1(self):
         """M1 置信度封顶：1 次证据 ≤0.5、2 次 ≤0.8、≥3 次不封顶（防单次蒙对即掌握）。"""
