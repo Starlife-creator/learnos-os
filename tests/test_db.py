@@ -336,6 +336,114 @@ class TestV36MigrationReplay(unittest.TestCase):
                 db.DB_PATH = orig
 
 
+class TestV37MigrationReplay(unittest.TestCase):
+    """v37：统一可复习项读模型视图 review_items/review_log（ADR 0013）。"""
+
+    def test_v36_to_v37_upgrade(self):
+        import sqlite3
+        orig = config.DB_PATH
+        with tempfile.TemporaryDirectory(prefix="db_v37_", dir=_TEST_TMP_DIR) as td:
+            old = Path(td) / "v36.db"
+            conn = sqlite3.connect(old)
+            conn.executescript("""
+                CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+                INSERT INTO schema_version(version, applied_at) VALUES (36, '2026-01-01T00:00:00');
+                CREATE TABLE subjects (
+                    id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '',
+                    builtin INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+                CREATE TABLE seed_versions (
+                    subject TEXT PRIMARY KEY, seed_version INTEGER NOT NULL DEFAULT 0,
+                    applied_at TEXT NOT NULL);
+                CREATE TABLE trash (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL,
+                    entity_id INTEGER NOT NULL, payload_json TEXT NOT NULL,
+                    trashed_at TEXT NOT NULL, restored_at TEXT NOT NULL DEFAULT '');
+                CREATE TABLE mastery_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    subject TEXT NOT NULL DEFAULT 'physics',
+                    concept_id INTEGER NOT NULL,
+                    entry_point TEXT NOT NULL DEFAULT '',
+                    evidence TEXT NOT NULL DEFAULT '',
+                    revision INTEGER NOT NULL DEFAULT 1,
+                    prev_mastery REAL NOT NULL DEFAULT 0.0,
+                    cur_mastery REAL NOT NULL DEFAULT 0.0,
+                    created_at TEXT NOT NULL DEFAULT '',
+                    item_type TEXT NOT NULL DEFAULT 'concept',
+                    item_id INTEGER NOT NULL DEFAULT 0);
+                CREATE TABLE problems (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL DEFAULT '',
+                    subject TEXT NOT NULL DEFAULT 'physics',
+                    course TEXT NOT NULL DEFAULT '', topic TEXT NOT NULL DEFAULT '',
+                    repetition INTEGER NOT NULL DEFAULT 0, state INTEGER NOT NULL DEFAULT 0,
+                    stability REAL NOT NULL DEFAULT 0, difficulty REAL NOT NULL DEFAULT 0);
+                CREATE TABLE reviews (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, problem_id INTEGER NOT NULL,
+                    due_date TEXT NOT NULL DEFAULT '', interval_days INTEGER NOT NULL DEFAULT 1,
+                    result TEXT NOT NULL DEFAULT '', completed INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT '');
+                CREATE TABLE cards (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, cue TEXT NOT NULL DEFAULT '',
+                    subject TEXT NOT NULL DEFAULT 'physics',
+                    status TEXT NOT NULL DEFAULT 'active', due_date TEXT NOT NULL DEFAULT '',
+                    interval_days INTEGER NOT NULL DEFAULT 1, repetition INTEGER NOT NULL DEFAULT 0,
+                    state INTEGER NOT NULL DEFAULT 0, stability REAL NOT NULL DEFAULT 0,
+                    difficulty REAL NOT NULL DEFAULT 0);
+                CREATE TABLE card_reviews (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, card_id INTEGER NOT NULL,
+                    rating INTEGER NOT NULL DEFAULT 3, due_date TEXT NOT NULL DEFAULT '',
+                    interval_days INTEGER NOT NULL DEFAULT 1, undone INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT '');
+                -- 题 1：有待复习行（到期）；题 2：从未排过复习行（due_date 应为 NULL）
+                INSERT INTO problems(id, title, subject, repetition)
+                VALUES (1, '待复习题', 'physics', 4), (2, '无复习行题', 'physics', 0);
+                INSERT INTO reviews(problem_id, due_date, interval_days, completed, created_at)
+                VALUES (1, '2026-01-01', 7, 0, '2026-01-01T00:00:00');
+                INSERT INTO reviews(problem_id, due_date, interval_days, result, completed, created_at)
+                VALUES (1, '2025-12-01', 4, '3', 1, '2025-12-01T00:00:00');
+                INSERT INTO cards(id, cue, subject, status, due_date, repetition)
+                VALUES (1, '闪卡正面', 'physics', 'active', '2026-01-01', 1);
+                INSERT INTO card_reviews(card_id, rating, due_date, undone, created_at)
+                VALUES (1, 4, '2026-01-01', 0, '2026-01-01T00:00:00'),
+                       (1, 1, '2026-01-01', 1, '2026-01-01T00:00:00');
+            """)
+            conn.commit()
+            conn.close()
+            config.DB_PATH = old
+            db.DB_PATH = old
+            try:
+                db.init_db()
+                views = {r["name"] for r in db.rows(
+                    "SELECT name FROM sqlite_master WHERE type = 'view'")}
+                for v in ("review_items", "review_log"):
+                    self.assertIn(v, views, f"v37 应创建视图 {v}")
+                top = db.row("SELECT MAX(version) AS v FROM schema_version")["v"]
+                self.assertGreaterEqual(int(top), 37)
+
+                # review_items：题目全部保留，无待复习行的题 due_date 为 NULL
+                items = {r["item_id"]: r for r in db.rows(
+                    "SELECT * FROM review_items WHERE item_type = 'problem'")}
+                self.assertEqual(set(items), {1, 2}, "结构性指标需要全部题目参与，不能只留有待复习行的")
+                self.assertEqual(items[1]["due_date"], "2026-01-01")
+                self.assertEqual(items[1]["interval_days"], 7, "应取未完成行的 interval_days")
+                self.assertIsNone(items[2]["due_date"], "无待复习行的题 due_date 应为 NULL")
+                self.assertEqual(items[1]["label"], "待复习题")
+                self.assertEqual(items[1]["repetition"], 4)
+                cards = {r["item_id"]: r for r in db.rows(
+                    "SELECT * FROM review_items WHERE item_type = 'card'")}
+                self.assertEqual(set(cards), {1}, "active 卡片应在可复习项里")
+                self.assertEqual(cards[1]["label"], "闪卡正面")
+
+                # review_log：题目 result 文本统一成 rating 整数；作废（undone=1）卡片行剔除
+                log = db.rows("SELECT * FROM review_log ORDER BY item_type, log_id")
+                self.assertEqual([(r["item_type"], r["item_id"], r["rating"]) for r in log],
+                                 [("card", 1, 4), ("problem", 1, 3)])
+                self.assertEqual(log[1]["due_date"], "2025-12-01")
+            finally:
+                db.close_all_connections()
+                config.DB_PATH = orig
+                db.DB_PATH = orig
+
+
 class TestReadPathNoGlobalLock(unittest.TestCase):
     """#9：只读查询不再持 DB_LOCK；连接被并发关闭时靠 epoch + 重试自愈。"""
 

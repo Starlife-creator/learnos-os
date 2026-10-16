@@ -31,9 +31,14 @@ def _ctx(subject: str) -> dict[str, Any]:
         "FROM problems WHERE subject = ?", (subject,)
     ) or {"total": 0, "avg_mastery": 0, "mastered": 0}
     due = row(
-        "SELECT COUNT(*) AS c FROM reviews WHERE completed=0 AND due_date<=? "
-        "AND problem_id IN (SELECT id FROM problems WHERE subject=?)",
-        (today, subject),
+        "SELECT COUNT(*) AS c FROM review_items "
+        "WHERE subject=? AND item_type='problem' AND due_date<=?",
+        (subject, today),
+    ) or {"c": 0}
+    due_cards = row(
+        "SELECT COUNT(*) AS c FROM review_items "
+        "WHERE subject=? AND item_type='card' AND due_date<=?",
+        (subject, today),
     ) or {"c": 0}
     weak = rows(
         "SELECT topic, COUNT(*) AS count, ROUND(AVG(mastery),1) AS mastery "
@@ -44,19 +49,34 @@ def _ctx(subject: str) -> dict[str, Any]:
         "subject": subject, "today": today,
         "total": int(stats["total"]), "avg_mastery": float(stats["avg_mastery"]),
         "mastered": int(stats["mastered"]),
-        "due": int(due["c"]), "weak": [dict(w) for w in weak],
+        "due": int(due["c"]), "due_cards": int(due_cards["c"]),
+        "weak": [dict(w) for w in weak],
     }
 
 
 def _rule_due(ctx: dict[str, Any]) -> list[dict[str, Any]]:
+    # ADR 0013：ctx["due"] 是**题目**到期数（与复习页队列同口径），因此文案是「错题」；
+    # 卡片到期单独出一条规则并指向闪卡页——两个入口不能混成一句话。
     if ctx["due"] <= 0:
         return []
     prio = P_CRIT if ctx["due"] >= 20 else P_HIGH
     return [{
         "id": "review_due", "priority": prio,
-        "action": f"复习 {ctx['due']} 张到期卡片",
-        "reason": "到期卡片会按遗忘曲线快速贬值，优先清空。",
+        "action": f"复习 {ctx['due']} 道到期错题",
+        "reason": "到期错题会按遗忘曲线快速贬值，优先清空。",
         "est_minutes": min(60, max(5, ctx["due"] * 2)),
+    }]
+
+
+def _rule_cards_due(ctx: dict[str, Any]) -> list[dict[str, Any]]:
+    n = int(ctx.get("due_cards") or 0)
+    if n <= 0:
+        return []
+    return [{
+        "id": "cards_due", "priority": P_HIGH if n >= 15 else P_MED,
+        "action": f"复习 {n} 张到期闪卡",
+        "reason": "闪卡在闪卡页复习，不占用错题复习队列。",
+        "est_minutes": min(30, max(3, n)),
     }]
 
 
@@ -108,7 +128,7 @@ def _rule_low_mastery_shallow(ctx: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
-RULES = [_rule_cold_start, _rule_due, _rule_low_mastery_shallow,
+RULES = [_rule_cold_start, _rule_due, _rule_cards_due, _rule_low_mastery_shallow,
          _rule_weak, _rule_micro]
 
 

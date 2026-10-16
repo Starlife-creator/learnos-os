@@ -945,6 +945,62 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (36, ?)", (now(),))
         LOG.info("数据库已迁移到 v36 (mastery_events 增 item_type/item_id，覆盖题目掌握度)")
 
+    # v37: 统一「可复习项」读模型（ADR 0013）——题目(reviews/problems) 与 卡片(cards/
+    #   card_reviews) 一直是两个平行子系统，聚合视图长期只看得见题目：用户复习了 20 张
+    #   卡片，今日任务/压力指数/周报/北极星里一个都不体现。
+    #   这里只加**只读视图**，不动任何写路径、不迁数据（合表要改所有写路径与查询，风险
+    #   远大于收益；读模型统一才是真正的需求）。
+    #   review_items：每个「可复习项」一行——题目**全部**保留（无待复习行时 due_date 为
+    #     NULL，天然被 `due_date <= ?` 这类比较排除），卡片取 active 且已排期
+    #     （due_date != ''，与 cards.stats/due_cards 同口径：空串在字符串比较里 <= 今天，
+    #      不加这个条件会让闪卡页角标与仪表盘对不上）。
+    #     为什么题目用 LEFT JOIN 而不是 INNER JOIN：结构性指标（如成熟占比）需要「全部
+    #     可复习项」做分母，只有 INNER JOIN 会把从未排过复习行的题目整批藏掉。
+    #     题目的一题恰有一行未完成 reviews 行（handler_reviews 完成时置 1 并插入下一轮），
+    #     所以不存在行放大；用相关子查询取 due_date/interval_days 而不是 JOIN，是为了即使
+    #     出现多行待复习也不会把题目放大成多行。
+    #   review_log：已完成复习的历史事实（题目 reviews.result 是文本评分，统一 CAST 成
+    #     rating；卡片 card_reviews.rating 本就是整数，且需排除 undone=1 的作废行）。
+    if current < 37:
+        conn.execute("""
+            CREATE VIEW IF NOT EXISTS review_items AS
+            SELECT 'problem' AS item_type, p.id AS item_id, p.subject AS subject,
+                   p.title AS label,
+                   (SELECT r.due_date FROM reviews r
+                     WHERE r.problem_id = p.id AND r.completed = 0
+                     ORDER BY r.id DESC LIMIT 1) AS due_date,
+                   (SELECT r.interval_days FROM reviews r
+                     WHERE r.problem_id = p.id AND r.completed = 0
+                     ORDER BY r.id DESC LIMIT 1) AS interval_days,
+                   p.state AS state, p.stability AS stability,
+                   p.difficulty AS difficulty, p.repetition AS repetition,
+                   (SELECT MAX(x.created_at) FROM reviews x
+                     WHERE x.problem_id = p.id AND x.completed = 1) AS last_review
+              FROM problems p
+            UNION ALL
+            SELECT 'card', c.id, c.subject, c.cue, c.due_date, c.interval_days,
+                   c.state, c.stability, c.difficulty, c.repetition,
+                   (SELECT MAX(x.created_at) FROM card_reviews x
+                     WHERE x.card_id = c.id AND x.undone = 0)
+              FROM cards c WHERE c.status = 'active' AND c.due_date != ''
+        """)
+        conn.execute("""
+            CREATE VIEW IF NOT EXISTS review_log AS
+            SELECT 'problem' AS item_type, r.problem_id AS item_id, p.subject AS subject,
+                   CAST(r.result AS INTEGER) AS rating, r.created_at AS created_at,
+                   r.due_date AS due_date, r.interval_days AS interval_days,
+                   r.id AS log_id
+              FROM reviews r JOIN problems p ON p.id = r.problem_id
+             WHERE r.completed = 1
+            UNION ALL
+            SELECT 'card', cr.card_id, c.subject, cr.rating, cr.created_at,
+                   cr.due_date, cr.interval_days, cr.id
+              FROM card_reviews cr JOIN cards c ON c.id = cr.card_id
+             WHERE cr.undone = 0
+        """)
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (37, ?)", (now(),))
+        LOG.info("数据库已迁移到 v37 (统一可复习项读模型视图 review_items/review_log)")
+
 
 # 内置三科的中文显示名（title）；user 自定义过的中文 title 不会被覆盖。
 _BUILTIN_SUBJECT_TITLES = {

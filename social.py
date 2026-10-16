@@ -101,10 +101,10 @@ def export_social(subject: str | None = None) -> dict[str, Any]:
         f"FROM problems {where} AND topic <> '' GROUP BY topic ORDER BY mastery ASC, count DESC LIMIT 5",
         params,
     )
+    # ADR 0013：分享包是「总览」口径 → 全部可复习项（题目 + 卡片）。
     due = row(
-        f"SELECT COUNT(*) AS c FROM reviews WHERE completed = 0 "
-        f"AND due_date <= ? AND problem_id IN (SELECT id FROM problems {where})",
-        (date.today().isoformat(), *params),
+        f"SELECT COUNT(*) AS c FROM review_items {where} AND due_date <= ?",
+        (*params, date.today().isoformat()),
     ) or {"c": 0}
     return {
         "schema": "learnos-social-share/1",

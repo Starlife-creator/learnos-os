@@ -15,15 +15,20 @@ from mastery import level_to_unit
 
 
 def activity_days(subject: str = "physics") -> set[str]:
-    """§42.2：学习活跃日集合（完成复习或新建错题的日期），用于连续天数。"""
+    """§42.2：学习活跃日集合（完成复习或新建错题/卡片），用于连续天数。
+
+    ADR 0013：复习口径统一走 review_log 视图（题目 + 卡片），新建口径含题目与卡片。
+    """
     days: set[str] = set()
     for r in rows(
-        "SELECT DATE(created_at) AS d FROM reviews "
-        "WHERE completed = 1 AND problem_id IN (SELECT id FROM problems WHERE subject = ?)", (subject,)
+        "SELECT DISTINCT DATE(created_at) AS d FROM review_log WHERE subject = ?", (subject,)
     ):
         if r["d"]:
             days.add(r["d"])
     for r in rows("SELECT DATE(created_at) AS d FROM problems WHERE subject = ?", (subject,)):
+        if r["d"]:
+            days.add(r["d"])
+    for r in rows("SELECT DATE(created_at) AS d FROM cards WHERE subject = ?", (subject,)):
         if r["d"]:
             days.add(r["d"])
     return days
@@ -65,8 +70,8 @@ def weekly_report(subject: str = "physics") -> dict[str, Any]:
                 SELECT
                   SUM(CASE WHEN date(created_at) >= ? THEN 1 ELSE 0 END) AS week_reviews,
                   SUM(CASE WHEN date(created_at) >= ? AND date(created_at) < ? THEN 1 ELSE 0 END) AS prev_reviews,
-                  SUM(CASE WHEN date(created_at) >= ? AND CAST(result AS INTEGER) >= 3 THEN 1 ELSE 0 END) AS week_good
-                FROM reviews WHERE completed = 1 AND problem_id IN (SELECT id FROM problems WHERE subject = ?)
+                  SUM(CASE WHEN date(created_at) >= ? AND rating >= 3 THEN 1 ELSE 0 END) AS week_good
+                FROM review_log WHERE subject = ?
             """, (week_start.isoformat(), prev_start.isoformat(),
                   week_start.isoformat(), week_start.isoformat(), subject)).fetchone()
     except Exception as exc:
@@ -112,9 +117,9 @@ def monthly_report(subject: str = "physics") -> dict[str, Any]:
                 SELECT
                   SUM(CASE WHEN date(created_at) >= ? THEN 1 ELSE 0 END) AS month_revs,
                   SUM(CASE WHEN date(created_at) >= ? AND date(created_at) <= ? THEN 1 ELSE 0 END) AS prev_revs,
-                  SUM(CASE WHEN date(created_at) >= ? AND CAST(result AS INTEGER) >= 3 THEN 1 ELSE 0 END) AS month_good,
+                  SUM(CASE WHEN date(created_at) >= ? AND rating >= 3 THEN 1 ELSE 0 END) AS month_good,
                   COUNT(DISTINCT CASE WHEN date(created_at) >= ? THEN date(created_at) END) AS active_days
-                FROM reviews WHERE completed = 1 AND problem_id IN (SELECT id FROM problems WHERE subject = ?)
+                FROM review_log WHERE subject = ?
             """, (month_start.isoformat(), prev_start.isoformat(), prev_end.isoformat(),
                   month_start.isoformat(), month_start.isoformat(), subject)).fetchone()
             total = conn.execute(
@@ -130,10 +135,9 @@ def monthly_report(subject: str = "physics") -> dict[str, Any]:
             """, (subject, month_start.isoformat())).fetchall()
             dailies = conn.execute("""
                 SELECT date(created_at) AS d, COUNT(*) AS c
-                FROM reviews WHERE completed = 1 AND date(created_at) >= ?
-                AND problem_id IN (SELECT id FROM problems WHERE subject = ?)
+                FROM review_log WHERE subject = ? AND date(created_at) >= ?
                 GROUP BY date(created_at) ORDER BY d
-            """, (month_start.isoformat(), subject)).fetchall()
+            """, (subject, month_start.isoformat())).fetchall()
     except Exception as exc:
         LOG.debug("月报统计失败（可忽略）: %s", exc)
         return {}
@@ -177,10 +181,10 @@ def _rate(items: list[dict[str, Any]]) -> float | None:
 
 
 def _mature_share(subject: str) -> float:
-    """结构性指标：已进入成熟期（repetition>=3）的题目占比。"""
+    """结构性指标：已进入成熟期（repetition>=3）的**可复习项**占比（题目 + 卡片，ADR 0013）。"""
     stats = row("""
         SELECT SUM(CASE WHEN repetition >= 3 THEN 1 ELSE 0 END) AS mature,
-               COUNT(*) AS total FROM problems WHERE subject = ?
+               COUNT(*) AS total FROM review_items WHERE subject = ?
     """, (subject,)) or {}
     total = int(stats.get("total") or 0)
     return round(int(stats.get("mature") or 0) / total, 3) if total else 0.0
@@ -197,18 +201,19 @@ def north_star(subject: str = "physics", days: int = 30) -> dict[str, Any]:
         明显为正 → 间隔偏短，有省时空间。
 
     「是否按时」用 elapsed（距上次复习天数）与 interval_days（当时排定的间隔）比较——
-    两者都在 reviews 表里，因此该指标无需新增字段，也不依赖 FSRS 状态快照
-    （problems 只存当前状态，历史 R 无法精确复原，这里不假装能算）。
+    两者都在复习日志里，因此该指标无需新增字段，也不依赖 FSRS 状态快照
+    （只存当前状态，历史 R 无法精确复原，这里不假装能算）。
+
+    ADR 0013：样本取自 review_log 视图，**题目与卡片同一口径**（复习行为不分类型）。
     """
     window = max(1, min(int(30 if days is None else days), 365))
     since = (date.today() - timedelta(days=window - 1)).isoformat()
     target = fsrs_bridge.desired_retention(subject)
     # 取全部完成复习（不限窗口）：窗口内第一条也要知道「前次」才能算 elapsed。
     log = rows("""
-        SELECT r.problem_id, r.result, r.created_at, r.interval_days
-        FROM reviews r JOIN problems p ON p.id = r.problem_id
-        WHERE r.completed = 1 AND p.subject = ?
-        ORDER BY r.problem_id, r.id
+        SELECT item_type, item_id, rating, created_at, interval_days
+        FROM review_log WHERE subject = ?
+        ORDER BY item_type, item_id, log_id
     """, (subject,))
     samples: list[dict[str, Any]] = []
     prev_day: dict[Any, str] = {}
@@ -216,8 +221,9 @@ def north_star(subject: str = "physics", days: int = 30) -> dict[str, Any]:
         day = str(r["created_at"] or "")[:10]
         if not day:
             continue
-        prev = prev_day.get(r["problem_id"])
-        prev_day[r["problem_id"]] = day
+        key = (r["item_type"], r["item_id"])
+        prev = prev_day.get(key)
+        prev_day[key] = day
         if prev is None or day < since:
             continue
         try:
@@ -225,7 +231,7 @@ def north_star(subject: str = "physics", days: int = 30) -> dict[str, Any]:
         except ValueError:
             continue
         try:
-            ok = int(r["result"] or 0) >= 3
+            ok = int(r["rating"] or 0) >= 3
         except (TypeError, ValueError):
             ok = False
         samples.append({"day": day, "elapsed": elapsed,
@@ -315,17 +321,18 @@ def stubborn_problems(subject: str = "physics") -> list[dict[str, Any]]:
 
 
 def forget_predict(subject: str = "physics") -> dict[str, Any]:
-    """P0 遗忘预测：对近期到期复习用 FSRS 预测 R（可指定学科）。"""
+    """P0 遗忘预测：对近期到期项用 FSRS 预测 R（可指定学科）。
+
+    ADR 0013：口径为「全部可复习项」（题目 + 卡片），故每项带 item_type/item_id。
+    """
     import fsrs_bridge
     soon = rows("""
-        SELECT r.id, r.problem_id, r.due_date, r.interval_days,
-               p.state, p.stability, p.difficulty, p.title,
-               (SELECT MAX(created_at) FROM reviews
-                WHERE problem_id = p.id AND completed = 1) AS last_review
-        FROM reviews r JOIN problems p ON p.id = r.problem_id
-        WHERE r.completed = 0 AND r.due_date <= ? AND p.subject = ?
-        ORDER BY r.due_date ASC
-    """, ((date.today() + timedelta(days=1)).isoformat(), subject))
+        SELECT item_type, item_id, label, due_date, interval_days,
+               state, stability, difficulty, last_review
+        FROM review_items
+        WHERE subject = ? AND due_date <= ?
+        ORDER BY due_date ASC
+    """, (subject, (date.today() + timedelta(days=1)).isoformat()))
     if not soon:
         return {"count": 0, "high_risk": 0, "medium_risk": 0, "avg_r": None, "top": []}
     values = []
@@ -337,8 +344,10 @@ def forget_predict(subject: str = "physics") -> dict[str, Any]:
             difficulty=float(s["difficulty"] or 0),
             last_review=str(s["last_review"] or ""),
         )
-        values.append({"id": s["id"], "problem_id": s["problem_id"],
-                       "title": s["title"], "due": s["due_date"], "r": r})
+        values.append({"item_type": s["item_type"], "item_id": s["item_id"],
+                       # 兼容既有前端：仅题目可跳题详情，卡片为 None
+                       "problem_id": s["item_id"] if s["item_type"] == "problem" else None,
+                       "title": s["label"], "due": s["due_date"], "r": r})
     high = sum(1 for v in values if v["r"] < 0.5)
     medium = sum(1 for v in values if 0.5 <= v["r"] < 0.7)
     avg = round(sum(v["r"] for v in values) / len(values), 3)
@@ -352,13 +361,16 @@ def today_tasks(subject: str = "physics") -> list[dict[str, Any]]:
     tasks: list[dict[str, Any]] = []
     pressure = pressure_index(subject)
     if pressure["total"] > 0:
+        extra = ""
+        if pressure.get("by_type", {}).get("card", {}).get("today", 0) or pressure.get("by_type", {}).get("card", {}).get("overdue", 0):
+            extra = "（含卡片，卡片在卡片页复习）"
         tasks.append({
             "kind": "review",
-            "label": f"复习 {pressure['total']} 题（逾期 {pressure['overdue']} + 今日 {pressure['today']} + 明日 {pressure['tomorrow']}，约 {pressure['est_minutes']} 分钟）",
+            "label": f"复习 {pressure['total']} 题（逾期 {pressure['overdue']} + 今日 {pressure['today']} + 明日 {pressure['tomorrow']}，约 {pressure['est_minutes']} 分钟）{extra}",
             "count": pressure["total"],
         })
     elif pressure["overdue"] == 0:
-        tasks.append({"kind": "done", "label": "今日没有到期待复习的题目", "count": 0})
+        tasks.append({"kind": "done", "label": "今日没有到期待复习的项", "count": 0})
     # 错因专项：近期最高频错因 → 抽 3 道同错因题
     top_err = rows("""
         SELECT error_type, COUNT(*) AS c FROM problems
@@ -398,16 +410,26 @@ def today_tasks(subject: str = "physics") -> list[dict[str, Any]]:
 
 
 def pressure_index(subject: str = "physics") -> dict[str, Any]:
-    """P0 复习压力指数（PI）：逾期/今日/明日复习 + 预估耗时 + 压力分。"""
+    """P0 复习压力指数（PI）：逾期/今日/明日复习 + 预估耗时 + 压力分。
+
+    ADR 0013：口径为「全部可复习项」（题目 + 卡片）。附带 by_type 拆分，方便 UI
+    说明「这 N 项里有多少是卡片」——卡片在卡片页复习，与复习页队列不是同一个入口。
+    """
     today = date.today().isoformat()
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
-    subj_sub = "(SELECT id FROM problems WHERE subject = ?)"
-    overdue = row("SELECT COUNT(*) AS c FROM reviews WHERE completed = 0 AND due_date < ? AND problem_id IN " + subj_sub, (today, subject)) or {}
-    today_n = row("SELECT COUNT(*) AS c FROM reviews WHERE completed = 0 AND due_date = ? AND problem_id IN " + subj_sub, (today, subject)) or {}
-    tomorrow_n = row("SELECT COUNT(*) AS c FROM reviews WHERE completed = 0 AND due_date = ? AND problem_id IN " + subj_sub, (tomorrow, subject)) or {}
-    overdue_c = int(overdue.get("c", 0))
-    today_c = int(today_n.get("c", 0))
-    tomorrow_c = int(tomorrow_n.get("c", 0))
+    breakdown = rows("""
+        SELECT item_type,
+               SUM(CASE WHEN due_date < ? THEN 1 ELSE 0 END) AS overdue,
+               SUM(CASE WHEN due_date = ? THEN 1 ELSE 0 END) AS today,
+               SUM(CASE WHEN due_date = ? THEN 1 ELSE 0 END) AS tomorrow
+        FROM review_items WHERE subject = ? GROUP BY item_type
+    """, (today, today, tomorrow, subject))
+    by_type = {r["item_type"]: {"overdue": int(r["overdue"] or 0),
+                                "today": int(r["today"] or 0),
+                                "tomorrow": int(r["tomorrow"] or 0)} for r in breakdown}
+    overdue_c = sum(v["overdue"] for v in by_type.values())
+    today_c = sum(v["today"] for v in by_type.values())
+    tomorrow_c = sum(v["tomorrow"] for v in by_type.values())
     # 估算：每题约 90 秒（标注为估算值）
     total = overdue_c + today_c + tomorrow_c
     minutes = round(total * 1.5)
@@ -427,6 +449,7 @@ def pressure_index(subject: str = "physics") -> dict[str, Any]:
         "tomorrow": tomorrow_c,
         "total": total,
         "est_minutes": minutes,
+        "by_type": by_type,
     }
 
 
@@ -497,9 +520,9 @@ def trend_data(subject: str = "physics") -> dict[str, Any]:
     week_ago = (date.today() - timedelta(days=7)).isoformat()
     summary = row("""
         SELECT COUNT(*) AS week_reviews,
-               COALESCE(ROUND(AVG(CASE WHEN CAST(result AS INTEGER) >= 3 THEN 1.0 ELSE 0 END) * 100, 0), 0) AS week_accuracy
-        FROM reviews WHERE completed = 1 AND created_at >= ? AND problem_id IN (SELECT id FROM problems WHERE subject = ?)
-    """, (week_ago, subject)) or {}
+               COALESCE(ROUND(AVG(CASE WHEN rating >= 3 THEN 1.0 ELSE 0 END) * 100, 0), 0) AS week_accuracy
+        FROM review_log WHERE subject = ? AND created_at >= ?
+    """, (subject, week_ago)) or {}
     week_new = row("SELECT COUNT(*) AS count FROM problems WHERE subject = ? AND created_at >= ?", (subject, week_ago))
     return {
         "points": list(reversed(log)),
@@ -519,9 +542,9 @@ def analytics_data(subject: str = "physics") -> dict[str, Any]:
     for i in range(7):
         day = today + timedelta(days=i)
         count = row("""
-            SELECT COUNT(*) AS c FROM reviews
-            WHERE completed = 0 AND due_date = ? AND problem_id IN (SELECT id FROM problems WHERE subject = ?)
-        """, (day.isoformat(), subject))
+            SELECT COUNT(*) AS c FROM review_items
+            WHERE subject = ? AND due_date = ?
+        """, (subject, day.isoformat()))
         due_series.append({"date": day.isoformat(), "due": count["c"] if count else 0})
     # 卡组健康度：新生(0次复习)/学习(1-2次)/成熟(3+次) 平均掌握
     health = row("""
@@ -538,10 +561,9 @@ def analytics_data(subject: str = "physics") -> dict[str, Any]:
     month_ago = (today - timedelta(days=29)).isoformat()
     daily = rows("""
         SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS count
-        FROM reviews WHERE completed = 1 AND created_at >= ?
-        AND problem_id IN (SELECT id FROM problems WHERE subject = ?)
+        FROM review_log WHERE subject = ? AND created_at >= ?
         GROUP BY substr(created_at, 1, 10) ORDER BY day
-    """, (month_ago, subject))
+    """, (subject, month_ago))
     return {
         "due_7d": due_series,
         "deck_health": {
@@ -558,13 +580,15 @@ def analytics_data(subject: str = "physics") -> dict[str, Any]:
 
 
 def forgetting_curve(today: date, subject: str = "physics") -> dict[str, Any]:
-    """D4 遗忘曲线：FSRS 卡按「距上次复习天数」分桶统计实际 R，并给平均稳定度下的预测曲线。"""
+    """D4 遗忘曲线：FSRS 项按「距上次复习天数」分桶统计实际 R，并给平均稳定度下的预测曲线。
+
+    ADR 0013：口径为「全部可复习项」——题目与卡片的 FSRS 状态都进（review_items 视图
+    已把两者的 state/stability/difficulty/last_review 对齐）。
+    """
     cards = rows("""
-        SELECT p.stability, p.difficulty, p.state, p.repetition,
-               (SELECT MAX(created_at) FROM reviews r
-                WHERE r.problem_id = p.id AND r.completed = 1) AS last_review
-        FROM problems p
-        WHERE p.subject = ? AND p.state > 0 AND p.stability > 0
+        SELECT item_type, stability, difficulty, state, repetition, last_review
+        FROM review_items
+        WHERE subject = ? AND state > 0 AND stability > 0
     """, (subject,))
     buckets = [0, 4, 8, 15, 30, 61, 100000]
     labels = ["0-3天", "4-7天", "8-14天", "15-30天", "31-60天", "60天+"]
@@ -643,7 +667,17 @@ def dashboard(subject: str = "physics") -> dict[str, Any]:
                SUM(CASE WHEN mastery >= 4 THEN 1 ELSE 0 END) AS mastered
         FROM problems WHERE subject = ?
     """, (subj,)) or {}
-    due = row("SELECT COUNT(*) AS count FROM reviews WHERE completed = 0 AND due_date <= ? AND problem_id IN (SELECT id FROM problems WHERE subject = ?)", (today, subj)) or {}
+    # ADR 0013：`due` 保持「题目到期」口径——它与复习页队列、导航角标、graph.next_step
+    # 的第一步必须同一个数；卡片到期另给 due_cards（卡片页口径），due_total 才是总数。
+    # 拆开而不是合并，是因为 UI 上它们本来就是两个入口（复习页 / 闪卡页），
+    # 合并成一个数会让「点进去只看得到一部分」变成假象。
+    due_rows = rows("""
+        SELECT item_type, COUNT(*) AS c FROM review_items
+        WHERE subject = ? AND due_date <= ? GROUP BY item_type
+    """, (subj, today))
+    due_by_type = {r["item_type"]: int(r["c"] or 0) for r in due_rows}
+    due = {"count": due_by_type.get("problem", 0)}
+    due_cards = due_by_type.get("card", 0)
     topics = rows("""
         SELECT topic, COUNT(*) AS count, ROUND(AVG(mastery), 1) AS mastery
         FROM problems WHERE subject = ? AND topic <> '' GROUP BY topic ORDER BY mastery ASC, count DESC LIMIT 8
@@ -671,6 +705,8 @@ def dashboard(subject: str = "physics") -> dict[str, Any]:
     next_step = graph.next_step(subj)
     return {
         "stats": stats, "due": due["count"] if due else 0, "topics": topics,
+        "due_cards": due_cards, "due_total": int(due["count"] if due else 0) + due_cards,
+        "due_by_type": due_by_type,
         "oral_topic": oral_topic,
         "next_step": next_step,
         "recent": recent, "recent_activity": recent_activity, "course_stats": course_stats,
@@ -705,10 +741,11 @@ def progress(subject: str = "physics") -> dict[str, Any]:
     total = int(stats.get("total") or 0)
     avg_mastery = float(stats.get("avg_mastery") or 0)
     mastered = int(stats.get("mastered") or 0)
+    # ADR 0013：与复习页队列同口径（题目到期）；来源统一走 review_items 视图。
     due = row(
-        "SELECT COUNT(*) AS count FROM reviews "
-        "WHERE completed = 0 AND due_date <= ? AND problem_id IN (SELECT id FROM problems WHERE subject = ?)",
-        (today, subj),
+        "SELECT COUNT(*) AS count FROM review_items "
+        "WHERE subject = ? AND item_type = 'problem' AND due_date <= ?",
+        (subj, today),
     ) or {}
     due_today = int(due.get("count") or 0)
     weak = rows("""
@@ -716,11 +753,11 @@ def progress(subject: str = "physics") -> dict[str, Any]:
         FROM problems WHERE subject = ? AND topic <> ''
         GROUP BY topic ORDER BY mastery ASC, count DESC LIMIT 3
     """, (subj,))
-    # §42.2 微学习单元（≤10 分钟）：到期卡优先，薄弱主题补 1 题费曼/重做
+    # §42.2 微学习单元（≤10 分钟）：到期项优先，薄弱主题补 1 题费曼/重做
     review_target = min(due_today, 10)
     micro_steps = []
     if review_target > 0:
-        micro_steps.append(f"复习 {review_target} 张到期卡")
+        micro_steps.append(f"复习 {review_target} 个到期项")
     if weak:
         micro_steps.append(f"重做 1 道薄弱主题「{weak[0]['topic']}」错题")
     if micro_steps:

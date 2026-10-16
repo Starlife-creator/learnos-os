@@ -42,15 +42,16 @@ def aggregate() -> dict[str, Any]:
         SELECT error_type, COUNT(*) AS count FROM problems
         WHERE error_type <> '' AND error_type <> '待诊断' GROUP BY error_type ORDER BY count DESC LIMIT 8
     """)
+    # ADR 0013：学习节奏算的是「学习行为量」，题目复习与卡片复习都算（review_log 视图）。
     pace = {
-        "week_reviews": int((row("SELECT COUNT(*) AS c FROM reviews WHERE completed = 1 AND created_at >= ?", (week_ago,)) or {}).get("c", 0)),
-        "month_reviews": int((row("SELECT COUNT(*) AS c FROM reviews WHERE completed = 1 AND created_at >= ?", (month_ago,)) or {}).get("c", 0)),
+        "week_reviews": int((row("SELECT COUNT(*) AS c FROM review_log WHERE created_at >= ?", (week_ago,)) or {}).get("c", 0)),
+        "month_reviews": int((row("SELECT COUNT(*) AS c FROM review_log WHERE created_at >= ?", (month_ago,)) or {}).get("c", 0)),
         "week_new_problems": int((row("SELECT COUNT(*) AS c FROM problems WHERE created_at >= ?", (week_ago,)) or {}).get("c", 0)),
     }
     # 最近活跃时段（复习完成的钟点分布），取最高频
     hour_row = rows("""
         SELECT CAST(substr(created_at, 12, 2) AS INTEGER) AS hour, COUNT(*) AS c
-        FROM reviews WHERE completed = 1 GROUP BY hour ORDER BY c DESC LIMIT 1
+        FROM review_log GROUP BY hour ORDER BY c DESC LIMIT 1
     """)
     pace["peak_hour"] = int(hour_row[0]["hour"]) if hour_row else 0
     prefs = _get_all()

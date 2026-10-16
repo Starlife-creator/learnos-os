@@ -18,3 +18,4 @@
 | [0010](0010-handler-thin-domain-layer.md) | handler 只做 HTTP 适配，业务逻辑下沉领域层 | 生效 |
 | [0011](0011-north-star-calibration.md) | 北极星指标：实际保持率 vs 目标保持率的校准缺口 | 生效 |
 | [0012](0012-frontend-global-contract.md) | 前端不做 ES 模块化，改为可机器校验的全局契约 | 生效 |
+| [0013](0013-unified-review-read-model.md) | 统一可复习项读模型：视图合流，写路径不合表 | 生效 |

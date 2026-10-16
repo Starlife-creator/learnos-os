@@ -317,7 +317,9 @@ function drawForgetPredict(f) {
   const pct = (r) => (r * 100).toFixed(0) + '%';
   el.innerHTML =
     `<div class="text-sm">${t('forget.overview').replace('{n}', f.count).replace('{r}', pct(f.avg_r)).replace('{h}', f.high_risk).replace('{m}', f.medium_risk)}</div>
-     ${f.top && f.top.length ? `<div class="mt-8 text-sm">${t('forget.top')}：${f.top.map(tp => `<a href="#" onclick="event.preventDefault();viewProblem(${tp.problem_id});return false;">${escapeHtml(tp.title)}（R=${pct(tp.r)}）</a>`).join('、')}</div>` : ''}
+     ${f.top && f.top.length ? `<div class="mt-8 text-sm">${t('forget.top')}：${f.top.map(tp => (tp.item_type === 'card'
+        ? `<a href="#" onclick="event.preventDefault();switchPage('cards');return false;">${escapeHtml(tp.title)}（R=${pct(tp.r)}）</a>`
+        : `<a href="#" onclick="event.preventDefault();viewProblem(${tp.problem_id});return false;">${escapeHtml(tp.title)}（R=${pct(tp.r)}）</a>`)).join('、')}</div>` : ''}
      <p class="hint-text mt-8">${t('forget.rehint')}</p>`;
 }
 
