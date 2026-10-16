@@ -379,6 +379,43 @@ class TestEntrypointConsistency(unittest.TestCase):
         self.assertIn("unittest discover -s tests", bad)
 
 
+class TestReadmeStructure(unittest.TestCase):
+    """README「项目结构」与真实文件同步：曾写「21 个测试文件」且漏列多个模块。"""
+
+    @staticmethod
+    def _structure_block() -> str:
+        text = _read("README.md")
+        m = re.search(r"## 项目结构\s*```\n(.*?)```", text, re.S)
+        assert m, "README 缺少「项目结构」代码块"
+        return m.group(1)
+
+    def _listed_names(self) -> set[str]:
+        names: set[str] = set()
+        for line in self._structure_block().split("\n"):
+            entry = line.split("#", 1)[0]
+            for tok in entry.split():
+                if "*" in tok or tok in ("learnos-os/", "/"):
+                    continue
+                if tok.endswith("/"):
+                    names.add(tok)
+                    continue
+                # 「a.py/b.py」写法：拆成多个文件名
+                for part in tok.split("/"):
+                    if "." in part:
+                        names.add(part)
+        return names
+
+    def test_listed_paths_exist(self) -> None:
+        missing = [n for n in sorted(self._listed_names())
+                   if not ((ROOT / n).exists() or (ROOT / "static" / n).exists())]
+        self.assertEqual(missing, [], f"README 项目结构列出了不存在的路径：{missing}")
+
+    def test_root_modules_are_listed(self) -> None:
+        listed = self._listed_names()
+        unlisted = sorted(p.name for p in ROOT.glob("*.py") if p.name not in listed)
+        self.assertEqual(unlisted, [], f"根目录模块未写进 README 项目结构：{unlisted}")
+
+
 class TestPerformanceBudget(unittest.TestCase):
     """性能预算型 fitness function：把性能决策锁进 CI。
 

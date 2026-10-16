@@ -47,7 +47,8 @@ API_KEY_ENV = os.environ.get("LEARNOS_API_KEY", "").strip()
 API_BASE_ENV = os.environ.get("LEARNOS_API_BASE", "").strip()
 MODEL_ENV = os.environ.get("LEARNOS_MODEL", "").strip()
 
-LOG_FILE = APP_DIR / "learnos.log"
+# 日志文件可用 LEARNOS_LOG 覆盖（测试指向 tests/.tmp/test.log，避免污染真实运行日志）
+LOG_FILE = Path(os.environ.get("LEARNOS_LOG", "") or (APP_DIR / "learnos.log"))
 MEDIA_DIR = APP_DIR / "media"
 
 

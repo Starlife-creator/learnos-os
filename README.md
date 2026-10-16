@@ -117,25 +117,33 @@ learnos-os/
   fsrs_bridge.py   # FSRS-6 调度桥接（vendor 优先，SM-2 降级）
   graph.py         # 知识图谱（概念/关联/进度）
   bank.py          # 题库（单元/作答）
+  cards.py         # 知识卡
+  learn.py         # 统一学习队列 / 下一步
   rag.py           # RAG 文档与分块
   material.py      # 资料导入向导（教材/试卷 → 图谱/题库/试卷草稿提取）
   handler.py       # HTTP 路由与核心业务（已按领域拆分）
-  handler_base.py / handler_material.py / handler_oral.py / handler_problems.py / handler_reports.py / handler_reviews.py  # Handler 领域拆分（基础/资料/口试/错题/报表/复习）
+  handler_base.py / handler_cards.py / handler_learn.py / handler_material.py / handler_oral.py / handler_problems.py / handler_reports.py / handler_reviews.py / handler_social.py  # Handler 领域拆分
   oral.py          # AI 口试 / 费曼自评
   exam.py          # 试卷模式
-  gamification.py / profile.py / ocr.py / keystore.py / backup.py / telemetry.py
+  auth.py / ratelimit.py / validate.py / errors.py / resp.py  # 鉴权、限流、校验、错误与响应
+  gamification.py / social.py / profile.py / ocr.py / keystore.py / backup.py / trash.py / telemetry.py
+  interop.py / plugins.py / render_config.py / agent_rules.py
   vendor/fsrs/     # 内置 FSRS-6 纯 Python 实现
   data/            # 三学科种子数据（概念 + 题目）
+  docs/decisions/  # 架构决策记录（ADR）
   static/
     index.html     # 前端主页面
-    app-*.js       # 前端模块（core/dashboard/problems/bank/review/exam/rag/oral/settings/init）
+    app-*.js       # 前端模块（core/init/dashboard/learn/problems/bank/cards/review/exam/rag/oral/settings）
     concept_map.html  # 知识图谱独立页
     locale/        # 中英文语言包
     vendor/        # 本地 KaTeX（离线可用）
-  tests/           # 21 个测试文件（算法/AI/DB/HTTP/端到端）
+  tests/           # 单元/HTTP/端到端/架构守卫测试
+  run_tests.py     # 唯一测试入口
   build.spec       # PyInstaller 打包脚本
   start.bat/stop.bat  # Windows 启停
 ```
+
+上面的文件清单由 `tests/test_fitness_functions.py` 校验：列出的文件必须存在，根目录的 `.py` 模块必须被列出。
 
 ## 测试
 
@@ -144,7 +152,8 @@ python run_tests.py
 ```
 
 `run_tests.py` 是**唯一权威入口**（CI 与本地共用），它以 `-t .` 包模式启动测试，
-从而加载 `tests/__init__.py` 里的加固 shim（超时下限、沙箱临时目录兜底）。
+从而加载 `tests/__init__.py` 里的加固 shim（超时下限、临时目录 ACL 修正、日志重定向到 `tests/.tmp/test.log`）。
+跑完后若有临时目录删不掉，会在末尾打印残留清单。
 请勿改用 `python -m unittest discover -s tests` —— 那样会绕过 shim，
 使 16 个文件中 37 处 `timeout=N` 用例在慢机器上随机失败
 （该一致性由 `tests/test_fitness_functions.py` 断言守卫）。
