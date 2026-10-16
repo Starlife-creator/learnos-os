@@ -97,14 +97,15 @@ set LEARNOS_PORT=9000 && python app.py
 
 > **快速安全暴露到局域网**：`set LEARNOS_HOST=0.0.0.0 && set LEARNOS_API_TOKEN=<用 python -c "import secrets;print(secrets.token_hex(32))" 生成>` 后启动。不带 token 启动会被拒绝，这是刻意的 fail-closed 设计。
 
-### 程序化 / 预留接口
+### 明确不做（非目标）
 
-以下端点当前无内置 UI 入口，定位为脚本化调用或后续功能预留（均遵循同源 CSRF 约束）：
+以下能力**刻意不实现**，理由见 [ADR 0005](docs/decisions/0005-explicit-non-goals.md)；将来要做请先改决策再动手：
 
-- `/api/material/cards` — 原子知识卡提取/应用（外部工具对接点）
-- `/api/render-config` / `/api/render-configs` — 学科渲染配置读写（§29，供前端按学科定制单位制/强调色等）
-- `/api/plugins` — 插件/MCP 机制骨架（§30.1，远景预留）
-- `/api/pwa/manifest` — 动态 PWA 清单（当前页面使用静态 `manifest.json`，此路由为冗余备用）
+- **插件 / MCP 机制**：动态加载本地 `plugin.py` 等于给单机应用开一个任意代码执行口，而当前没有任何消费者。
+- **学科渲染配置 API**：前端渲染是写死的样式，这个 API 与 `list_subjects()` 的学科名/图标构成双份事实来源，无人调用即会腐烂。
+- **动态 PWA 清单**：`index.html` 直接引用静态 `static/manifest.json`，另开一个接口供同一份文件是纯粹的第二事实来源。
+
+`/api/material/cards` 不属于此类——它在学习页有真实入口（选中文本 → 卡片草稿 → 确认落库）。
 
 ## 项目结构
 
@@ -134,7 +135,7 @@ learnos-os/
   exam.py          # 试卷模式
   auth.py / ratelimit.py / validate.py / errors.py / resp.py  # 鉴权、限流、校验、错误与响应
   gamification.py / social.py / profile.py / ocr.py / keystore.py / backup.py / trash.py / telemetry.py
-  interop.py / plugins.py / render_config.py / agent_rules.py
+  interop.py / agent_rules.py
   vendor/fsrs/     # 内置 FSRS-6 纯 Python 实现
   data/            # 三学科种子数据（概念 + 题目）
   docs/decisions/  # 架构决策记录（ADR）

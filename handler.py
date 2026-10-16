@@ -121,11 +121,7 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         (r"/api/bank/units", "_handle_bank_units"),
         (r"/api/bank/stats", "_handle_bank_stats"),
         (r"/api/subjects", "_handle_subjects"),
-        (r"/api/render-configs", "_handle_render_configs"),
-        (r"/api/render-config", "_handle_render_config"),
         (r"/api/agent/orchestrate", "_handle_agent_orchestrate"),
-        (r"/api/pwa/manifest", "_handle_pwa_manifest"),
-        (r"/api/plugins", "_handle_plugins"),
         (r"/api/social/checkins", "_handle_social_checkins"),
         (r"/api/social/streak", "_handle_social_streak"),
         (r"/api/export/social", "_handle_export_social"),
@@ -186,7 +182,6 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         (r"/api/learn/generate", "_handle_learn_generate", True),
         (r"/api/learn/ask", "_handle_learn_ask", True),
         (r"/api/social/checkin", "_handle_social_checkin", True),
-        (r"/api/render-config", "_handle_set_render_config", True),
         (r"/api/cards", "_handle_create_card", True),
         (r"/api/cards/generate", "_handle_generate_card_drafts", True),
         (r"/api/cards/generate-batch", "_handle_generate_card_batch", True),
@@ -573,31 +568,6 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
             "concept_count": len(graph.load_graph(subject)["nodes"]),
         })
 
-    # ── 学科渲染配置（§29）──
-    def _handle_render_config(self) -> None:
-        """GET /api/render-config?subject=：合并后的渲染原语。"""
-        import render_config
-        qs = parse_qs(urlparse(self.path).query)
-        subj = qs.get("subject", [""])[0] or self.subject
-        self.json_response(render_config.get_render_config(subj))
-
-    def _handle_render_configs(self) -> None:
-        """GET /api/render-configs：所有学科的渲染配置。"""
-        import render_config
-        subs = [s["id"] for s in list_subjects()]
-        self.json_response({"configs": render_config.all_render_configs(subs)})
-
-    def _handle_set_render_config(self, data: dict[str, Any]) -> None:
-        """POST /api/render-config：增量更新某学科渲染配置。"""
-        import render_config
-        subj = self._subject_of(data)
-        try:
-            merged = render_config.set_render_config(subj, data.get("config", data))
-        except ValueError as exc:
-            self.json_response({"error": str(exc)}, 400)
-            return
-        self.json_response({"ok": True, "subject": subj, "config": merged})
-
     # ── 智能体规则编排（§32 降级态）──
     def _handle_agent_orchestrate(self) -> None:
         """GET /api/agent/orchestrate?subject=：今日行动清单（离线可用，永不调 AI）。
@@ -626,44 +596,6 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         subj = str(data.get("subject", "") or "").strip() or self.subject
         plan = agent_rules.synthesize_plan(subj, use_ai=True)
         self.json_response(plan)
-
-    # ── PWA 清单（§19.4，标准 webmanifest MIME）──
-    def _handle_pwa_manifest(self) -> None:
-        """GET /api/pwa/manifest：以 application/manifest+json 提供 PWA 清单。"""
-        import json as _json
-        from pathlib import Path
-        manifest_path = STATIC_DIR / "manifest.webmanifest"
-        if not manifest_path.is_file():
-            manifest_path = STATIC_DIR / "manifest.json"
-        try:
-            body = manifest_path.read_text(encoding="utf-8")
-            _json.loads(body)  # 校验合法 JSON
-        except (OSError, _json.JSONDecodeError):
-            self.json_response({"error": "manifest 缺失或非法"}, 500)
-            return
-        raw = body.encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/manifest+json; charset=utf-8")
-        self.send_header("Content-Length", str(len(raw)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(raw)
-
-    # ── 插件 / MCP 脚手架状态（§30.1 远景）──
-    def _handle_plugins(self) -> None:
-        """GET /api/plugins：已加载插件与已注册 MCP 工具清单。"""
-        import plugins
-        from pathlib import Path
-        try:
-            loaded = plugins.load_plugins()
-        except Exception as exc:
-            loaded = []
-            LOG.warning("插件扫描异常: %s", exc)
-        self.json_response({
-            "loaded": loaded,
-            "mcp_tools": plugins.MCP.list_tools(),
-            "plugin_dir": str(plugins.DEFAULT_PLUGIN_DIR),
-        })
 
     def _handle_add_subject(self, data: dict[str, Any]) -> None:
         """网页端新增学科：合法 id + 可选标题；有种子文件则自动加载图谱。"""

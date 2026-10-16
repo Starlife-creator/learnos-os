@@ -26,9 +26,7 @@ db_module.init_db()
 import social  # noqa: E402
 import exam  # noqa: E402
 import interop  # noqa: E402
-import render_config  # noqa: E402
 import agent_rules  # noqa: E402
-import plugins  # noqa: E402
 
 
 def _tmp_db() -> str:
@@ -144,31 +142,6 @@ class TestInteropExport(unittest.TestCase):
         self.assertIn("我的作答", md2)
 
 
-class TestRenderConfig(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        import render_config
-        cls.rc = render_config
-        with db_module.DB_LOCK, db_module.db() as conn:
-            conn.execute("DELETE FROM settings WHERE key LIKE 'render_config_%'")
-
-    def test_default_merge_builtin(self):
-        cfg = self.rc.get_render_config("physics")
-        self.assertEqual(cfg["formula_engine"], "latex")
-        self.assertEqual(cfg["display_name"], "物理")
-
-    def test_set_and_get(self):
-        merged = self.rc.set_render_config("physics", {"accent": "#ff0000", "sig_figs": 2})
-        self.assertEqual(merged["accent"], "#ff0000")
-        again = self.rc.get_render_config("physics")
-        self.assertEqual(again["accent"], "#ff0000")
-        self.assertEqual(again["sig_figs"], 2)
-
-    def test_rejects_unknown_key(self):
-        merged = self.rc.set_render_config("math", {"bogus": "x"})
-        self.assertNotIn("bogus", merged)
-
-
 class TestAgentRules(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -205,29 +178,6 @@ class TestAgentRules(unittest.TestCase):
     def test_synthesize_degraded_without_ai(self):
         plan = self.ar.synthesize_plan("physics", use_ai=False)
         self.assertEqual(plan["mode"], "degraded")
-
-
-class TestPluginsScaffold(unittest.TestCase):
-    def test_mcp_registry(self):
-        import plugins
-        plugins.MCP.register("demo.echo", lambda msg: f"echo:{msg}")
-        self.assertIn("demo.echo", plugins.MCP.list_tools())
-        self.assertEqual(plugins.MCP.call("demo.echo", {"msg": "hi"}), "echo:hi")
-        with self.assertRaises(KeyError):
-            plugins.MCP.call("nope.x")
-
-    def test_plugin_api_sandbox(self):
-        import plugins
-        api = plugins.PluginAPI("demo")
-        api.register_command("ping", lambda: "pong")
-        self.assertEqual(api.call_command("ping"), "pong")
-        with self.assertRaises(KeyError):
-            api.call_command("missing")
-
-    def test_load_plugins_empty_dir(self):
-        import plugins
-        # 不存在的目录应安全返回空列表
-        self.assertEqual(plugins.load_plugins(plugins.DEFAULT_PLUGIN_DIR / "__nope__"), [])
 
 
 if __name__ == "__main__":

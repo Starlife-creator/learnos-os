@@ -273,6 +273,39 @@ class TestRouteTableIntegrity(unittest.TestCase):
         self.assertEqual([], problems, "路由元数失配：\n  " + "\n  ".join(problems))
 
 
+class TestPrunedSurfaces(unittest.TestCase):
+    """非目标守卫（ADR 0005）：裁剪掉的面不许悄悄长回来。
+
+    被删的三个能力都「有实现、无消费者」，腐坏方式是把双份事实来源重新引入
+    （学科元数据、PWA 清单）或重新开一个任意代码执行口（插件自动加载）。
+    真要恢复，先改 ADR 0005 并说明消费者是谁。
+    """
+
+    PRUNED_ROUTES = ("/api/render-config", "/api/render-configs",
+                     "/api/pwa/manifest", "/api/plugins")
+    PRUNED_MODULES = ("plugins.py", "render_config.py")
+
+    def test_pruned_routes_are_not_registered(self) -> None:
+        from handler import Handler
+        registered = {p for p, _m in Handler.GET_ROUTES}
+        registered |= {p for p, _m, _a in Handler.POST_ROUTES}
+        alive = sorted(r for r in self.PRUNED_ROUTES if r in registered)
+        self.assertEqual([], alive, "已裁剪路由重新注册：见 ADR 0005")
+
+    def test_pruned_modules_are_gone(self) -> None:
+        back = [m for m in self.PRUNED_MODULES if (ROOT / m).exists()]
+        self.assertEqual([], back, "已裁剪模块被重新加入：见 ADR 0005")
+
+    def test_no_plugin_autoloader_anywhere(self) -> None:
+        """`exec_module` 只允许出现在 importlib 无关的正常用法里，禁止插件式动态执行。"""
+        hits: list[str] = []
+        for path in sorted(ROOT.glob("*.py")):
+            text = path.read_text(encoding="utf-8")
+            if "exec_module(" in text:
+                hits.append(path.name)
+        self.assertEqual([], hits, "重新出现动态模块执行（插件加载器？）：见 ADR 0005")
+
+
 class TestBackupCompleteness(unittest.TestCase):
     """A15：BACKUP_TABLES 必须覆盖全部业务表（否则还原后静默丢数据）。
 
