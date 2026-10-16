@@ -125,6 +125,14 @@ def _desired_retention(subject: str = "") -> float:
         return 0.9
 
 
+def desired_retention(subject: str = "") -> float:
+    """公开只读入口：当前生效的目标保持率（§46.5C 学科分层，默认 0.9）。
+
+    `_desired_retention` 是调度内部用的，对外（如北极星指标）用这个，避免跨模块引用私有名。
+    """
+    return _desired_retention(subject)
+
+
 def _scheduler(subject: str = "") -> Scheduler:
     params = DEFAULT_PARAMETERS
     trained = _load_params()

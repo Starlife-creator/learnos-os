@@ -919,6 +919,28 @@ class TestEndpoints(unittest.TestCase):
         self.assertEqual(m2["active_days"], m["active_days"])
         self.assertEqual(m2["month_revs"], m["month_revs"])
 
+    def test_north_star_endpoint(self):
+        """GET /api/report/north-star：口径字段齐全；首次接触不算保持样本（#13）。"""
+        pid = self._create_problem(title="北极星题")
+        _, _rv = self._request("GET", "/api/reviews")
+        rid = next(r["id"] for r in _rv["items"] if r["problem_id"] == pid)
+        self._request("POST", f"/api/reviews/{rid}/complete", {"rating": 4})
+        status, ns = self._request("GET", "/api/report/north-star?days=30")
+        self.assertEqual(status, 200)
+        for key in ("reviews", "actual_retention", "target_retention", "gap",
+                    "verdict", "advice_key", "on_time_rate", "on_time_retention",
+                    "overdue_retention", "by_horizon", "weekly", "mature_share"):
+            self.assertIn(key, ns)
+        # 只完成过一次复习 → 尚无「有前次的复习」，指标应为空而不是伪造 0
+        self.assertEqual(ns["reviews"], 0)
+        self.assertIsNone(ns["actual_retention"])
+        self.assertEqual(ns["advice_key"], "report.nsNoData")
+        self.assertTrue(0.75 <= ns["target_retention"] <= 0.97)
+        # 非法 days 不炸，回落默认 30
+        status, ns2 = self._request("GET", "/api/report/north-star?days=abc")
+        self.assertEqual(status, 200)
+        self.assertEqual(ns2["window_days"], 30)
+
 
 class TestQAEntryReadOnly(unittest.TestCase):
     """U3 入口差异化：问答/AI 草稿入口必须只读——调用前后学习状态零变化。

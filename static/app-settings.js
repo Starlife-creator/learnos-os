@@ -148,18 +148,21 @@ async function clearKeystore() {
 
 async function showPeriodicReport() {
   try {
-    const [w, m] = await Promise.all([
+    const [w, m, ns] = await Promise.all([
       api('/api/report/weekly'),
       api('/api/report/monthly'),
+      api('/api/report/north-star'),
     ]);
     const html = `
       <div class="flex gap-8 mb-8">
         <button class="btn btn-primary btn-sm" onclick="periodicTab('week')">${t('report.weekTab')}</button>
         <button class="btn btn-secondary btn-sm" onclick="periodicTab('month')">${t('report.monthTab')}</button>
+        <button class="btn btn-secondary btn-sm" onclick="periodicTab('north')">${t('report.northTab')}</button>
         <button class="btn btn-secondary btn-sm" onclick="printPeriodicReport()" data-i18n="report.print">🖨 打印报告</button>
       </div>
       <div id="periodicWeek">${periodicWeekHtml(w)}</div>
-      <div id="periodicMonth" class="hidden">${periodicMonthHtml(m)}</div>`;
+      <div id="periodicMonth" class="hidden">${periodicMonthHtml(m)}</div>
+      <div id="periodicNorth" class="hidden">${periodicNorthHtml(ns)}</div>`;
     const mb = document.getElementById('modalBody');
     mb.innerHTML = html;
     document.getElementById('modalTitle').textContent = t('card.weeklyMore');
@@ -170,9 +173,10 @@ async function showPeriodicReport() {
 
 // 报告打印：新窗口呈现当前可见 tab 的内容 + 打印
 function printPeriodicReport() {
-  const week = document.getElementById('periodicWeek');
-  const month = document.getElementById('periodicMonth');
-  const body = (!week.classList.contains('hidden') ? week : month) || week;
+  const panes = ['periodicWeek', 'periodicMonth', 'periodicNorth']
+    .map(id => document.getElementById(id))
+    .filter(Boolean);
+  const body = panes.find(el => !el.classList.contains('hidden')) || panes[0];
   if (!body) { toast(t('report.loadFail'), 'error'); return; }
   const w = window.open('', '_blank');
   if (!w) { toast(t('report.popBlocked'), 'error'); return; }
@@ -186,11 +190,11 @@ function printPeriodicReport() {
 }
 
 function periodicTab(tab) {
-  const w = document.getElementById('periodicWeek');
-  const m = document.getElementById('periodicMonth');
-  if (!w || !m) return;
-  w.classList.toggle('hidden', tab !== 'week');
-  m.classList.toggle('hidden', tab !== 'month');
+  const panes = {week: 'periodicWeek', month: 'periodicMonth', north: 'periodicNorth'};
+  Object.entries(panes).forEach(([name, id]) => {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('hidden', name !== tab);
+  });
 }
 
 function periodicBarHtml(rows, max) {
@@ -231,6 +235,39 @@ function periodicMonthHtml(m) {
     <div class="text-sm text-muted mt-12 mb-8">${t('report.topErrors')}</div>
     ${periodicBarHtml(errs)}
     <p class="hint-text mt-12">${t('report.tip').replace('{t}', t(m.tip_key || 'report.tipMonthNone'))}</p>`;
+}
+
+// 保持率条：宽度直接是百分比（periodicBarHtml 是按最大值归一，语义不同）
+function periodicRateHtml(rows) {
+  const pct = v => (v === null || v === undefined) ? '—' : (v * 100).toFixed(0) + '%';
+  return rows.map(r => `
+    <div class="error-bar-row">
+      <span class="text-sm" style="min-width:130px">${escapeHtml(r.label || r.week || '')}</span>
+      <div class="error-bar-track"><div class="error-bar-fill" style="width:${Math.round((r.retention || 0) * 100)}%;background:var(--accent)"></div></div>
+      <b class="text-sm" style="min-width:44px">${pct(r.retention)}</b>
+      <span class="text-sm text-muted" style="min-width:56px">${t('report.nsSamples').replace('{n}', r.count)}</span>
+    </div>`).join('') || '<p class="text-sm text-muted">' + t('msg.noData') + '</p>';
+}
+
+// 北极星：实际保持率 vs FSRS 目标保持率（校准缺口），分数条一律以百分比直读
+function periodicNorthHtml(ns) {
+  if (!ns || ns.window_days === undefined) return '<p class="text-sm text-muted">' + t('msg.noData') + '</p>';
+  const pct = v => (v === null || v === undefined) ? '—' : (v * 100).toFixed(0) + '%';
+  const gapStr = (ns.gap === null || ns.gap === undefined) ? '—' : (ns.gap > 0 ? '+' : '') + (ns.gap * 100).toFixed(0) + '%';
+  const verdictColor = {calibrated: 'var(--accent)', aggressive: '#e5484d', conservative: '#f5a524', insufficient: 'inherit'};
+  const horizon = (ns.by_horizon || []).map(b => ({label: b.label, count: b.count, retention: b.retention}));
+  const weekly = (ns.weekly || []).map(b => ({label: b.week, count: b.count, retention: b.retention}));
+  return `
+    <p class="text-sm text-muted mb-8">${t('report.nsWindow').replace('{d}', ns.window_days).replace('{n}', ns.reviews)}</p>
+    <div class="error-bar-row"><span class="text-sm">${t('report.nsActual')}</span><b>${pct(ns.actual_retention)}</b><span class="text-sm text-muted">${t('report.nsTarget').replace('{t}', pct(ns.target_retention))}</span></div>
+    <div class="error-bar-row"><span class="text-sm">${t('report.nsGap')}</span><b style="color:${verdictColor[ns.verdict] || 'inherit'}">${gapStr}</b><span class="text-sm text-muted">${t(ns.advice_key || 'report.nsNoData')}</span></div>
+    <div class="error-bar-row"><span class="text-sm">${t('report.nsOnTime')}</span><b>${pct(ns.on_time_rate)}</b></div>
+    <div class="error-bar-row"><span class="text-sm">${t('report.nsOnTimeRet')}</span><b>${pct(ns.on_time_retention)}</b><span class="text-sm text-muted">${t('report.nsOverdueRet').replace('{v}', pct(ns.overdue_retention))}</span></div>
+    <div class="error-bar-row"><span class="text-sm">${t('report.nsMature')}</span><b>${pct(ns.mature_share)}</b></div>
+    <div class="text-sm text-muted mt-12 mb-8">${t('report.nsHorizonTitle')}</div>
+    ${periodicRateHtml(horizon)}
+    <div class="text-sm text-muted mt-12 mb-8">${t('report.nsWeeklyTitle')}</div>
+    ${periodicRateHtml(weekly)}`;
 }
 
 async function loadPrefs() {

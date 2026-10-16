@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+from urllib.parse import parse_qs, urlparse
+
 import reports
 
 
@@ -36,3 +38,12 @@ class ReportsMixin:
 
     def _handle_gamification(self) -> None:
         self.json_response(reports.game_state())
+
+    def _handle_north_star(self) -> None:
+        """GET /api/report/north-star?days=30：实际保持率 vs 目标保持率（#13）。"""
+        qs = parse_qs(urlparse(self.path).query)
+        try:
+            days = int((qs.get("days") or ["30"])[0])
+        except (TypeError, ValueError):
+            days = 30
+        self.json_response(reports.north_star(self.subject, days))

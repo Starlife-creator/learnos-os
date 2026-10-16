@@ -165,6 +165,128 @@ def monthly_report(subject: str = "physics") -> dict[str, Any]:
     }
 
 
+_HORIZON_BUCKETS = ((0, 4, "0-3天"), (4, 8, "4-7天"), (8, 15, "8-14天"),
+                    (15, 31, "15-30天"), (31, 10 ** 9, "31天+"))
+
+
+def _rate(items: list[dict[str, Any]]) -> float | None:
+    """成功率（无样本返回 None，不要伪造 0）。"""
+    if not items:
+        return None
+    return round(sum(1 for s in items if s["ok"]) / len(items), 3)
+
+
+def _mature_share(subject: str) -> float:
+    """结构性指标：已进入成熟期（repetition>=3）的题目占比。"""
+    stats = row("""
+        SELECT SUM(CASE WHEN repetition >= 3 THEN 1 ELSE 0 END) AS mature,
+               COUNT(*) AS total FROM problems WHERE subject = ?
+    """, (subject,)) or {}
+    total = int(stats.get("total") or 0)
+    return round(int(stats.get("mature") or 0) / total, 3) if total else 0.0
+
+
+def north_star(subject: str = "physics", days: int = 30) -> dict[str, Any]:
+    """#13 北极星指标：实际保持率 vs 调度目标保持率（校准缺口）。
+
+    口径（刻意收窄，不把「初次学习」算成「记忆保持」）：
+      - 只统计**有前次复习记录**的已完成复习；首次接触某题不计入；
+      - 成功 = 评分 >= 3（与 SM-2/FSRS 同一口径）；
+      - 实际保持率 = 成功数 / 样本数；目标保持率 = FSRS desired_retention（学科分层）；
+      - gap = 实际 - 目标：明显为负 → 间隔对该学科偏长（或评分偏乐观）；
+        明显为正 → 间隔偏短，有省时空间。
+
+    「是否按时」用 elapsed（距上次复习天数）与 interval_days（当时排定的间隔）比较——
+    两者都在 reviews 表里，因此该指标无需新增字段，也不依赖 FSRS 状态快照
+    （problems 只存当前状态，历史 R 无法精确复原，这里不假装能算）。
+    """
+    window = max(1, min(int(30 if days is None else days), 365))
+    since = (date.today() - timedelta(days=window - 1)).isoformat()
+    target = fsrs_bridge.desired_retention(subject)
+    # 取全部完成复习（不限窗口）：窗口内第一条也要知道「前次」才能算 elapsed。
+    log = rows("""
+        SELECT r.problem_id, r.result, r.created_at, r.interval_days
+        FROM reviews r JOIN problems p ON p.id = r.problem_id
+        WHERE r.completed = 1 AND p.subject = ?
+        ORDER BY r.problem_id, r.id
+    """, (subject,))
+    samples: list[dict[str, Any]] = []
+    prev_day: dict[Any, str] = {}
+    for r in log:
+        day = str(r["created_at"] or "")[:10]
+        if not day:
+            continue
+        prev = prev_day.get(r["problem_id"])
+        prev_day[r["problem_id"]] = day
+        if prev is None or day < since:
+            continue
+        try:
+            elapsed = max(0, (date.fromisoformat(day) - date.fromisoformat(prev)).days)
+        except ValueError:
+            continue
+        try:
+            ok = int(r["result"] or 0) >= 3
+        except (TypeError, ValueError):
+            ok = False
+        samples.append({"day": day, "elapsed": elapsed,
+                        "interval": int(r["interval_days"] or 0), "ok": ok})
+
+    base: dict[str, Any] = {
+        "window_days": window,
+        "target_retention": round(target, 2),
+        "mature_share": _mature_share(subject),
+    }
+    if not samples:
+        return {**base, "reviews": 0, "actual_retention": None, "gap": None,
+                "verdict": "insufficient", "advice_key": "report.nsNoData",
+                "on_time_rate": None, "on_time_retention": None,
+                "overdue_retention": None, "by_horizon": [], "weekly": []}
+
+    actual = _rate(samples) or 0.0
+    on_time = [s for s in samples if s["elapsed"] <= s["interval"]]
+    overdue = [s for s in samples if s["elapsed"] > s["interval"]]
+    gap = round(actual - target, 3)
+    if len(samples) < 20:
+        verdict, advice_key = "insufficient", "report.nsThin"
+    elif gap <= -0.08:
+        verdict, advice_key = "aggressive", "report.nsAggressive"
+    elif gap >= 0.08:
+        verdict, advice_key = "conservative", "report.nsConservative"
+    else:
+        verdict, advice_key = "calibrated", "report.nsCalibrated"
+
+    by_horizon = []
+    for lo, hi, label in _HORIZON_BUCKETS:
+        items = [s for s in samples if lo <= s["elapsed"] < hi]
+        if items:
+            by_horizon.append({"label": label, "count": len(items),
+                               "retention": _rate(items)})
+
+    weekly: dict[str, list[dict[str, Any]]] = {}
+    for s in samples:
+        try:
+            iso = date.fromisoformat(s["day"]).isocalendar()
+        except ValueError:
+            continue
+        weekly.setdefault(f"{iso[0]}-W{iso[1]:02d}", []).append(s)
+    weekly_out = [{"week": w, "count": len(v), "retention": _rate(v)}
+                  for w, v in sorted(weekly.items())][-8:]
+
+    return {
+        **base,
+        "reviews": len(samples),
+        "actual_retention": actual,
+        "gap": gap,
+        "verdict": verdict,
+        "advice_key": advice_key,
+        "on_time_rate": round(len(on_time) / len(samples), 3),
+        "on_time_retention": _rate(on_time),
+        "overdue_retention": _rate(overdue),
+        "by_horizon": by_horizon,
+        "weekly": weekly_out,
+    }
+
+
 def stubborn_problems(subject: str = "physics") -> list[dict[str, Any]]:
     """P0 顽固错题：同题评分(<=2)达 2 次的题，按失手次数排序（可指定学科）。"""
     items = rows("""
