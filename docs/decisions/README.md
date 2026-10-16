@@ -15,3 +15,4 @@
 | [0007](0007-scheduler-split.md) | 复习调度：FSRS 与 SM-2 分轨 | 生效 |
 | [0008](0008-ai-layered-split.md) | AI 层按传输/提示词/降级/编排分层 | 生效 |
 | [0009](0009-read-path-no-global-lock.md) | 读路径不持全局锁，连接失效自愈 | 生效 |
+| [0010](0010-handler-thin-domain-layer.md) | handler 只做 HTTP 适配，业务逻辑下沉领域层 | 生效 |

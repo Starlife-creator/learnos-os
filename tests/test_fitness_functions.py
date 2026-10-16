@@ -515,6 +515,79 @@ class TestAiLayerBoundaries(unittest.TestCase):
         self.assertEqual(bad, [], "ai 分层出现反向/越层依赖：" + ", ".join(sorted(set(bad))))
 
 
+_SQL_KEYWORD_RE = re.compile(r"\b(?:SELECT|INSERT|UPDATE|DELETE)\b", re.IGNORECASE)
+
+
+def _sql_literals(path: Path) -> list[int]:
+    """返回「含 SQL 关键字的字符串字面量」的行号（一个字面量算一条语句）。"""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return [n.lineno for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and _SQL_KEYWORD_RE.search(n.value)]
+
+
+# #7 业务逻辑下沉：handler_* 里的裸 SQL 条数上限（ratchet）。
+# 历史上业务规则混在 HTTP 层，脱离 HTTP 无法复用/测试；handler_reports.py 的
+# 37 条已下沉到 reports.py。此表是「只减不增」的天花板：新增泄漏立即失败。
+# 下沉完成后把对应数字调小（守卫只拦上升，不拦下降）。
+HANDLER_SQL_BUDGET = {
+    "handler.py": 21,
+    "handler_problems.py": 43,
+    "handler_reviews.py": 11,
+    "handler_cards.py": 1,
+    "handler_material.py": 1,
+    "handler_learn.py": 1,
+    "handler_oral.py": 1,
+    "handler_reports.py": 0,
+    "handler_social.py": 0,
+}
+
+
+class TestHandlerSqlBudget(unittest.TestCase):
+    """handler 层是 HTTP 适配器，不是数据访问层（§ADR 0010）。"""
+
+    def test_handler_modules_stay_within_sql_budget(self) -> None:
+        over = [f"{name}: {len(_sql_literals(ROOT / name))} > {budget}"
+                for name, budget in HANDLER_SQL_BUDGET.items()
+                if len(_sql_literals(ROOT / name)) > budget]
+        self.assertEqual(over, [], "handler 层新增了裸 SQL，请下沉到领域模块："
+                         + "; ".join(over))
+
+    def test_every_handler_module_has_a_budget(self) -> None:
+        """新增 handler_*.py 必须同时登记预算，否则这个守卫是可绕过的。"""
+        missing = [f"{n}.py" for n in HANDLER_MODULES
+                   if f"{n}.py" not in HANDLER_SQL_BUDGET]
+        self.assertEqual(missing, [], "以下 handler 未登记 SQL 预算：" + ", ".join(missing))
+
+
+class TestDomainLayerPurity(unittest.TestCase):
+    """领域层不得反向依赖 HTTP 层，否则「下沉」只是搬家。"""
+
+    DOMAIN = ("reports.py", "mastery.py", "scheduler.py", "graph.py",
+              "bank.py", "cards.py", "review.py")
+
+    def test_domain_modules_do_not_import_http_layer(self) -> None:
+        bad = []
+        for name in self.DOMAIN:
+            tree = ast.parse((ROOT / name).read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    deps = [a.name.split(".")[0] for a in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    deps = [(node.module or "").split(".")[0]]
+                else:
+                    continue
+                for dep in deps:
+                    if dep.startswith("handler") or dep in {"app", "http.server"}:
+                        bad.append(f"{name} → {dep}")
+        self.assertEqual(bad, [], "领域层反向依赖 HTTP 层：" + ", ".join(sorted(set(bad))))
+
+    def test_reports_layer_has_no_http_knowledge(self) -> None:
+        src = (ROOT / "reports.py").read_text(encoding="utf-8")
+        for token in ("json_response", "self."):
+            self.assertNotIn(token, src, f"reports.py 不应出现 HTTP 层概念：{token}")
+
+
 class TestPerformanceBudget(unittest.TestCase):
     """性能预算型 fitness function：把性能决策锁进 CI。
 
