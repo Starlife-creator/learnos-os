@@ -50,10 +50,16 @@ def _js_files() -> list[Path]:
 
 
 # 顶层（缩进 0）声明 = 该页全局；带缩进的声明 = 函数/块内局部。
+# 注意：必须覆盖 `async function`、`window.x =`、`class`——早前只认 `function`/`const`，
+# 于是所有 `async function foo()` 都不算全局，遮蔽检测对它们静默失效。
 _DECL_TOP = re.compile(
-    r"^(?:function\s+([A-Za-z_$][\w$]*)|(?:const|let|var)\s+([A-Za-z_$][\w$]*))")
+    r"^(?:async\s+)?function\s+([A-Za-z_$][\w$]*)"
+    r"|^(?:const|let|var)\s+([A-Za-z_$][\w$]*)"
+    r"|^window\.([A-Za-z_$][\w$]*)\s*="
+    r"|^class\s+([A-Za-z_$][\w$]*)")
 _DECL_NESTED = re.compile(
-    r"^\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)")
+    r"^\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)"
+    r"|^\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)")
 # 浏览器/DOM 自带或纯局部惯用名，不作为「被遮蔽」判据
 _BUILTIN_LIKE = {"window", "document", "console", "Math", "JSON", "localStorage",
                  "navigator", "location"}
@@ -80,14 +86,46 @@ def _page_scopes() -> dict[str, list[Path]]:
     return scopes
 
 
+def _decl_name(line: str) -> str | None:
+    """顶层声明行 → 该行声明的全局名；非顶层声明返回 None。"""
+    m = _DECL_TOP.match(line)
+    return next((g for g in m.groups() if g), None) if m else None
+
+
 def _globals_of(paths: list[Path]) -> set[str]:
     syms: set[str] = set()
     for p in paths:
         for line in p.read_text(encoding="utf-8").split("\n"):
-            m = _DECL_TOP.match(line)
-            if m:
-                syms.add(m.group(1) or m.group(2))
+            name = _decl_name(line)
+            if name:
+                syms.add(name)
     return syms - _BUILTIN_LIKE
+
+
+# 内联事件处理器属性：onclick="foo(...)" 之类
+_INLINE_HANDLER = re.compile(
+    r"""on(?:click|input|change|keyup|keydown|keypress|submit|blur|focus|dblclick"""
+    r"""|mouseenter|mouseleave|mouseover|load|error)\s*=\s*(["'])(.*?)\1""",
+    re.S)
+_INLINE_CALL = re.compile(r"^\s*([A-Za-z_$][\w$]*)\s*\(")
+# 处理器体以这些开头时是语句/内建对象，不是「页面全局函数」
+_INLINE_KEYWORDS = {"if", "for", "while", "return", "switch", "this", "event",
+                    "window", "document", "setTimeout", "clearTimeout", "print",
+                    "alert", "confirm", "open", "location", "history", "blur",
+                    "focus", "scrollTo", "getComputedStyle", "requestAnimationFrame",
+                    "parseInt", "parseFloat", "isNaN", "encodeURIComponent", "String",
+                    "Number", "Boolean", "JSON", "Object", "Array", "Math", "Date",
+                    "URL", "FormData", "FileReader", "Image", "crypto", "performance"}
+
+
+def _inline_handler_names(text: str) -> set[str]:
+    """提取内联处理器里首个被调用的名字（只取调用式，赋值式/表达式式跳过）。"""
+    names: set[str] = set()
+    for m in _INLINE_HANDLER.finditer(text):
+        cm = _INLINE_CALL.match(m.group(2))
+        if cm:
+            names.add(cm.group(1))
+    return names - _INLINE_KEYWORDS
 
 
 class TestGlobalShadowing(unittest.TestCase):
@@ -138,6 +176,65 @@ class TestGlobalShadowing(unittest.TestCase):
         self.assertIsNone(_DECL_NESTED.match(top), "顶层声明误判为遮蔽 → 会产生全量误报")
         arrow = re.compile(r"\.(?:map|forEach|filter|find|some|every|flatMap)\(\s*([A-Za-z_$][\w$]*)\s*=>")
         self.assertTrue(any(m.group(1) == "t" for m in arrow.finditer("d.topics.map(t => `x`")))
+
+    def test_global_extractor_covers_all_declaration_forms(self) -> None:
+        """自检：`async function` / `window.x =` / `class` 也必须算全局。
+
+        早前只认 `function` 与 `const|let|var`，于是所有 `async function foo()` 都不在
+        全局表里 —— 遮蔽检测对它们静默失效。本测试锁住该盲点不复发。
+        """
+        for line in ("function t(key) {", "async function saveProblem() {",
+                     "const api = async (", "let _drillIdx = 0;", "var legacy = 1;",
+                     "window.exportData = function () {", "class Sheet {"):
+            self.assertIsNotNone(_decl_name(line), f"顶层声明未被识别为全局: {line}")
+        # 反例：嵌套声明、对象字面量方法都不是全局
+        self.assertIsNone(_decl_name("  const t = 1;"), "嵌套声明不该算全局")
+        self.assertIsNone(_decl_name("    onSave: function () {"), "对象字面量方法不该算全局")
+        self.assertIsNone(_decl_name("  return foo;"), "普通语句不该算全局")
+        # 嵌套函数声明同样会造成遮蔽
+        self.assertTrue(_DECL_NESTED.match("    function t(key) {"), "嵌套函数声明应被识别为遮蔽")
+
+
+class TestInlineHandlerWiring(unittest.TestCase):
+    """根因 3：经典脚本 + 内联 onclick 的隐式全局契约。
+
+    本前端有意不用 ES 模块、不走构建（ADR 0001 零依赖本地优先）：同一页面加载的
+    脚本共享一个全局作用域，HTML 字符串里的 `onclick="foo()"` 靠全局名解析。
+    代价是拼错名字在加载期不报错，而是点下去才 ReferenceError 或静默无反应——
+    这类「死按钮」bug 靠人工点检发现，成本高。本测试把这份隐式契约变成可机器校验的。
+    """
+
+    def test_inline_handlers_resolve_to_page_globals(self) -> None:
+        scopes = _page_scopes()
+        self.assertTrue(scopes, "未能从 HTML 解析出脚本作用域，扫描逻辑失效")
+        offenders: list[str] = []
+        checked = 0
+        for page, paths in scopes.items():
+            syms = _globals_of(paths)
+            texts = [(page, (STATIC / page).read_text(encoding="utf-8"))]
+            texts += [(p.name, p.read_text(encoding="utf-8")) for p in paths]
+            for fname, text in texts:
+                for name in sorted(_inline_handler_names(text)):
+                    checked += 1
+                    if name not in syms:
+                        offenders.append(
+                            f"{page}: 内联处理器调用了未定义的全局 {name}() ← {fname}")
+        self.assertGreater(checked, 100, f"只扫到 {checked} 个内联处理器，提取逻辑可能失效")
+        self.assertEqual([], offenders, "内联事件处理器引用了不存在的全局函数：\n  " + "\n  ".join(offenders))
+
+    def test_guard_itself_is_sensitive(self) -> None:
+        """自检：调用式要抓到，语句/内建/赋值要不抓（否则会产生大量误报）。"""
+        self.assertEqual({"saveProblem"}, _inline_handler_names('<button onclick="saveProblem(1)">'))
+        self.assertEqual({"searchPaletteInput"}, _inline_handler_names("<input oninput='searchPaletteInput()'>"))
+        self.assertEqual({"openModal"}, _inline_handler_names('onclick="openModal(\'x\'); saveProblem(1)"'))
+        # 多行属性值
+        self.assertEqual({"periodicTab"}, _inline_handler_names('onclick="\n  periodicTab(\'north\')\n"'))
+        # 关键字 / 内建 / 取值式：不算「页面全局函数」
+        self.assertEqual(set(), _inline_handler_names('onclick="if (x) go()"'))
+        self.assertEqual(set(), _inline_handler_names('onclick="return false"'))
+        self.assertEqual(set(), _inline_handler_names('onclick="this.close()"'))
+        self.assertEqual(set(), _inline_handler_names('onclick="window.print()"'))
+        self.assertEqual(set(), _inline_handler_names('onclick="_drillIdx = 0"'))
 
 
 class TestModalRegistry(unittest.TestCase):
