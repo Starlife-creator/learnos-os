@@ -645,11 +645,19 @@ class TestAiLayerBoundaries(unittest.TestCase):
         self.assertEqual(bad, [], "ai 分层出现反向/越层依赖：" + ", ".join(sorted(set(bad))))
 
 
-_SQL_KEYWORD_RE = re.compile(r"\b(?:SELECT|INSERT|UPDATE|DELETE)\b", re.IGNORECASE)
+_SQL_KEYWORD_RE = re.compile(
+    r"\b(?:SELECT\b|INSERT\s+(?:OR\s+\w+\s+)?INTO\b|UPDATE\s+[A-Za-z_{][\w{}]*\s+SET\b|DELETE\s+FROM\b)",
+    re.IGNORECASE)
 
 
 def _sql_literals(path: Path) -> list[int]:
-    """返回「含 SQL 关键字的字符串字面量」的行号（一个字面量算一条语句）。"""
+    """返回「含 SQL 语句的字符串字面量」的行号（一个字面量算一条语句）。
+
+    只认真正的语句骨架（`SELECT …`、`INSERT … INTO`、`UPDATE <表> SET`、
+    `DELETE FROM`），而不是单独出现的关键字 —— 否则 docstring 里的「写/删/还原操作
+    鉴权闸门（do_POST/PUT/DELETE）」和路由正则 `/api/cards/(\\d+)/delete` 都会被
+    算成 SQL，让「剩余预算」这个进度条失真。
+    """
     tree = ast.parse(path.read_text(encoding="utf-8"))
     return [n.lineno for n in ast.walk(tree)
             if isinstance(n, ast.Constant) and isinstance(n.value, str)
@@ -657,16 +665,23 @@ def _sql_literals(path: Path) -> list[int]:
 
 
 # #7 业务逻辑下沉：handler_* 里的裸 SQL 条数上限（ratchet）。
-# 历史上业务规则混在 HTTP 层，脱离 HTTP 无法复用/测试；handler_reports.py 的
-# 37 条已下沉到 reports.py。此表是「只减不增」的天花板：新增泄漏立即失败。
+# 历史上业务规则混在 HTTP 层，脱离 HTTP 无法复用/测试。四批下沉后已从 51+45+24
+# 降到下面这些零头；此表是「只减不增」的天花板，新增泄漏立即失败。
 # 下沉完成后把对应数字调小（守卫只拦上升，不拦下降）。
+#
+# handler.py 剩 2 条是有意留下的：
+#   - `_get_or_404` 的 `SELECT * FROM {table}`：表名/id 列走白名单校验的通用查存在
+#     助手，本身就是 HTTP 层的产物（拼 404 响应），挪进领域层反而把响应知识带下去。
+#   - `/api/fsrs/train` 的训练样本查询：这是一次全表扫描取样本，没有业务规则。
+# handler_problems.py 剩的 14 条全部属于 `/api/problems/batch` 的批量状态机
+# （一次事务里多点写），形状与单条 CRUD 不同，留待单独一批处理。
 HANDLER_SQL_BUDGET = {
-    "handler.py": 21,
-    "handler_problems.py": 15,
+    "handler.py": 2,
+    "handler_problems.py": 14,
     "handler_reviews.py": 0,
-    "handler_cards.py": 1,
+    "handler_cards.py": 0,
     "handler_material.py": 1,
-    "handler_learn.py": 1,
+    "handler_learn.py": 0,
     "handler_oral.py": 1,
     "handler_reports.py": 0,
     "handler_social.py": 0,
@@ -695,7 +710,8 @@ class TestDomainLayerPurity(unittest.TestCase):
 
     DOMAIN = ("reports.py", "mastery.py", "scheduler.py", "graph.py",
               "bank.py", "cards.py", "review.py", "problems.py",
-              "review_session.py", "domain_errors.py")
+              "review_session.py", "domain_errors.py", "subjects.py",
+              "metrics.py")
 
     def test_domain_modules_do_not_import_http_layer(self) -> None:
         bad = []

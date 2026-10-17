@@ -19,7 +19,7 @@ from pathlib import Path
 from config import STATIC_DIR, LOG, DB_PATH, MEDIA_DIR, SETTINGS_SCHEMA, coerce_setting
 import auth
 import ratelimit
-from db import DB_LOCK, db, now, row, rows, settings_dict, subject_exists, list_subjects, safe_ident
+from db import row, rows, save_settings, settings_dict, subject_exists
 from ai import (
     call_ai, call_ai_stream, fallback_hint, problem_prompt, extract_tags, generate_variants,
     invalidate_settings_cache, set_runtime_key, set_master_password,
@@ -32,6 +32,9 @@ from oral import (
     feynman_self_review, save_feynman_self_review,
 )
 import graph
+import metrics
+import problems
+import subjects
 from errors import normalize_error_type, ERROR_TYPE_LABELS, is_valid_error_type
 from validate import SchemaError
 from handler_material import MaterialMixin
@@ -348,8 +351,6 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
 
     # ── 学科上下文（多学科；注册表驱动，网页端可增删）──
 
-    _SUBJECT_ID_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,19}")
-
     def _subject_from_qs(self) -> str:
         qs = parse_qs(urlparse(self.path).query)
         return self._valid_subject(qs.get("subject", [""])[0])
@@ -411,35 +412,11 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
             _ai_flags = get_cached_settings()
         except Exception:  # 设置读取失败不应拖垮指标端点
             _ai_flags = {}
-        tokens = 0
-        cached_tokens = 0
-        latency_p95 = None
-        provider_last_error = None
-        try:
-            with DB_LOCK, db() as conn:
-                r = conn.execute(
-                    "SELECT COALESCE(SUM(tokens),0), COALESCE(SUM(cached_tokens),0) FROM ai_telemetry"
-                ).fetchone()
-                if r:
-                    tokens, cached_tokens = r[0], r[1]
-                lat = [x[0] for x in conn.execute(
-                    "SELECT latency_ms FROM ai_telemetry WHERE latency_ms > 0 ORDER BY latency_ms").fetchall()]
-                if lat:
-                    latency_p95 = max(lat) if len(lat) < 20 else sorted(lat)[int(len(lat) * 0.95) - 1]
-                le = conn.execute(
-                    "SELECT error_kind, ts FROM ai_telemetry WHERE error_kind <> '' ORDER BY ts DESC LIMIT 1"
-                ).fetchone()
-                if le:
-                    provider_last_error = {"kind": le[0], "ts": le[1]}
-        except Exception as exc:  # 指标端点失败不应拖垮主流程
-            LOG.debug("采集指标失败（忽略）: %s", exc)
+        telemetry = metrics.collect()
         self.json_response({
             "cache": {"hits": c_h, "misses": c_m, "ratio": c_ratio},
             "ai": {
-                "tokens": tokens,
-                "cached_tokens": cached_tokens,
-                "latency_ms_p95": latency_p95,
-                "provider_last_error": provider_last_error,
+                **telemetry,
                 "prompt_version": PROMPT_VERSION,
                 # M1/M6 高级开关的实际生效状态（排查"改了没生效"最快的入口）
                 "prompt_cache_control": _ai_flags.get("prompt_cache_control", "0") == "1",
@@ -515,34 +492,11 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         self.json_response(bank.stats(self.subject))
 
     def _handle_subjects(self) -> None:
-        """学科列表：注册表（内置三科 + 种子学科 + 网页端自建）。
+        """学科列表：注册表（内置三科 + 种子学科 + 网页端自建）+ 每科统计。
 
-        附带每科的统计：概念数、题库题数、是否有种子图谱、是否需要种子升级。
-        前端据此对「无图谱/无题库」学科显示明确空状态徽标，而非静默空白。
+        统计口径见 subjects.overview()（概念数、题库题数、种子图谱状态）。
         """
-        import graph
-        import bank
-        subjects = list_subjects()
-        for s in subjects:
-            sid = s["id"]
-            s.setdefault("title", sid)
-            if not s["title"]:
-                s["title"] = sid
-            # 概念数
-            with DB_LOCK, db() as conn:
-                s["concept_count"] = conn.execute(
-                    "SELECT COUNT(*) FROM concepts WHERE subject = ?", (sid,)
-                ).fetchone()[0]
-            # 题库题数（种子+自定义合并）
-            try:
-                s["question_count"] = len(bank.load_bank(sid).get("questions", []))
-            except Exception:
-                s["question_count"] = 0
-            # 种子图谱状态
-            st = graph.seed_status(sid)
-            s["has_seed_graph"] = st["has_seed_file"]
-            s["seed_needs_update"] = st["needs_update"]
-        self.json_response({"subjects": subjects, "current": self.subject})
+        self.json_response({"subjects": subjects.overview(), "current": self.subject})
 
     def _handle_export_seed(self, data: dict[str, Any]) -> None:
         """POST /api/export/seed：把库内某学科图谱导出为 seed_concepts_<subject>.json（内容闭环）。
@@ -599,143 +553,35 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
 
     def _handle_add_subject(self, data: dict[str, Any]) -> None:
         """网页端新增学科：合法 id + 可选标题；有种子文件则自动加载图谱。"""
-        sid = str(data.get("id", "")).strip().lower()
-        title = str(data.get("title", "")).strip() or sid
-        if not self._SUBJECT_ID_RE.fullmatch(sid):
-            self.json_response({"error": "学科 id 需字母开头，仅限字母/数字/下划线，最长 20 字符"}, 400)
+        try:
+            subject = subjects.add(data.get("id", ""), data.get("title", ""))
+        except subjects.SubjectsError as exc:
+            self.json_response({"error": exc.message}, exc.status)
             return
-        if subject_exists(sid):
-            self.json_response({"error": f"学科 {sid} 已存在"}, 409)
-            return
-        with DB_LOCK, db() as conn:
-            conn.execute(
-                "INSERT INTO subjects(id, title, builtin, created_at) VALUES (?, ?, 0, ?)",
-                (sid, title, now()),
-            )
-        import graph
-        graph.ensure_seed(sid)
-        LOG.info("新增学科: %s (%s)", sid, title)
-        self.json_response({"ok": True, "subject": {"id": sid, "title": title, "builtin": False}}, 201)
-
-    # 各 scope 对应的待删表（按依赖顺序：先子后父）
-    _SUBJECT_SCOPE_TABLES: dict[str, list[str]] = {
-        # 图谱维度：概念节点 + 先修/关联边 + 种子版本标记
-        "graph": ["concept_links", "concepts", "seed_versions"],
-        # 题库维度：题目 + 评分
-        "bank": ["bank_scores", "bank_problems"],
-        # 个人学习数据维度：错题本/口试 + 掌握度日志 + 打卡
-        "personal": ["study_checkins", "mastery_log", "problems"],
-    }
+        LOG.info("新增学科: %s (%s)", subject["id"], subject["title"])
+        self.json_response({"ok": True, "subject": subject}, 201)
 
     def _handle_delete_subject(self, subject_id: str) -> None:
-        """删除学科数据，支持按 scope 分层：
+        """删除学科数据（scope=full/graph/bank/personal），级联清单见 subjects.delete()。
 
-        - scope=full（默认）：删该学科一切（subjects + 全部维度），等同于注销学科。
-        - scope=graph：只删图谱（concepts/concept_links/seed_versions），保留题库与个人数据。
-        - scope=bank：只删题库（bank_problems/bank_scores）。
-        - scope=personal：只删个人学习数据（problems/mastery_log/study_checkins）。
-
-        内置学科（builtin）任何 scope 均拒绝。full 以外的 scope 不删 subjects 行本身
-        （学科容器保留，仅清空所选维度）；仅 full 才会移除学科注册。
+        内置学科（builtin）任何 scope 均拒绝；full 以外的 scope 保留 subjects 行本身
+        （学科容器保留，仅清空所选维度）。
         """
-        info = row("SELECT id, builtin FROM subjects WHERE id = ?", (subject_id,))
-        if not info:
-            self.json_response({"error": "学科不存在"}, 404)
-            return
-        if info["builtin"]:
-            self.json_response({"error": "内置学科不可删除"}, 400)
-            return
-        # 解析 scope（允许 ?scope= 传参）
         qs = parse_qs(urlparse(self.path).query)
-        scope = (qs.get("scope", ["full"])[0] or "full").strip().lower()
-        if scope not in ("full", "graph", "bank", "personal"):
-            self.json_response({"error": "未知 scope，仅支持 full/graph/bank/personal"}, 400)
+        try:
+            result = subjects.delete(subject_id, qs.get("scope", ["full"])[0])
+        except subjects.SubjectsError as exc:
+            self.json_response({"error": exc.message}, exc.status)
             return
-
-        if scope == "full":
-            tables = ["concept_links", "concepts", "seed_versions",
-                      "bank_scores", "bank_problems",
-                      "study_checkins", "mastery_log", "problems", "subjects"]
-        else:
-            tables = self._SUBJECT_SCOPE_TABLES[scope]
-
-        deleted: dict[str, int] = {}
-        with DB_LOCK, db() as conn:
-            for tbl in tables:
-                # 纵深防御（P2）：tbl 本就来自上方硬编码白名单，拼接前仍断言标识符
-                # 合法，防未来有人把用户可控表名引入此路径造成注入。
-                tbl = safe_ident(tbl)
-                if tbl == "subjects":
-                    cur = conn.execute("DELETE FROM subjects WHERE id = ?", (subject_id,))
-                elif tbl == "concept_links":
-                    # concept_links 无 subject 列，经 concepts 子查询定位该学科节点
-                    cur = conn.execute(
-                        "DELETE FROM concept_links WHERE concept_a IN "
-                        "(SELECT id FROM concepts WHERE subject = ?) "
-                        "OR concept_b IN (SELECT id FROM concepts WHERE subject = ?)",
-                        (subject_id, subject_id))
-                else:
-                    cur = conn.execute(f"DELETE FROM {tbl} WHERE subject = ?", (subject_id,))
-                deleted[tbl] = cur.rowcount
         auth.audit("delete_subject", ip=self._client_ip(),
-                   detail=f"{subject_id}|scope={scope}")  # R5 审计
-        LOG.info("删除学科数据: %s scope=%s %s", subject_id, scope, deleted)
-        self.json_response({"ok": True, "scope": scope, "deleted": deleted})
+                   detail=f"{subject_id}|scope={result['scope']}")  # R5 审计
+        LOG.info("删除学科数据: %s scope=%s %s", subject_id, result["scope"], result["deleted"])
+        self.json_response({"ok": True, **result})
 
     def _handle_global_search(self) -> None:
         """全局搜索（Ctrl+K）：跨错题/概念/题库/RAG 文档，各组最多 6 条。"""
         qs = parse_qs(urlparse(self.path).query)
-        q = (qs.get("q", [""])[0] or "").strip()
-        if len(q) < 1:
-            self.json_response({"problems": [], "concepts": [], "bank": [], "docs": []})
-            return
-        like = f"%{q}%"
-        problems = rows(
-            "SELECT id, title, topic, mastery FROM problems "
-            "WHERE subject = ? AND (title LIKE ? OR content LIKE ? OR topic LIKE ?) "
-            "ORDER BY updated_at DESC LIMIT 6",
-            (self.subject, like, like, like))
-        concepts = rows(
-            "SELECT c.id, c.name FROM concepts c "
-            "LEFT JOIN concept_progress cp ON cp.concept_id = c.id "
-            "WHERE c.subject = ? AND c.name LIKE ? "
-            "ORDER BY COALESCE(cp.mastery, 0) ASC, c.id LIMIT 6", (self.subject, like))
-        bank_hits: list[dict[str, Any]] = []
-        try:
-            import bank
-
-            def _q_haystack(item: dict[str, Any]) -> str:
-                """匹配文本：题干+概念；composite 递归并入子题题干（引导语可为空）。"""
-                hay = str(item.get("stem", "")) + " " + str(item.get("concept", ""))
-                for p in item.get("parts") or []:
-                    hay += " " + _q_haystack(p)
-                return hay.lower()
-
-            for question in bank.load_bank(self.subject).get("questions", []):
-                if q.lower() in _q_haystack(question):
-                    stem = str(question.get("stem", "")).strip()
-                    if not stem:  # composite 引导语为空时用首个子题题干展示
-                        for p in question.get("parts") or []:
-                            stem = str(p.get("stem", "")).strip()
-                            if stem:
-                                break
-                    bank_hits.append({"id": question.get("id", ""), "stem": stem[:80],
-                                      "concept": question.get("concept", ""),
-                                      "type": question.get("type", "single")})
-                if len(bank_hits) >= 6:
-                    break
-        except Exception:
-            pass
-        docs: list[dict[str, Any]] = []
-        try:
-            import rag
-            for hit in rag.search(q, k=3):
-                docs.append({"name": hit.get("name", ""), "path": hit.get("source_path", ""),
-                             "page": hit.get("page", 0)})
-        except Exception:
-            pass
-        self.json_response({"problems": problems, "concepts": concepts,
-                            "bank": bank_hits, "docs": docs})
+        self.json_response(subjects.search(self.subject, qs.get("q", [""])[0], limit=6))
 
     def _handle_fsrs_train(self) -> None:
         """P0：后台训练个性化 FSRS 参数（POST 立即返回，状态走 /api/fsrs/status）。"""
@@ -922,7 +768,7 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
 
     def _handle_exam_add_questions(self, paper_id: int, data: dict[str, Any]) -> None:
         import exam
-        if not row("SELECT 1 FROM exam_papers WHERE id = ?", (paper_id,)):
+        if not exam.paper_exists(paper_id):
             self.json_response({"error": "试卷不存在"}, 404)
             return
         count = exam.add_questions(paper_id, data.get("questions") or [])
@@ -944,7 +790,7 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
 
     def _handle_fsrs_optimal(self) -> None:
         """CMRR 式最优保持率估算：基于本学科卡量与平均稳定度的解析模拟。"""
-        data = rows("SELECT stability, repetition FROM problems WHERE subject = ?", (self.subject,))
+        data = problems.stability_sample(self.subject)
         stabilities = [float(r["stability"] or 0) for r in data if int(r["repetition"] or 0) > 0]
         result = fsrs_bridge.optimal_retention(stabilities, len(data), subject=self.subject)
         result["current"] = fsrs_bridge._desired_retention(self.subject)
@@ -1060,8 +906,7 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
                 except ValueError:
                     continue
                 values.append((key, value))
-        with DB_LOCK, db() as conn:
-            conn.executemany("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)", values)
+        save_settings(values)
         # 密钥不落库（R4）：仅存于内存（会话级）或 keys.enc（可选加密文件）
         key = str(data.get("api_key", "")).strip()
         if key and key != "••••••••":
@@ -1083,16 +928,11 @@ class Handler(MaterialMixin, LearnMixin, OralMixin, ProblemsMixin, ReviewsMixin,
         try:
             match = re.fullmatch(r"/api/problems/(\d+)", path)
             if match:
-                with DB_LOCK, db() as conn:
-                    # 删除前先取学科：删除后查不到，update_progress 需按实际学科重算
-                    subj_row = conn.execute(
-                        "SELECT subject FROM problems WHERE id = ?", (int(match.group(1)),)).fetchone()
-                    cursor = conn.execute("DELETE FROM problems WHERE id = ?", (int(match.group(1)),))
-                    if cursor.rowcount == 0:
-                        self.json_response({"error": "题目不存在"}, 404)
-                        return
-                graph.update_progress((subj_row["subject"] if subj_row else None) or "physics",
-                                      force=True, entry_point="problem_delete",
+                subject = problems.delete_problem(int(match.group(1)))
+                if subject is None:
+                    self.json_response({"error": "题目不存在"}, 404)
+                    return
+                graph.update_progress(subject, force=True, entry_point="problem_delete",
                                       evidence=f"删除题目#{match.group(1)}")
                 auth.audit("delete_problem", ip=self._client_ip(), detail=match.group(1))  # R5 审计
                 self.json_response({"ok": True})

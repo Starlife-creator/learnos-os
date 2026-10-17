@@ -412,6 +412,23 @@ def log_mastery(conn: Any, subject: str = "physics") -> None:
     )
 
 
+def delete_problem(problem_id: int) -> str | None:
+    """删除题目，返回它所属学科（调用方据此重算掌握度）；题目不存在返回 None。"""
+    pid = int(problem_id)
+    with DB_LOCK, db() as conn:
+        # 删除前先取学科：删除后查不到，update_progress 需按实际学科重算
+        subj_row = conn.execute("SELECT subject FROM problems WHERE id = ?", (pid,)).fetchone()
+        cursor = conn.execute("DELETE FROM problems WHERE id = ?", (pid,))
+        if cursor.rowcount == 0:
+            return None
+    return (subj_row["subject"] if subj_row else None) or "physics"
+
+
+def stability_sample(subject: str) -> list[dict[str, Any]]:
+    """FSRS「最优保持率」估算的输入：本学科题目的稳定性与复习轮次。"""
+    return rows("SELECT stability, repetition FROM problems WHERE subject = ?", (subject,))
+
+
 def normalize_media_paths(value: Any) -> str:
     """拼接图片相对路径（逗号分隔，去空去重，仅允许 media/ 前缀）。"""
     if isinstance(value, list):

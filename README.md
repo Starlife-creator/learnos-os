@@ -132,6 +132,8 @@ learnos-os/
   problems.py      # 错题领域层：CRUD、分页检索、查重、批量与导入（无 HTTP 知识）
   review_session.py # 复习会话领域层：队列优先级/交错/每日上限、今日小结、完成复习写回
   domain_errors.py # 领域层 4xx 异常基类（DomainError：message + status）
+  subjects.py      # 学科领域层：学科总览/新增/按 scope 级联删除、全局搜索
+  metrics.py       # 运维指标采集（ai_telemetry 聚合：token、缓存、p95、最近 provider 错误）
   handler.py       # HTTP 路由与核心业务（已按领域拆分）
   handler_base.py / handler_cards.py / handler_learn.py / handler_material.py / handler_oral.py / handler_problems.py / handler_reports.py / handler_reviews.py / handler_social.py  # Handler 领域拆分
   oral.py          # AI 口试 / 费曼自评

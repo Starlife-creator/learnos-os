@@ -1173,6 +1173,17 @@ def row(query: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:
     return result[0] if result else None
 
 
+def save_settings(values: list[tuple[str, str]]) -> None:
+    """批量写入设置（key/value 覆盖写）。白名单与取值校验由调用方负责。
+
+    空列表不发起事务：settings 全被过滤掉时不该白开一次写事务。
+    """
+    if not values:
+        return
+    with DB_LOCK, db() as conn:
+        conn.executemany("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)", values)
+
+
 def settings_dict(include_secret: bool = False) -> dict[str, str]:
     """非敏感设置。D1 起密钥一律不读 DB：仅返回 env/内存/keys.enc 层合并后的密钥。"""
     import os

@@ -79,6 +79,11 @@ def create_paper(name: str, exam_date: str = "", target: float = 80) -> int:
         return int(cur.lastrowid)
 
 
+def paper_exists(paper_id: int) -> bool:
+    """试卷是否存在（handler 侧据此回 404，避免在 HTTP 层写裸 SQL）。"""
+    return bool(row("SELECT 1 FROM exam_papers WHERE id = ?", (paper_id,)))
+
+
 def add_questions(paper_id: int, questions: list[dict[str, Any]]) -> int:
     """批量添加真题题目；related_problems 为错题 id 列表（互链）。"""
     cleaned = []

@@ -13,8 +13,12 @@ SQL、聚合、业务规则一律放在领域模块（`reports.py`、`graph.py`�
 落地方式：**棘轮（ratchet）**，不搞一次性大重构。
 
 - `tests/test_fitness_functions.py::TestHandlerSqlBudget` 把每个 `handler_*.py` 的
-  「含 SQL 关键字的字符串字面量条数」冻结为上限，只减不增；新增 `handler_*.py`
-  必须同时登记预算，否则守卫可被绕过。
+  「SQL 语句条数」冻结为上限，只减不增；新增 `handler_*.py` 必须同时登记预算，
+  否则守卫可被绕过。计数只认**语句骨架**（`SELECT` / `INSERT … INTO` /
+  `UPDATE <表> SET` / `DELETE FROM`），不认单独出现的关键字 —— 否则 docstring 里的
+  「写/删/还原操作鉴权闸门（do_POST/PUT/DELETE）」和路由正则
+  `/api/cards/(\d+)/delete` 都会被算成 SQL，「剩余预算」这个进度条就失真了
+  （第四批顺手收紧了度量，因此表里的数字与前几批不可直接对比）。
 - `TestDomainLayerPurity` 断言领域层不 import HTTP 层，且 `reports.py` 内不出现
   `json_response` / `self.`。
 
@@ -37,6 +41,13 @@ SQL、聚合、业务规则一律放在领域模块（`reports.py`、`graph.py`�
 `message` / `status`）与 `problems.ProblemsError`、`review_session.ReviewError`。
 handler 层不再逐处拼 400/404 响应，而是捕获 `DomainError` 后统一翻译 —— 这样
 「同一业务错误在不同 handler 里写不同文案」的分叉被结构性地消掉了。
+
+第四批（收尾）：`handler.py` 的学科容器与搜索下沉为 `subjects.py`（总览、新增、
+按 scope 级联删除、全局搜索），运维指标采集下沉为 `metrics.py`，另外
+`problems.delete_problem` / `problems.stability_sample` / `exam.paper_exists` /
+`db.save_settings` 各收掉一条。`handler.py` 由 1157 行降到 998 行，SQL 由 21 条
+（新度量下 6 条）降到 **2 条**；全仓 handler 层合计 **17 条**。
+审计（`auth.audit` 需要客户端 IP）与 `LOG.info` 是 HTTP 层关注点，留在 handler。
 
 ## 原因
 
@@ -65,8 +76,12 @@ handler 层不再逐处拼 400/404 响应，而是捕获 `DomainError` 后统一
 - **唯一有意变更**：`GET /api/gamification` 原先直接调用 `gamification.state()`，
   异常会 500；现在走 `reports.game_state()`，异常降级为空字典（与仪表盘卡片同款
   韧性策略，§1.3）。
-- 剩余预算即待办清单：`handler.py` 21、`handler_problems.py` 15（batch 状态机）。
-  桌面上的数字就是进度条 —— 每下沉一批就把对应数字调小，守卫不会因此失败（只拦上升）。
-- 副作用收益（第三批换来的）：复习队列的排序规则、每日上限、交错策略、完成复习的
-  事务边界现在都有直接单元测试（`tests/test_review_session.py`，17 个用例），不必
-  起 HTTP 服务、不必构造会话。此前「逾期优先」这类承诺只有人工试过。
+- 剩余预算即待办清单：`handler.py` 2（有意保留，见测试里 `HANDLER_SQL_BUDGET` 注释：
+  `_get_or_404` 的通用查存在助手 + `/api/fsrs/train` 的一次全表采样）、
+  `handler_problems.py` 14（`/api/problems/batch` 批量状态机）、`handler_material.py` 1、
+  `handler_oral.py` 1。桌面上的数字就是进度条 —— 每下沉一批就把对应数字调小，
+  守卫不会因此失败（只拦上升）。
+- 副作用收益（第三、四批换来的）：复习队列的排序规则、每日上限、交错策略、完成复习
+  的事务边界（`tests/test_review_session.py`，17 个用例）与学科级联删除的 scope 边界
+  （`tests/test_subjects.py`，16 个用例）现在都有直接单元测试，不必起 HTTP 服务、
+  不必构造会话。此前「逾期优先」「删图谱不该动个人数据」这类承诺只有人工试过。
