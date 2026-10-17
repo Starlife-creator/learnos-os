@@ -190,6 +190,25 @@ def _insert_link(conn: Any, a: int, b: int, relation: str,
     )
 
 
+def progress_maps(subject: str = "physics") -> tuple[dict[int, int], dict[int, float]]:
+    """指定学科的 (绑定题数, 实际掌握度) 两张按概念 id 的映射，供图谱节点附加。
+
+    concept_progress 全学科混存，所以必须按 concepts.subject 过滤，不能只看 cp 行。
+    """
+    from db import normalize_subject
+    subject = normalize_subject(subject)
+    prog_rows = rows("""
+        SELECT cp.concept_id AS cid, COALESCE(cp.reviews, 0) AS bound,
+               COALESCE(cp.mastery, 0.0) AS m
+        FROM concept_progress cp
+        JOIN concepts c ON c.id = cp.concept_id
+        WHERE c.subject = ?
+    """, (subject,))
+    bound = {int(p["cid"]): int(p["bound"]) for p in prog_rows}
+    mastery = {int(p["cid"]): float(p["m"]) for p in prog_rows}
+    return bound, mastery
+
+
 def load_graph(subject: str = "physics") -> dict[str, Any]:
     """返回指定学科图谱（节点含层级/难度/掌握度，边含关系）。
 

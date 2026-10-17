@@ -59,6 +59,25 @@ class TestGraphCore(unittest.TestCase):
         data2 = graph.load_graph()
         self.assertEqual(len(data2["nodes"]), len(data["nodes"]))
 
+    def test_progress_maps_are_subject_scoped(self):
+        """图谱节点的绑定题数/掌握度映射必须按学科过滤（concept_progress 全学科混存）。"""
+        c = db.row(
+            "SELECT id, name FROM concepts WHERE subject = 'physics' AND parent_id <> 0 "
+            "ORDER BY id LIMIT 1"
+        )
+        pid = self._make_problem("映射题", c["name"], f"关于{c['name']}的错题", 5)
+        bound_ids = [int(x) for x in graph.bind_problem(pid)]
+        self.assertIn(int(c["id"]), bound_ids, "题目的知识点名应在本地关键词绑定里命中")
+        bound, mastery = graph.progress_maps("physics")
+        self.assertIn(int(c["id"]), bound)
+        self.assertGreaterEqual(bound[int(c["id"])], 1)
+        self.assertIn(int(c["id"]), mastery)
+        self.assertGreaterEqual(mastery[int(c["id"])], 0.0)
+        # 别的学科看不到这个物理概念（全学科混存时必须靠 concepts.subject 过滤）
+        other_bound, other_mastery = graph.progress_maps("math")
+        self.assertNotIn(int(c["id"]), other_bound)
+        self.assertNotIn(int(c["id"]), other_mastery)
+
     def test_subject_id_normalization(self):
         """守护：学科 id 大小写归一，杜绝 Title-case 双副本空壳科（2026-08-23 踩坑）。
 

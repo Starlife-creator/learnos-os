@@ -13,7 +13,7 @@ import profile
 import graph
 from oral import (
     _assess, _next_stage, _detect_weak_points, start_oral, continue_oral, draft_oral_card,
-    start_feynman, feynman_self_review, save_feynman_self_review,
+    start_feynman, feynman_self_review, save_feynman_self_review, finish_session,
 )
 
 _TMP = Path(__file__).resolve().parent / ".tmp"
@@ -151,6 +151,17 @@ class TestSocraticEngine(unittest.TestCase):
         session = db.row("SELECT * FROM problems WHERE id = ?", (pid,))
         sid, _ = start_feynman(session)
         self.assertFalse(save_feynman_self_review(sid, {"gaps": [], "wrong": [], "clear": []}))
+
+    def test_finish_session_marks_finished(self):
+        """结束口试的状态改写是领域动作（oral.finish_session），handler 不再自带 SQL。"""
+        sid, _ = start_oral("动量守恒")
+        self.assertEqual(db.row("SELECT status FROM oral_sessions WHERE id = ?", (sid,))["status"],
+                         "active")
+        finish_session(sid)
+        self.assertEqual(db.row("SELECT status FROM oral_sessions WHERE id = ?", (sid,))["status"],
+                         "finished")
+        # 对不存在的会话不抛错（幂等：handler 先查存在再调）
+        finish_session(999999)
 
     def test_socratic_mode_default(self):
         sid, _ = start_oral("动能定理")

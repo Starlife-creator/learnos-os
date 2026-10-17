@@ -310,6 +310,12 @@ def feynman_self_review(session: dict[str, Any]) -> dict[str, Any]:
     return {"draft": draft, "saved": None}
 
 
+def finish_session(session_id: int) -> None:
+    """结束口试/费曼会话（status → finished）。"""
+    with DB_LOCK, db() as conn:
+        conn.execute("UPDATE oral_sessions SET status = 'finished' WHERE id = ?", (session_id,))
+
+
 def save_feynman_self_review(session_id: int, values: dict[str, Any]) -> bool:
     """A5：用户确认后的自评表落库（R3 确认制）。"""
     clean = {

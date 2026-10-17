@@ -675,14 +675,17 @@ def _sql_literals(path: Path) -> list[int]:
 #   - `/api/fsrs/train` 的训练样本查询：这是一次全表扫描取样本，没有业务规则。
 # handler_problems.py 已清零：提示/变式/导出分别下沉 hints.py、problems.py、exports.py
 # （`/api/problems/batch` 的状态机在第二批由 problems.batch 收掉）。
+# handler_material.py / handler_oral.py 也已清零：图谱节点的绑定题数/掌握度映射改由
+# graph.progress_maps 提供，口试结束的状态改写改由 oral.finish_session 提供 ——
+# 后者的 SQL 来自领域模块（handler 只是调用），不再计入 handler 预算。
 HANDLER_SQL_BUDGET = {
     "handler.py": 2,
     "handler_problems.py": 0,
     "handler_reviews.py": 0,
     "handler_cards.py": 0,
-    "handler_material.py": 1,
+    "handler_material.py": 0,
     "handler_learn.py": 0,
-    "handler_oral.py": 1,
+    "handler_oral.py": 0,
     "handler_reports.py": 0,
     "handler_social.py": 0,
 }

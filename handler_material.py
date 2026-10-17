@@ -8,7 +8,6 @@ from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 
 from config import LOG
-from db import rows
 from ai import get_cached_settings
 from validate import SchemaError
 import graph
@@ -244,16 +243,8 @@ class MaterialMixin:
         subject = self.subject
         graph.update_progress_cached(subject)  # 图谱加载：TTL 护住重复调用
         data = graph.load_graph(subject)
-        # 附加绑定题数（looms_in）与实际掌握度：按学科过滤（concept_progress 全学科混存）
-        prog_rows = rows("""
-            SELECT cp.concept_id AS cid, COALESCE(cp.reviews, 0) AS bound,
-                   COALESCE(cp.mastery, 0.0) AS m
-            FROM concept_progress cp
-            JOIN concepts c ON c.id = cp.concept_id
-            WHERE c.subject = ?
-        """, (subject,))
-        bound_map = {int(p["cid"]): int(p["bound"]) for p in prog_rows}
-        mastery_map = {int(p["cid"]): float(p["m"]) for p in prog_rows}
+        # 附加绑定题数（looms_in）与实际掌握度：按学科过滤在 graph.progress_maps 内处理
+        bound_map, mastery_map = graph.progress_maps(subject)
         for node in data["nodes"]:
             nid = int(node["id"])
             node["looms_in"] = bound_map.get(nid, 0)

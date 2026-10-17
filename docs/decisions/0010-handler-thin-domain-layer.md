@@ -52,10 +52,20 @@ handler 层不再逐处拼 400/404 响应，而是捕获 `DomainError` 后统一
 第五批（清零）：`handler_problems.py` 最后的 14 条 SQL 按「各自的消费者」拆成三块：
 提示缓存与 A6 诊断门 → `hints.py`（3 条），题目原始行与变式合并 → `problems` 的
 `raw()` / `variants()` / `save_variants()`（4 条），三种导出 → `exports.py`
-（`snapshot()` / `anki_csv()` / `ics()`，7 条）。**handler 层现在只剩 `handler.py`
-的 2 条**（其余 8 个 `handler_*.py` 全为 0）。变式的字段校验与 400 文案一起下沉到
+（`snapshot()` / `anki_csv()` / `ics()`，7 条）。变式的字段校验与 400 文案一起下沉到
 `problems.save_variants`（抛 `ProblemsError`），因此「哪条变式不合法」这类错误不再
 依赖 handler 存在。
+
+第六批（handler 层 SQL 清零）：最后两条「顺手一看就剩下」的 SQL 归位 ——
+`handler_material.py` 图谱节点的绑定题数/掌握度映射 → `graph.progress_maps()`
+（一条查询返回两张 dict），`handler_oral.py` 口试结束的状态改写 →
+`oral.finish_session()`。**现在 handler 层只剩 `handler.py` 的 2 条有意保留的 SQL**
+（`_get_or_404` 的通用查存在助手、`/api/fsrs/train` 的一次全表采样），其余 9 个
+`handler*.py` 全部为 0。
+
+这条边界值得记住：`oral.py` 本来就是领域模块、本来就持有 `DB_LOCK`/`db`，所以「handler
+里出现一条 UPDATE」不是因为它该留在 handler，而是因为领域模块当时缺一个函数。
+判断标准是**这个动作属于谁的词汇表**，不是「只有一条、不值得搬」。
 
 ## 原因
 
@@ -84,13 +94,14 @@ handler 层不再逐处拼 400/404 响应，而是捕获 `DomainError` 后统一
 - **唯一有意变更**：`GET /api/gamification` 原先直接调用 `gamification.state()`，
   异常会 500；现在走 `reports.game_state()`，异常降级为空字典（与仪表盘卡片同款
   韧性策略，§1.3）。
-- 剩余预算即待办清单：`handler.py` 2（有意保留，见测试里 `HANDLER_SQL_BUDGET` 注释：
-  `_get_or_404` 的通用查存在助手 + `/api/fsrs/train` 的一次全表采样）。
+- 剩余预算即待办清单，**现已清零**：`handler.py` 2 条（有意保留，见测试里
+  `HANDLER_SQL_BUDGET` 注释：`_get_or_404` 的通用查存在助手 +
+  `/api/fsrs/train` 的一次全表采样），其余 handler 全为 0。
   桌面上的数字就是进度条 —— 每下沉一批就把对应数字调小，守卫不会因此失败（只拦上升）。
 - 副作用收益（第三至五批换来的）：复习队列的排序规则、每日上限、交错策略、完成复习
   的事务边界（`tests/test_review_session.py`，17 个用例）、学科级联删除的 scope 边界
   （`tests/test_subjects.py`，16 个用例）与导出的转义/行尾/事件边界
-  （`tests/test_exports.py`，12 个用例）现在都有直接单元测试，不必起 HTTP 服务、
+  （`tests/test_exports.py`，13 个用例）现在都有直接单元测试，不必起 HTTP 服务、
   不必构造会话。此前「逾期优先」「删图谱不该动个人数据」「CSV 字段内换行不炸」这类
   承诺只有人工试过。
 - 搬迁中顺带修掉的两处既有缺陷（下沉后才可能修得动 —— 它们原来埋在 handler 的

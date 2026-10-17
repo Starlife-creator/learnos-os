@@ -5,10 +5,10 @@ import json
 from typing import Any
 
 from config import LOG
-from db import DB_LOCK, db, now, row
+from db import now, row
 from oral import (
     start_oral, continue_oral, draft_oral_card, start_feynman,
-    feynman_self_review, save_feynman_self_review,
+    feynman_self_review, save_feynman_self_review, finish_session,
 )
 
 
@@ -83,6 +83,5 @@ class OralMixin:
         session = self._get_or_404("oral_sessions", session_id, "口试会话不存在")
         if session is None:
             return
-        with DB_LOCK, db() as conn:
-            conn.execute("UPDATE oral_sessions SET status = 'finished' WHERE id = ?", (session_id,))
+        finish_session(session_id)
         self.json_response({"ok": True})
