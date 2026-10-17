@@ -12,6 +12,7 @@ from ai import get_cached_settings
 from errors import ERROR_TYPE_LABELS, queue_weight
 from scheduler import schedule_review
 from mastery import set_problem_mastery
+import problems
 from handler_base import (X_HEADER, X_VALUE, _IDEMPOTENCY, _IDEMPOTENCY_TTL,
                           _as_str_list, _interleave, _prune_idempotency)
 
@@ -131,8 +132,8 @@ class ReviewsMixin:
             # ADR 0004：掌握度经单一写入口落事件
             set_problem_mastery(conn, review["problem_id"], result.mastery, "review",
                                 f"题目#{review['problem_id']} 评分{rating}（{result.engine}）")
-            self._log_variant_result(conn, review, rating)
-            self._log_mastery(conn, self.subject)
+            problems.log_variant_result(conn, review, rating)
+            problems.log_mastery(conn, self.subject)
         import graph
         graph.update_progress(self.subject, force=True, entry_point="review",
                               evidence=f"题目#{review['problem_id']} 评分{rating}")

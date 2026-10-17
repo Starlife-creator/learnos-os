@@ -463,11 +463,11 @@ class TestEndpoints(unittest.TestCase):
         self.assertEqual(r3["duplicates"], [])
 
     def test_similarity_unit(self):
-        """C7：_similarity bigram Jaccard 单元。"""
-        from handler import Handler
-        self.assertGreater(Handler._similarity("完全相同内容abc", "完全相同内容abc"), 0.99)
-        self.assertLess(Handler._similarity("天南地北毫无关系", "甲乙丙丁无关紧要"), 0.3)
-        self.assertEqual(Handler._similarity("", "abc"), 0.0)
+        """C7：similarity bigram Jaccard 单元。"""
+        import problems
+        self.assertGreater(problems.similarity("完全相同内容abc", "完全相同内容abc"), 0.99)
+        self.assertLess(problems.similarity("天南地北毫无关系", "甲乙丙丁无关紧要"), 0.3)
+        self.assertEqual(problems.similarity("", "abc"), 0.0)
 
     def test_review_complete_uses_scheduler(self):
         """ADR 0007：复习完成的间隔/记忆态与 scheduler.schedule_review 完全一致（无二次逾期惩罚）。"""

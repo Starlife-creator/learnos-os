@@ -1,32 +1,30 @@
-"""ProblemsMixin — Handler 错题/提示/变式/标签/导出/媒体域。自 handler.py 原样迁移。"""
+"""ProblemsMixin — Handler 错题/提示/变式/标签/导出/媒体域。自 handler.py 原样迁移。
+
+业务逻辑（SQL/事务/校验）已下沉到 problems.py，这里只做 HTTP 适配：
+解析 query/body → 调用领域函数 → 写响应。
+"""
 from __future__ import annotations
 
 import base64
 import csv
 import io
 import json
-import re
-import shutil
 import time
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 
-from config import LOG, MEDIA_DIR
+from config import LOG
 import auth
 from db import DB_LOCK, db, now, row, rows
-import db as db_module  # 模块引用：上方 `db` 已被函数遮蔽，需用模块访问实时 DB_PATH
 from ai import (call_ai, call_ai_stream, fallback_hint, problem_prompt, extract_tags,
                 generate_variants, invalidate_settings_cache, get_cached_settings)
-from errors import normalize_error_type
-from review import clamp_mastery
-from mastery import set_problem_mastery
-from handler_base import (X_HEADER, X_VALUE, _IDEMPOTENCY, _IDEMPOTENCY_TTL, _IDEMPOTENCY_LOCK,
-                          _as_str_list, _interleave, _prune_idempotency)
-import graph
+from handler_base import (_IDEMPOTENCY, _IDEMPOTENCY_TTL, _IDEMPOTENCY_LOCK,
+                          _prune_idempotency)
 import interop
+import problems
 from resp import api_err
 from ratelimit import register_failure, clear as rl_clear
 
@@ -90,119 +88,34 @@ class ProblemsMixin:
             page = max(int(qs.get("page", ["1"])[0]), 1)
         except (ValueError, IndexError):
             limit, page = 50, 1
-        q = (qs.get("q", [""])[0] or "").strip()
-        sort = qs.get("sort", ["time"])[0]
-        order = {"time": "id DESC", "mastery": "mastery ASC"}.get(sort, "id DESC")
-        offset = (page - 1) * limit
-
-        if q:
-            like = f"%{q}%"
-            where = " WHERE subject = ? AND (title LIKE ? OR topic LIKE ? OR course LIKE ?)"
-            params: tuple[Any, ...] = (self.subject, like, like, like)
-        else:
-            where, params = " WHERE subject = ?", (self.subject,)
-
-        # A2 先修模式：?prereq=<concept_id> 过滤出该概念先修链上的历史错题
-        prereq_param = qs.get("prereq", [""])[0]
-        if prereq_param.isdigit():
-            chain = graph.prereq_chain(int(prereq_param))
-            if chain:
-                cond = " OR ".join("concept_ids LIKE ?" for _ in chain)
-                chain_params = tuple(f"%,{cid},%" for cid in chain)
-                if where:
-                    where += f" AND ({cond})"
-                else:
-                    where = f" WHERE {cond}"
-                params = params + chain_params
-
-        items = rows(
-            f"SELECT id, title, course, topic, content, my_attempt, error_path, fix_action, error_type, mastery, starred, tags, tags_status, created_at, updated_at FROM problems{where} ORDER BY {order} LIMIT ? OFFSET ?",
-            params + (limit, offset),
-        )
-        total_row = row(f"SELECT COUNT(*) AS count FROM problems{where}", params)
-        total = total_row["count"] if total_row else 0
-        # 一次窗口函数查询拉回所有题的最近 3 次评分（替代每道题单独查）
-        if items:
-            ids = [item["id"] for item in items]
-            placeholders = ",".join("?" for _ in ids)
-            mini_rows = rows(f"""
-                SELECT problem_id, result FROM (
-                    SELECT problem_id, result, id,
-                        ROW_NUMBER() OVER (PARTITION BY problem_id ORDER BY id DESC) AS rn
-                    FROM reviews WHERE completed = 1 AND problem_id IN ({placeholders})
-                ) WHERE rn <= 3 ORDER BY problem_id, id ASC
-            """, tuple(ids))
-            by_pid: dict[int, list[str]] = {pid: [] for pid in ids}
-            for mr in mini_rows:
-                by_pid[mr["problem_id"]].append(mr["result"])
-            for item in items:
-                item["recent_results"] = by_pid.get(item["id"], [])
-        self.json_response({
-            "items": items, "total": total, "page": page, "limit": limit,
-            "pages": (total + limit - 1) // limit,
-        })
+        self.json_response(problems.list_problems(
+            self.subject,
+            q=(qs.get("q", [""])[0] or "").strip(),
+            sort=qs.get("sort", ["time"])[0],
+            page=page,
+            limit=limit,
+            prereq=qs.get("prereq", [""])[0],
+        ))
 
     def _handle_get_problem(self, problem_id: int) -> None:
-        item = row("SELECT * FROM problems WHERE id = ?", (problem_id,))
-        if not item:
-            self.json_response({"error": "题目不存在"}, 404)
+        try:
+            item = problems.get_problem(problem_id)
+        except problems.ProblemsError as exc:
+            self.json_response({"error": exc.message}, exc.status)
             return
-        try:
-            item["tags"] = json.loads(item["tags"]) if item["tags"] else []
-        except (json.JSONDecodeError, TypeError):
-            item["tags"] = []
-        try:
-            item["variants"] = json.loads(item["variants"]) if item["variants"] else []
-        except (json.JSONDecodeError, TypeError):
-            item["variants"] = []
-        # A2：concept_ids 解析 + 先修掌握度告警
-        item["concept_ids"] = graph.concept_ids_to_list(item.get("concept_ids") or "")
-        item["prereq_warnings"] = graph.prereq_warnings(problem_id)
-        # A8：一题多解
-        try:
-            item["methods"] = json.loads(item["methods"]) if item.get("methods") else []
-        except (json.JSONDecodeError, TypeError):
-            item["methods"] = []
-        # A5：Feynman 自评表（已保存的最新一条）
-        feynman = row(
-            "SELECT self_review FROM oral_sessions "
-            "WHERE problem_id = ? AND mode = 'feynman' AND self_review != '' "
-            "ORDER BY id DESC LIMIT 1",
-            (problem_id,),
-        )
-        if feynman:
-            try:
-                item["feynman_self_review"] = json.loads(feynman["self_review"])
-            except json.JSONDecodeError:
-                item["feynman_self_review"] = None
-        else:
-            item["feynman_self_review"] = None
-        # B1：图片附件列表
-        item["media_list"] = [p for p in (item.get("media_path") or "").split(",") if p.strip()]
-        item["hints"] = rows("SELECT level, content, created_at FROM hints WHERE problem_id = ? ORDER BY level", (problem_id,))
         self.json_response(item)
 
     def _handle_problem_history(self, problem_id: int) -> None:
         """一道题的全部已完成复习记录（SM-2 轨迹）。"""
-        history = rows("""
-            SELECT due_date, result, interval_days, created_at
-            FROM reviews WHERE problem_id = ? AND completed = 1
-            ORDER BY id ASC
-        """, (problem_id,))
-        self.json_response(history)
+        self.json_response(problems.history(problem_id))
 
     def _handle_related_problems(self, problem_id: int) -> None:
         """同知识点 / 同课程的其他题目（排除自身，最多 3 题）。"""
-        p = row("SELECT topic, course FROM problems WHERE id = ?", (problem_id,))
-        if not p:
-            self.json_response({"error": "题目不存在"}, 404)
+        try:
+            related = problems.related(problem_id, self.subject)
+        except problems.ProblemsError as exc:
+            self.json_response({"error": exc.message}, exc.status)
             return
-        topic = p["topic"] or ""
-        course = p["course"] or ""
-        related = rows(
-            "SELECT id, title, course, topic, mastery FROM problems WHERE id != ? AND subject = ? AND (topic = ? OR course = ?) ORDER BY id DESC LIMIT 3",
-            (problem_id, self.subject, topic, course),
-        )
         self.json_response(related)
 
     def _handle_duplicates(self) -> None:
@@ -211,38 +124,7 @@ class ProblemsMixin:
         content = (qs.get("content", [""])[0] or "").strip()
         topic = (qs.get("topic", [""])[0] or "").strip()
         exclude = qs.get("exclude", [""])[0]
-        if not content:
-            self.json_response({"duplicates": []})
-            return
-        candidates = rows("SELECT id, title, topic, content FROM problems WHERE id <> ? ORDER BY id DESC LIMIT 300",
-                          (exclude or 0,))
-        scored = []
-        for c in candidates:
-            sim = self._similarity(content, c["content"])
-            if topic and topic == c["topic"]:
-                sim = min(1.0, sim + 0.15)
-            if sim >= 0.35:
-                scored.append({
-                    "id": c["id"], "title": c["title"], "topic": c["topic"],
-                    "similarity": round(sim, 2),
-                })
-        scored.sort(key=lambda x: -x["similarity"])
-        self.json_response({"duplicates": scored[:5]})
-
-    @staticmethod
-    def _similarity(a: str, b: str) -> float:
-        """C7 字符 bigram Jaccard 相似度（零依赖，中文/英文通用）。"""
-        a = re.sub(r"\s+", "", a or "")
-        b = re.sub(r"\s+", "", b or "")
-        if not a or not b:
-            return 0.0
-        def bigrams(s: str) -> set[str]:
-            return {s[i:i + 2] for i in range(max(0, len(s) - 1))} if len(s) > 1 else {s}
-        ba, bb = bigrams(a), bigrams(b)
-        if not ba and not bb:
-            return 1.0
-        union = ba | bb
-        return len(ba & bb) / len(union) if union else 0.0
+        self.json_response({"duplicates": problems.duplicates(content, topic, exclude)})
 
     def _handle_create_problem(self, data: dict[str, Any]) -> None:
         rid = self.headers.get("X-Request-Id")
@@ -256,47 +138,11 @@ class ProblemsMixin:
                         return
                     _IDEMPOTENCY.pop(rid, None)
 
-        title = str(data.get("title", "")).strip()
-        content = str(data.get("content", "")).strip()
-        if not title or not content:
-            self.json_response({"error": "标题和题目内容不能为空"}, 400)
+        try:
+            problem_id = problems.create(self.subject, data)
+        except problems.ProblemsError as exc:
+            self.json_response({"error": exc.message}, exc.status)
             return
-        stamp = now()
-        error_type = normalize_error_type(data.get("error_type", "待诊断"))
-        tags = json.dumps(data.get("tags", []), ensure_ascii=False)
-        tags_status = "confirmed" if data.get("tags") else "none"
-        methods = json.dumps(_as_str_list(data.get("methods")), ensure_ascii=False)
-        # A2：显式 concept_ids 校验存在后落库；未提供则稍后自动绑定
-        raw_concepts = data.get("concept_ids") or []
-        if isinstance(raw_concepts, list):
-            ids = [cid for cid in raw_concepts if isinstance(cid, int)]
-            concept_csv = f",{','.join(str(cid) for cid in ids)}," if ids else ""
-        else:
-            concept_csv = ""
-        with DB_LOCK, db() as conn:
-            cursor = conn.execute("""
-                INSERT INTO problems(title, course, topic, content, my_attempt, error_type,
-                                     error_path, trap_note, shortcut, fix_action, tags, tags_status,
-                                     concept_ids, media_path, methods, subject, mastery, ease_factor, repetition,
-                                     created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2.5, 0, ?, ?)
-            """, (
-                title, str(data.get("course", "")).strip(), str(data.get("topic", "")).strip(),
-                content, str(data.get("my_attempt", "")).strip(), error_type,
-                str(data.get("error_path", "")).strip(), str(data.get("trap_note", "")).strip(),
-                str(data.get("shortcut", "")).strip(), str(data.get("fix_action", "")).strip(),
-                tags, tags_status, concept_csv,
-                self._normalize_media_paths(data.get("media_path", "")),
-                methods,
-                self.subject, clamp_mastery(int(data.get("mastery", 1))), stamp, stamp,
-            ))
-            problem_id = int(cursor.lastrowid)
-            conn.execute(
-                "INSERT INTO reviews(problem_id, due_date, interval_days, created_at) VALUES (?, ?, 1, ?)",
-                (problem_id, (date.today() + timedelta(days=1)).isoformat(), stamp),
-            )
-        if not concept_csv:
-            graph.bind_problem(problem_id)
         result = {"id": problem_id}
         if rid:
             with _IDEMPOTENCY_LOCK:  # R4：写幂等缓存与剪枝原子化
@@ -305,142 +151,35 @@ class ProblemsMixin:
         self.json_response(result, 201)
 
     def _handle_update_problem(self, problem_id: int, data: dict[str, Any]) -> None:
-        existing = row("SELECT * FROM problems WHERE id = ?", (problem_id,))
-        if not existing:
-            self.json_response({"error": "题目不存在"}, 404)
+        try:
+            problems.update(problem_id, data)
+        except problems.ProblemsError as exc:
+            self.json_response({"error": exc.message}, exc.status)
             return
-        fields = ["title", "course", "topic", "content", "my_attempt", "error_type",
-                  "error_path", "trap_note", "shortcut", "fix_action", "mastery", "starred"]
-        merged = {field: data.get(field, existing[field]) for field in fields}
-        merged["mastery"] = clamp_mastery(int(merged["mastery"]))
-        merged["title"] = str(merged["title"]).strip()
-        merged["content"] = str(merged["content"]).strip()
-        merged["error_type"] = normalize_error_type(merged["error_type"])
-        if not merged["title"] or not merged["content"]:
-            self.json_response({"error": "标题和题目内容不能为空"}, 400)
-            return
-        # B5（R3）：tags 显式提交才算「草稿确认」，落库并置 confirmed；否则保留原状
-        tags = existing["tags"]
-        tags_status = existing["tags_status"]
-        if data.get("tags") is not None:
-            tags = json.dumps(data["tags"], ensure_ascii=False)
-            tags_status = "confirmed"
-        # A8：methods 显式提交则整体覆盖（结构校验：只收字符串数组）
-        methods = existing["methods"]
-        if data.get("methods") is not None:
-            methods = json.dumps(_as_str_list(data["methods"]), ensure_ascii=False)
-        content_fields = [f for f in fields if f != "mastery"]
-        with DB_LOCK, db() as conn:
-            conn.execute("""
-                UPDATE problems SET title=?, course=?, topic=?, content=?, my_attempt=?, error_type=?,
-                                    error_path=?, trap_note=?, shortcut=?, fix_action=?,
-                                    starred=?, tags=?, tags_status=?, methods=?, updated_at=?
-                WHERE id=?
-            """, tuple(merged[field] for field in content_fields) + (tags, tags_status, methods, now(), problem_id))
-            # ADR 0004：掌握度只经单一写入口（手动修改记 entry_point=edit，与算法结果可区分）
-            set_problem_mastery(conn, problem_id, merged["mastery"], "edit", "用户手动编辑")
         self.json_response({"ok": True})
 
     def _handle_batch(self, data: dict[str, Any]) -> None:
         """批量操作：删除/标记掌握度/切换星标。"""
-        ids = data.get("ids")
         action = str(data.get("action", "")).strip()
-        if not isinstance(ids, list) or not ids or not action:
-            self.json_response({"error": "参数不合法 (ids/action)"}, 400)
+        try:
+            affected = problems.batch(data.get("ids"), action)
+        except problems.ProblemsError as exc:
+            self.json_response({"error": exc.message}, exc.status)
             return
-        with DB_LOCK, db() as conn:
-            for pid in ids:
-                pid = int(pid)
-                if action == "delete":
-                    conn.execute("DELETE FROM problems WHERE id = ?", (pid,))
-                elif action == "star":
-                    conn.execute("UPDATE problems SET starred = CASE WHEN starred THEN 0 ELSE 1 END, updated_at = ? WHERE id = ?",
-                                 (now(), pid))
         if action == "delete":
-            auth.audit("batch_delete", ip=self._client_ip(), detail=f"n={len(ids)}")  # R5 审计
-        self.json_response({"ok": True, "affected": len(ids)})
+            auth.audit("batch_delete", ip=self._client_ip(), detail=f"n={affected}")  # R5 审计
+        self.json_response({"ok": True, "affected": affected})
 
     def _handle_import(self, data: dict[str, Any]) -> None:
         """导入：先自动备份当前数据库，再参数化写入，避免注入与数据丢失。"""
-        problems = data.get("problems")
-        if not isinstance(problems, list):
-            self.json_response({"error": "导入数据格式错误（缺少 problems 列表）"}, 400)
-            return
-        # 版本兼容性校验（防未来 schema 不一致的备份被误加载）
-        data_version = int(data.get("version", 1))
-        if data_version > 1:
-            self.json_response({"error": f"备份来自更新的版本 (v{data_version})，请升级应用后再导入"}, 400)
-            return
-        # 自动备份到 backups/（与每日自动备份同目录，避免根目录堆积 .bak 文件）
-        from config import APP_DIR
-        backup_dir = APP_DIR / "backups"
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        backup = backup_dir / f"import_{now().replace(':', '').replace('-', '')}.db"
         try:
-            shutil.copy(db_module.DB_PATH, backup)
-        except OSError as exc:
-            self.json_response({"error": f"备份失败: {exc}"}, 500)
-            return
-        # 只保留最近 7 份导入备份（防长期累积）
-        try:
-            olds = sorted(backup_dir.glob("import_*.db"))
-            for old in olds[:-7]:
-                old.unlink(missing_ok=True)
-        except OSError:
-            pass
-        try:
-            with DB_LOCK, db() as conn:
-                conn.execute("DELETE FROM hints")
-                conn.execute("DELETE FROM reviews")
-                conn.execute("DELETE FROM problems")
-                for p in problems:
-                    if not isinstance(p, dict):
-                        continue
-                    pid = int(p.get("id", 0))
-                    title = str(p.get("title", "")).strip()
-                    content = str(p.get("content", "")).strip()
-                    if not title or not content:
-                        continue
-                    conn.execute("""
-                        INSERT INTO problems(id, title, course, topic, content, my_attempt, error_type,
-                                             error_path, trap_note, shortcut, fix_action,
-                                             tags, tags_status,
-                                             mastery, ease_factor, repetition, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2.5, 0, ?, ?)
-                    """, (
-                        pid, title, str(p.get("course", "")).strip(), str(p.get("topic", "")).strip(),
-                        content, str(p.get("my_attempt", "")).strip(), normalize_error_type(p.get("error_type", "待诊断")),
-                        str(p.get("error_path", "")).strip(), str(p.get("trap_note", "")).strip(),
-                        str(p.get("shortcut", "")).strip(), str(p.get("fix_action", "")).strip(),
-                        json.dumps(p.get("tags", []), ensure_ascii=False), str(p.get("tags_status", "none")).strip(),
-                        clamp_mastery(int(p.get("mastery", 1))),
-                        str(p.get("created_at", now())), str(p.get("updated_at", now())),
-                    ))
-                # 导入提示记录
-                for h in data.get("hints", []):
-                    if not isinstance(h, dict):
-                        continue
-                    conn.execute(
-                        "INSERT INTO hints(problem_id, level, content, created_at) VALUES (?, ?, ?, ?)",
-                        (int(h.get("problem_id", 0)), int(h.get("level", 1)),
-                         str(h.get("content", "")).strip(), str(h.get("created_at", now()))),
-                    )
-                # 导入复习记录
-                for rv in data.get("reviews", []):
-                    if not isinstance(rv, dict):
-                        continue
-                    conn.execute(
-                        "INSERT INTO reviews(problem_id, due_date, interval_days, result, completed, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                        (int(rv.get("problem_id", 0)), str(rv.get("due_date", "")).strip(),
-                         int(rv.get("interval_days", 1)), str(rv.get("result", "")).strip(),
-                         int(rv.get("completed", 0)), str(rv.get("created_at", now()))),
-                    )
-        except (ValueError, KeyError) as exc:
-            self.json_response({"error": f"导入失败: {exc}"}, 400)
+            result = problems.import_data(data)
+        except problems.ProblemsError as exc:
+            self.json_response({"error": exc.message}, exc.status)
             return
         invalidate_settings_cache()
-        auth.audit("import", ip=self._client_ip(), detail=f"n={len(problems)}")  # R5 审计
-        self.json_response({"ok": True, "imported": len(problems), "backup": str(backup)})
+        auth.audit("import", ip=self._client_ip(), detail=f"n={result['imported']}")  # R5 审计
+        self.json_response({"ok": True, "imported": result["imported"], "backup": result["backup"]})
 
     def _handle_hint(self, problem_id: int, data: dict[str, Any]) -> None:
         level = max(1, min(4, int(data.get("level", 1))))
@@ -585,40 +324,6 @@ class ProblemsMixin:
             conn.execute("UPDATE problems SET variants = ?, updated_at = ? WHERE id = ?",
                          (json.dumps(merged, ensure_ascii=False), now(), problem_id))
         self.json_response({"ok": True, "count": len(clean), "total": len(merged)})
-
-    @staticmethod
-    def _log_variant_result(conn: Any, review: dict[str, Any], rating: int) -> None:
-        """A4：变式复习后回写题根质量分（correct/total），低正确率变式自动降权。"""
-        vid = int(review.get("variant_id") or 0)
-        if not vid:
-            return
-        p = conn.execute("SELECT variants FROM problems WHERE id = ?", (review["problem_id"],)).fetchone()
-        if not p or not p["variants"]:
-            return
-        try:
-            variants = json.loads(p["variants"])
-        except json.JSONDecodeError:
-            return
-        idx = vid - 1
-        if not (0 <= idx < len(variants)):
-            return
-        v = variants[idx]
-        v["correct"] = int(v.get("correct", 0)) + (1 if rating >= 3 else 0)
-        v["total"] = int(v.get("total", 0)) + 1
-        conn.execute("UPDATE problems SET variants = ? WHERE id = ?",
-                     (json.dumps(variants, ensure_ascii=False), review["problem_id"]))
-
-    @staticmethod
-    def _log_mastery(conn: Any, subject: str = "physics") -> None:
-        """记录当日学科掌握度均值，每天每学科保留一条（供趋势图）。"""
-        r = conn.execute("SELECT AVG(mastery) AS a, COUNT(*) AS c FROM problems WHERE subject = ?", (subject,)).fetchone()
-        avg = round(r["a"] or 0, 2)
-        today = date.today().isoformat()
-        conn.execute("DELETE FROM mastery_log WHERE day = ? AND subject = ?", (today, subject))
-        conn.execute(
-            "INSERT INTO mastery_log(day, avg_mastery, count, subject) VALUES (?, ?, ?, ?)",
-            (today, avg, r["c"] or 0, subject),
-        )
 
     def _rag_context(self, problem: dict[str, Any]) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
         """B3：检索个人资料（教材/笔记）相关片段，注入 AI 上下文；返回 (注入消息, 溯源列表)。
@@ -791,20 +496,6 @@ class ProblemsMixin:
         if blob.startswith(_JPEG_MAGIC):
             return "jpg"
         return ""
-
-    @staticmethod
-    def _normalize_media_paths(value: Any) -> str:
-        """拼接图片相对路径（逗号分隔，去空去重，仅允许 media/ 前缀）。"""
-        if isinstance(value, list):
-            parts = [str(p).strip() for p in value]
-        else:
-            parts = str(value or "").split(",")
-        seen: list[str] = []
-        for p in parts:
-            p = p.strip().replace("\\", "/")
-            if p.startswith("media/") and ".." not in p and p not in seen:
-                seen.append(p)
-        return ",".join(seen)
 
     @staticmethod
     def _media_file(rel: str) -> Path | None:
