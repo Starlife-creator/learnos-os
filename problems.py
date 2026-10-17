@@ -15,19 +15,15 @@ from typing import Any
 from config import APP_DIR
 from db import DB_LOCK, db, now, row, rows
 import db as db_module  # 模块引用：`db` 已被函数遮蔽，需用模块访问实时 DB_PATH
+from domain_errors import DomainError
 from errors import normalize_error_type
 from mastery import set_problem_mastery
 from review import clamp_mastery
 import graph
 
 
-class ProblemsError(Exception):
-    """领域层 4xx 语义：handler 据此输出 {"error": message} + status。"""
-
-    def __init__(self, message: str, status: int = 400) -> None:
-        super().__init__(message)
-        self.message = message
-        self.status = status
+class ProblemsError(DomainError):
+    """错题领域层 4xx 语义：handler 据此输出 {"error": message} + status。"""
 
 
 # 与 handler_base._as_str_list 同实现：领域层不得反向依赖 handler*（见

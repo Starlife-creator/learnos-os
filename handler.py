@@ -45,7 +45,7 @@ from handler_cards import CardsMixin
 import fsrs_bridge
 from fsrs_bridge import next_interval_days
 from handler_base import (X_HEADER, X_VALUE, _IDEMPOTENCY, _IDEMPOTENCY_TTL,
-                          _as_str_list, _interleave, _prune_idempotency)
+                          _as_str_list, _prune_idempotency)
 from resp import error_counts
 
 

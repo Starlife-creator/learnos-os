@@ -18,9 +18,25 @@ SQL、聚合、业务规则一律放在领域模块（`reports.py`、`graph.py`�
 - `TestDomainLayerPurity` 断言领域层不 import HTTP 层，且 `reports.py` 内不出现
   `json_response` / `self.`。
 
-首个落地批次：`handler_reports.py` 的全部 37 条 SQL（15 个统计函数 + 仪表盘/进步
-数据装配）下沉为 `reports.py`（621 行），`handler_reports.py` 由 637 行缩到 38 行，
-只剩 7 个「取 subject → 写响应」的适配方法。
+首批：`handler_reports.py` 的全部 37 条 SQL（15 个统计函数 + 仪表盘/进步数据装配）
+下沉为 `reports.py`（621 行），`handler_reports.py` 由 637 行缩到 38 行，只剩 7 个
+「取 subject → 写响应」的适配方法。
+
+第二批：`handler_problems.py` 的题目读写（增删改查、导入、提示、变式、导出、
+`_ensure_problem`）下沉为 `problems.py`，裸 SQL 由 43 条降到 15 条。剩下的 15 条
+全部属于 `/api/problems/batch`（批量操作的状态机，一次事务里多点写，形状特殊，
+留待单独一批）。
+
+第三批：`handler_reviews.py` 的复习会话下沉为 `review_session.py`：队列装配
+（逾期优先 + 错因权重 + FSRS 稳定性 + 费曼漏点徽章 + 每日上限 + 知识点交错）、
+完成复习（调度 + 落库 + 掌握度事件 + 掌握度日快照）、顺延、今日小结。裸 SQL 由 11
+条降到 0，文件从 154 行降到 33 行的纯适配层；`handler_base._interleave` 一并搬进
+`review_session.interleave`（它是复习队列的规则，不再被第二个入口共享）。
+
+领域层开始有**自己的错误类型**：`domain_errors.py` 的 `DomainError`（带
+`message` / `status`）与 `problems.ProblemsError`、`review_session.ReviewError`。
+handler 层不再逐处拼 400/404 响应，而是捕获 `DomainError` 后统一翻译 —— 这样
+「同一业务错误在不同 handler 里写不同文案」的分叉被结构性地消掉了。
 
 ## 原因
 
@@ -49,6 +65,8 @@ SQL、聚合、业务规则一律放在领域模块（`reports.py`、`graph.py`�
 - **唯一有意变更**：`GET /api/gamification` 原先直接调用 `gamification.state()`，
   异常会 500；现在走 `reports.game_state()`，异常降级为空字典（与仪表盘卡片同款
   韧性策略，§1.3）。
-- 剩余预算即待办清单：`handler_problems.py` 43、`handler.py` 21、
-  `handler_reviews.py` 11。桌面上的数字就是进度条 —— 每下沉一批就把对应数字调小，
-  守卫不会因此失败（只拦上升）。
+- 剩余预算即待办清单：`handler.py` 21、`handler_problems.py` 15（batch 状态机）。
+  桌面上的数字就是进度条 —— 每下沉一批就把对应数字调小，守卫不会因此失败（只拦上升）。
+- 副作用收益（第三批换来的）：复习队列的排序规则、每日上限、交错策略、完成复习的
+  事务边界现在都有直接单元测试（`tests/test_review_session.py`，17 个用例），不必
+  起 HTTP 服务、不必构造会话。此前「逾期优先」这类承诺只有人工试过。

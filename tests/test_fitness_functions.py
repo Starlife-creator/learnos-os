@@ -663,7 +663,7 @@ def _sql_literals(path: Path) -> list[int]:
 HANDLER_SQL_BUDGET = {
     "handler.py": 21,
     "handler_problems.py": 15,
-    "handler_reviews.py": 11,
+    "handler_reviews.py": 0,
     "handler_cards.py": 1,
     "handler_material.py": 1,
     "handler_learn.py": 1,
@@ -694,7 +694,8 @@ class TestDomainLayerPurity(unittest.TestCase):
     """领域层不得反向依赖 HTTP 层，否则「下沉」只是搬家。"""
 
     DOMAIN = ("reports.py", "mastery.py", "scheduler.py", "graph.py",
-              "bank.py", "cards.py", "review.py", "problems.py")
+              "bank.py", "cards.py", "review.py", "problems.py",
+              "review_session.py", "domain_errors.py")
 
     def test_domain_modules_do_not_import_http_layer(self) -> None:
         bad = []
