@@ -76,16 +76,11 @@ class TestAnkiCsv(DomainTestBase):
         self.assertIn("解题框架：框架一", back)
         self.assertIsInstance(tags, str)
 
-    def test_no_notes_and_no_tags_yields_empty_tag_cell(self):
-        """已知行为：tags 为空串时解析成空列表，会覆盖掉 course/topic 回退值。
-
-        这是搬迁前的既有输出（纯搬迁不改可见行为），此处把现状钉住；真要修应作为
-        独立改动（Anki 用户会看到标签丢失）。
-        """
+    def test_no_tags_falls_back_to_course_and_topic(self):
         _add_problem()
         body = exports.anki_csv("physics")
         self.assertIn("（无解析）", body)
-        self.assertIn('",""', body, "标签列为空串")
+        self.assertIn("力学 牛二", body, "没有标签时应回退到课程/知识点")
 
     def test_explicit_tags_win_and_colons_are_replaced(self):
         _add_problem(tags='["几何:相似"]')
@@ -129,6 +124,12 @@ class TestIcs(DomainTestBase):
         self.assertIn("BEGIN:VCALENDAR", body)
         self.assertIn("END:VCALENDAR", body)
         self.assertEqual(body.count("BEGIN:VEVENT"), 0)
+
+    def test_calendar_name_uses_subject_title(self):
+        body = exports.ics("physics")
+        self.assertIn("X-WR-CALNAME:物理复习日程", body, "内置物理学科的日历名保持原样")
+        body = exports.ics("nowhere")
+        self.assertIn("X-WR-CALNAME:复习日程", body, "未知学科不应错标成物理")
 
 
 class TestSnapshot(DomainTestBase):

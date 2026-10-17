@@ -10,7 +10,15 @@ import csv
 import io
 import json
 
-from db import now, rows
+from db import list_subjects, now, rows
+
+
+def _calendar_name(subject: str) -> str:
+    """日历显示名用学科标题（历史版本硬编码为「物理复习日程」，非物理学科会错标）。"""
+    for item in list_subjects():
+        if item["id"] == subject:
+            return f"{item['title']}复习日程"
+    return "复习日程"
 
 
 def snapshot(subject: str) -> dict:
@@ -59,10 +67,12 @@ def anki_csv(subject: str) -> str:
         tags = " ".join(t for t in [p["course"], p["topic"]] if t)
         try:
             tag_list = json.loads(p.get("tags") or "[]")
-            if isinstance(tag_list, list):
-                tags = " ".join(str(t).replace(":", "_") for t in tag_list if str(t).strip())
         except json.JSONDecodeError:
-            pass
+            tag_list = None
+        # 只有「确实有标签」时才覆盖 course/topic 回退：空列表/null 都保留回退值
+        # （历史版本在此把没有标签的题目导出成空标签，Anki 里等于失去分类）
+        if isinstance(tag_list, list) and tag_list:
+            tags = " ".join(str(t).replace(":", "_") for t in tag_list if str(t).strip())
         writer.writerow([front, back, tags])
     return "\ufeff" + buf.getvalue()
 
@@ -78,8 +88,7 @@ def ics(subject: str) -> str:
         "VERSION:2.0",
         "PRODID:-//LearnOS//CN",
         "CALSCALE:GREGORIAN",
-        # 日历名沿用历史硬编码（纯搬迁，不改可见输出）
-        "X-WR-CALNAME:物理复习日程",
+        f"X-WR-CALNAME:{_calendar_name(subject)}",
     ]
     for r in due:
         stamp = r["due_date"].replace("-", "") + "T090000"
