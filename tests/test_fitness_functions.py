@@ -673,11 +673,11 @@ def _sql_literals(path: Path) -> list[int]:
 #   - `_get_or_404` 的 `SELECT * FROM {table}`：表名/id 列走白名单校验的通用查存在
 #     助手，本身就是 HTTP 层的产物（拼 404 响应），挪进领域层反而把响应知识带下去。
 #   - `/api/fsrs/train` 的训练样本查询：这是一次全表扫描取样本，没有业务规则。
-# handler_problems.py 剩的 14 条全部属于 `/api/problems/batch` 的批量状态机
-# （一次事务里多点写），形状与单条 CRUD 不同，留待单独一批处理。
+# handler_problems.py 已清零：提示/变式/导出分别下沉 hints.py、problems.py、exports.py
+# （`/api/problems/batch` 的状态机在第二批由 problems.batch 收掉）。
 HANDLER_SQL_BUDGET = {
     "handler.py": 2,
-    "handler_problems.py": 14,
+    "handler_problems.py": 0,
     "handler_reviews.py": 0,
     "handler_cards.py": 0,
     "handler_material.py": 1,
@@ -711,7 +711,7 @@ class TestDomainLayerPurity(unittest.TestCase):
     DOMAIN = ("reports.py", "mastery.py", "scheduler.py", "graph.py",
               "bank.py", "cards.py", "review.py", "problems.py",
               "review_session.py", "domain_errors.py", "subjects.py",
-              "metrics.py")
+              "metrics.py", "hints.py", "exports.py")
 
     def test_domain_modules_do_not_import_http_layer(self) -> None:
         bad = []

@@ -6,8 +6,6 @@
 from __future__ import annotations
 
 import base64
-import csv
-import io
 import json
 import time
 import uuid
@@ -18,11 +16,13 @@ from pathlib import Path
 
 from config import LOG
 import auth
-from db import DB_LOCK, db, now, row, rows
+from db import now
 from ai import (call_ai, call_ai_stream, fallback_hint, problem_prompt, extract_tags,
                 generate_variants, invalidate_settings_cache, get_cached_settings)
 from handler_base import (_IDEMPOTENCY, _IDEMPOTENCY_TTL, _IDEMPOTENCY_LOCK,
                           _prune_idempotency)
+import exports
+import hints
 import interop
 import problems
 from resp import api_err
@@ -184,21 +184,15 @@ class ProblemsMixin:
     def _handle_hint(self, problem_id: int, data: dict[str, Any]) -> None:
         level = max(1, min(4, int(data.get("level", 1))))
         lang = "en" if str(data.get("lang", "zh")).lower().startswith("en") else "zh"
-        problem = row("SELECT * FROM problems WHERE id = ?", (problem_id,))
+        problem = problems.raw(problem_id)
         if not problem:
             self.json_response({"error": "题目不存在"}, 404)
             return
         # A6 诊断门：最近一次复习失败（忘记/模糊）时，一级提示附加诊断建议
-        diagnose = False
-        last_result = row("""
-            SELECT result FROM reviews WHERE problem_id = ? AND completed = 1
-            ORDER BY id DESC LIMIT 1
-        """, (problem_id,))
-        if last_result and last_result["result"].isdigit() and int(last_result["result"]) <= 2:
-            diagnose = True
-        existing = row("SELECT content FROM hints WHERE problem_id = ? AND level = ?", (problem_id, level))
+        diagnose = hints.diagnose_needed(problem_id)
+        existing = hints.cached(problem_id, level)
         if existing:
-            self.json_response({"content": existing["content"], "source": "saved", "cached": True,
+            self.json_response({"content": existing, "source": "saved", "cached": True,
                                 "diagnose": diagnose})
             return
         # R3 配额守卫：必须在命中缓存之后、SSE 分支之前拦截——
@@ -221,11 +215,7 @@ class ProblemsMixin:
             LOG.warning("提示降级 (problem=%s, level=%d): %s", problem_id, level, exc)
         cached = False
         if cache_enabled:
-            with DB_LOCK, db() as conn:
-                conn.execute(
-                    "INSERT INTO hints(problem_id, level, content, created_at) VALUES (?, ?, ?, ?)",
-                    (problem_id, level, hint, now()),
-                )
+            hints.save(problem_id, level, hint)
             cached = True
         self.json_response({"content": hint, "source": source, "cached": cached,
                             "diagnose": diagnose, "sources": rag_sources})
@@ -257,11 +247,7 @@ class ProblemsMixin:
             if not hint:
                 raise RuntimeError("AI 流式返回为空")
             if cache_enabled:
-                with DB_LOCK, db() as conn:
-                    conn.execute(
-                        "INSERT INTO hints(problem_id, level, content, created_at) VALUES (?, ?, ?, ?)",
-                        (problem["id"], level, hint, now()),
-                    )
+                hints.save(problem["id"], level, hint)
             self._sse_send("done", {"content": hint, "source": "ai", "cached": cache_enabled,
                                     "diagnose": diagnose, "sources": rag_sources})
         except Exception as exc:
@@ -269,11 +255,7 @@ class ProblemsMixin:
             fallback = fallback_hint(problem, level, lang)
             if cache_enabled:
                 try:
-                    with DB_LOCK, db() as conn:
-                        conn.execute(
-                            "INSERT INTO hints(problem_id, level, content, created_at) VALUES (?, ?, ?, ?)",
-                            (problem["id"], level, fallback, now()),
-                        )
+                    hints.save(problem["id"], level, fallback)
                 except Exception:
                     pass
             self._sse_send("error", {
@@ -285,7 +267,7 @@ class ProblemsMixin:
         """A4：生成 3 道变式（AI 或离线模板），仅返回草稿不落库（R3）。"""
         if not self._ai_quota("heavy"):
             return  # R3：变式生成重接口
-        problem = row("SELECT * FROM problems WHERE id = ?", (problem_id,))
+        problem = problems.raw(problem_id)
         if not problem:
             self.json_response({"error": "题目不存在"}, 404)
             return
@@ -294,36 +276,12 @@ class ProblemsMixin:
 
     def _handle_save_variants(self, problem_id: int, data: dict[str, Any]) -> None:
         """A4：用户确认后保存变式到题根（R3 确认落库）。"""
-        variants = data.get("variants")
-        if not isinstance(variants, list) or not variants:
-            self.json_response({"error": "变式列表不能为空"}, 400)
-            return
-        clean = []
-        for v in variants:
-            if not isinstance(v, dict):
-                continue
-            mode = str(v.get("mode", "")).strip()
-            title = str(v.get("title", "")).strip()
-            content = str(v.get("content", "")).strip()
-            answer = str(v.get("answer", "")).strip()
-            if title and content:
-                clean.append({"mode": mode, "title": title, "content": content, "answer": answer})
-        if not clean:
-            self.json_response({"error": "变式内容不合法"}, 400)
-            return
-        existing = row("SELECT variants FROM problems WHERE id = ?", (problem_id,))
-        if not existing:
-            self.json_response({"error": "题目不存在"}, 404)
-            return
         try:
-            old = json.loads(existing["variants"]) if existing["variants"] else []
-        except json.JSONDecodeError:
-            old = []
-        merged = old + clean
-        with DB_LOCK, db() as conn:
-            conn.execute("UPDATE problems SET variants = ?, updated_at = ? WHERE id = ?",
-                         (json.dumps(merged, ensure_ascii=False), now(), problem_id))
-        self.json_response({"ok": True, "count": len(clean), "total": len(merged)})
+            result = problems.save_variants(problem_id, data.get("variants"))
+        except problems.ProblemsError as exc:
+            self.json_response({"error": exc.message}, exc.status)
+            return
+        self.json_response({"ok": True, **result})
 
     def _rag_context(self, problem: dict[str, Any]) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
         """B3：检索个人资料（教材/笔记）相关片段，注入 AI 上下文；返回 (注入消息, 溯源列表)。
@@ -531,20 +489,7 @@ class ProblemsMixin:
                 self._text_response(body, "text/markdown; charset=utf-8",
                                     f"learnos-{self.subject}.md")
             return
-        problems = rows("SELECT id, title, course, topic, content, my_attempt, error_type, error_path, trap_note, shortcut, fix_action, tags, tags_status, mastery, created_at, updated_at, subject FROM problems WHERE subject = ? ORDER BY id", (self.subject,))
-        for p in problems:
-            try:
-                p["tags"] = json.loads(p["tags"]) if p["tags"] else []
-            except (json.JSONDecodeError, TypeError):
-                p["tags"] = []
-        data = {
-            "version": 1,
-            "exported_at": now(),
-            "problems": problems,
-            "hints": rows("SELECT problem_id, level, content, created_at FROM hints ORDER BY id"),
-            "reviews": rows("SELECT problem_id, due_date, interval_days, result, completed, created_at FROM reviews ORDER BY id"),
-        }
-        self.json_response(data)
+        self.json_response(exports.snapshot(self.subject))
 
     def _handle_backup_export(self) -> None:
         """一键备份：全库 JSON 下载。需导出令牌（§16.6）。"""
@@ -591,57 +536,10 @@ class ProblemsMixin:
 
     def _export_anki_csv(self) -> None:
         """Anki 导入 CSV：question|answer|tags（UTF-8 BOM，兼容 Anki 桌面端）。"""
-        problems = rows("""
-            SELECT p.id, p.title, p.course, p.topic, p.content, p.my_attempt, p.tags,
-                   p.error_path, p.trap_note, p.shortcut, p.fix_action,
-                   (SELECT GROUP_CONCAT(content, '\n') FROM hints h WHERE h.problem_id = p.id AND h.level = 3) AS answer_hint
-            FROM problems p WHERE p.subject = ? ORDER BY p.id
-        """, (self.subject,))
-        buf = io.StringIO()
-        writer = csv.writer(buf, quoting=csv.QUOTE_ALL, lineterminator="\n")
-        for p in problems:
-            front = f"{p['title']}\n{p['content']}".strip()
-            back_parts = []
-            if p.get("my_attempt"):
-                back_parts.append(f"我的尝试：{p['my_attempt']}")
-            if p.get("answer_hint"):
-                back_parts.append(f"解题框架：{p['answer_hint']}")
-            if p.get("shortcut"):
-                back_parts.append(f"捷径：{p['shortcut']}")
-            if p.get("fix_action"):
-                back_parts.append(f"改进：{p['fix_action']}")
-            back = "\n".join(back_parts) or "（无解析）"
-            tags = " ".join(t for t in [p["course"], p["topic"]] if t)
-            try:
-                tag_list = json.loads(p.get("tags") or "[]")
-                if isinstance(tag_list, list):
-                    tags = " ".join(str(t).replace(":", "_") for t in tag_list if str(t).strip())
-            except json.JSONDecodeError:
-                pass
-            writer.writerow([front, back, tags])
-        self._text_response("\ufeff" + buf.getvalue(), "text/csv; charset=utf-8", "learnos_anki.csv")
+        self._text_response(exports.anki_csv(self.subject), "text/csv; charset=utf-8",
+                            "learnos_anki.csv")
 
     def _export_ics(self) -> None:
         """复习日程 .ics：未完成的 due 复习任务导出为 VEVENT。"""
-        due = rows("SELECT r.id, r.due_date, r.interval_days, p.title FROM reviews r JOIN problems p ON p.id = r.problem_id WHERE r.completed = 0 AND p.subject = ? ORDER BY r.due_date", (self.subject,))
-        lines = [
-            "BEGIN:VCALENDAR",
-            "VERSION:2.0",
-            "PRODID:-//LearnOS//CN",
-            "CALSCALE:GREGORIAN",
-            "X-WR-CALNAME:物理复习日程",
-        ]
-        for r in due:
-            uid = f"pso-review-{r['id']}@learnos-os"
-            stamp = r["due_date"].replace("-", "") + "T090000"
-            summary = f"复习：{r['title']}"
-            lines += [
-                "BEGIN:VEVENT",
-                f"UID:{uid}",
-                f"DTSTART:{stamp}",
-                f"DTEND:{stamp}",
-                f"SUMMARY:{summary}",
-                "END:VEVENT",
-            ]
-        lines.append("END:VCALENDAR")
-        self._text_response("\r\n".join(lines), "text/calendar; charset=utf-8", "learnos_review.ics")
+        self._text_response(exports.ics(self.subject), "text/calendar; charset=utf-8",
+                            "learnos_review.ics")

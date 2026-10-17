@@ -49,6 +49,14 @@ handler 层不再逐处拼 400/404 响应，而是捕获 `DomainError` 后统一
 （新度量下 6 条）降到 **2 条**；全仓 handler 层合计 **17 条**。
 审计（`auth.audit` 需要客户端 IP）与 `LOG.info` 是 HTTP 层关注点，留在 handler。
 
+第五批（清零）：`handler_problems.py` 最后的 14 条 SQL 按「各自的消费者」拆成三块：
+提示缓存与 A6 诊断门 → `hints.py`（3 条），题目原始行与变式合并 → `problems` 的
+`raw()` / `variants()` / `save_variants()`（4 条），三种导出 → `exports.py`
+（`snapshot()` / `anki_csv()` / `ics()`，7 条）。**handler 层现在只剩 `handler.py`
+的 2 条**（其余 8 个 `handler_*.py` 全为 0）。变式的字段校验与 400 文案一起下沉到
+`problems.save_variants`（抛 `ProblemsError`），因此「哪条变式不合法」这类错误不再
+依赖 handler 存在。
+
 ## 原因
 
 迁移前 handler 层的 SQL 密度：`handler_reports.py` 51 处、`handler_problems.py`
@@ -77,11 +85,17 @@ handler 层不再逐处拼 400/404 响应，而是捕获 `DomainError` 后统一
   异常会 500；现在走 `reports.game_state()`，异常降级为空字典（与仪表盘卡片同款
   韧性策略，§1.3）。
 - 剩余预算即待办清单：`handler.py` 2（有意保留，见测试里 `HANDLER_SQL_BUDGET` 注释：
-  `_get_or_404` 的通用查存在助手 + `/api/fsrs/train` 的一次全表采样）、
-  `handler_problems.py` 14（`/api/problems/batch` 批量状态机）、`handler_material.py` 1、
-  `handler_oral.py` 1。桌面上的数字就是进度条 —— 每下沉一批就把对应数字调小，
-  守卫不会因此失败（只拦上升）。
-- 副作用收益（第三、四批换来的）：复习队列的排序规则、每日上限、交错策略、完成复习
-  的事务边界（`tests/test_review_session.py`，17 个用例）与学科级联删除的 scope 边界
-  （`tests/test_subjects.py`，16 个用例）现在都有直接单元测试，不必起 HTTP 服务、
-  不必构造会话。此前「逾期优先」「删图谱不该动个人数据」这类承诺只有人工试过。
+  `_get_or_404` 的通用查存在助手 + `/api/fsrs/train` 的一次全表采样）。
+  桌面上的数字就是进度条 —— 每下沉一批就把对应数字调小，守卫不会因此失败（只拦上升）。
+- 副作用收益（第三至五批换来的）：复习队列的排序规则、每日上限、交错策略、完成复习
+  的事务边界（`tests/test_review_session.py`，17 个用例）、学科级联删除的 scope 边界
+  （`tests/test_subjects.py`，16 个用例）与导出的转义/行尾/事件边界
+  （`tests/test_exports.py`，12 个用例）现在都有直接单元测试，不必起 HTTP 服务、
+  不必构造会话。此前「逾期优先」「删图谱不该动个人数据」「CSV 字段内换行不炸」这类
+  承诺只有人工试过。
+- 搬迁中发现但**未修**的既有缺陷（保持纯搬迁，留给独立改动）：
+  1. Anki 导出的标签回退有 bug —— `tags` 字段为空串时会被解析成空列表并覆盖掉
+     `course/topic` 回退值，导致没有标签的题目在 Anki 里一文不值（已用
+     `tests/test_exports.py::TestAnkiCsv::test_no_notes_and_no_tags_yields_empty_tag_cell`
+     把现状钉住）。
+  2. ICS 日历名硬编码为「物理复习日程」，非物理学科导出也是这个名字。

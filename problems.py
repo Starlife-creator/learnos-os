@@ -96,6 +96,11 @@ def list_problems(subject: str, *, q: str = "", sort: str = "time", page: int = 
     }
 
 
+def raw(problem_id: int) -> dict[str, Any] | None:
+    """题目原始行（不做 JSON 容错解析、不抛异常）；提示/变式等子域按需自取字段。"""
+    return row("SELECT * FROM problems WHERE id = ?", (problem_id,))
+
+
 def get_problem(problem_id: int) -> dict[str, Any]:
     """题目详情：JSON 字段容错解析 + 概念/先修告警 + 费曼自评 + 附件与提示。"""
     item = row("SELECT * FROM problems WHERE id = ?", (problem_id,))
@@ -294,6 +299,44 @@ def batch(ids: Any, action: str) -> int:
                 conn.execute("UPDATE problems SET starred = CASE WHEN starred THEN 0 ELSE 1 END, updated_at = ? WHERE id = ?",
                              (now(), pid))
     return len(ids)
+
+
+def variants(problem_id: int) -> list[dict[str, Any]]:
+    """题目已保存的变式列表；题目不存在抛 404，字段损坏时按空列表处理。"""
+    existing = row("SELECT variants FROM problems WHERE id = ?", (problem_id,))
+    if not existing:
+        raise ProblemsError("题目不存在", 404)
+    try:
+        old = json.loads(existing["variants"]) if existing["variants"] else []
+    except json.JSONDecodeError:
+        old = []
+    return old if isinstance(old, list) else []
+
+
+def save_variants(problem_id: int, items: Any) -> dict[str, int]:
+    """A4：确认后把变式追加到题根（R3 确认落库），返回 {count, total}。
+
+    校验严格照旧：只收 dict 且 title/content 非空；一条都不合法就整体拒绝。
+    """
+    if not isinstance(items, list) or not items:
+        raise ProblemsError("变式列表不能为空", 400)
+    clean = []
+    for v in items:
+        if not isinstance(v, dict):
+            continue
+        mode = str(v.get("mode", "")).strip()
+        title = str(v.get("title", "")).strip()
+        content = str(v.get("content", "")).strip()
+        answer = str(v.get("answer", "")).strip()
+        if title and content:
+            clean.append({"mode": mode, "title": title, "content": content, "answer": answer})
+    if not clean:
+        raise ProblemsError("变式内容不合法", 400)
+    merged = variants(problem_id) + clean
+    with DB_LOCK, db() as conn:
+        conn.execute("UPDATE problems SET variants = ?, updated_at = ? WHERE id = ?",
+                     (json.dumps(merged, ensure_ascii=False), now(), problem_id))
+    return {"count": len(clean), "total": len(merged)}
 
 
 def import_data(data: dict[str, Any]) -> dict[str, Any]:
