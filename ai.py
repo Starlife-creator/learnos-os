@@ -46,6 +46,21 @@ from ai_fallback import (  # noqa: F401
 _LAYERS = (ai_client, ai_prompts, ai_fallback)
 
 
+def _cache_basis(tier: str = "heavy") -> str:
+    """L6：缓存键绑定模型 / 温度 / 提示词版本。
+
+    切换模型、调整温度或升级提示词版本后，旧口径缓存自然失效，避免 30 天 TTL 内
+    长期命中旧模型/旧提示词的结果。读取设置失败时退化为仅绑定提示词版本。
+    """
+    try:
+        cfg = get_cached_settings()
+        model = _resolve_model(cfg, tier)
+        temp = _safe_temperature(cfg)
+        return f"m:{model or 'default'}:t:{temp}:pv:{PROMPT_VERSION}"
+    except Exception:
+        return f"pv:{PROMPT_VERSION}"
+
+
 def __getattr__(name: str):
     """回退查找：显式再导出漏掉的名字仍可按层解析，避免拆分破坏既有调用。"""
     for _mod in _LAYERS:
@@ -116,8 +131,8 @@ def extract_tags(
         f"课程：{course or '未知'}\n已有知识点：{topic or '无'}\n"
         f"题目标题：{title}\n题目内容：{content}"
     )
-    # 结果缓存：同内容标签提取结果稳定 → 命中省 token
-    cache_key = f"tags:{sbj}:{title}:{content[:2000]}"
+    # 结果缓存：同内容标签提取结果稳定 → 命中省 token；L6 绑定模型/温度/提示词版本
+    cache_key = f"tags:{sbj}:{title}:{content[:2000]}:{_cache_basis('fast')}"
     cached = cache_get(cache_key)
     if cached:
         cached["source"] = "cache"
@@ -257,8 +272,8 @@ def review_bank_question(question: dict[str, Any], subject: str = "") -> dict[st
     except Exception:
         return {"verdict": "pass", "issues": [], "comment": "", "ai_available": False}
     payload = json.dumps(q, ensure_ascii=False)
-    # 结果缓存：同题同学科审题结果稳定 → 命中直接返回（省 token）
-    cache_key = f"review:{subject or ''}:{payload}"
+    # 结果缓存：同题同学科审题结果稳定 → 命中直接返回（省 token）；L6 绑定模型/温度/提示词版本
+    cache_key = f"review:{subject or ''}:{payload}:{_cache_basis('heavy')}"
     cached = cache_get(cache_key)
     if cached:
         cached["ai_available"] = True

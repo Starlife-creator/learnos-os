@@ -21,6 +21,18 @@ class TestFsrsBranch(unittest.TestCase):
         self.assertEqual(r.engine, "fsrs")
         self.assertEqual(r.next_due, (TODAY + timedelta(days=r.interval_days)).isoformat())
 
+    def test_still_fsrs_when_settings_db_missing(self):
+        """L1：settings 表未就绪抛 OperationalError 不应导致静默回退 SM-2。"""
+        import sqlite3
+        from unittest import mock
+
+        def _boom():
+            raise sqlite3.OperationalError("no such table: settings")
+
+        with mock.patch("db.settings_dict", side_effect=_boom):
+            r = schedule_review(3, prev_interval=1, today=TODAY)
+        self.assertEqual(r.engine, "fsrs")
+
     def test_no_double_overdue_penalty(self):
         """FSRS 支不再叠加逾期顺延：逾期复习的间隔不会被再减半/重置为 1。"""
         mature = dict(prev_interval=10, state=2, stability=10.0, difficulty=5.0)

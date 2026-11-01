@@ -28,6 +28,21 @@ _TEST_TMP_DIR = os.path.join(ROOT, "tests", ".tmp")
 class TestNormalizeSubject(unittest.TestCase):
     """normalize_subject 是学科 id 归一的单一哨兵点，必须稳。"""
 
+    @classmethod
+    def setUpClass(cls):
+        # L16：使用独立临时库并初始化，避免依赖生产库 / 缺 subjects 表导致环境性 error。
+        cls._tmp = tempfile.TemporaryDirectory(prefix="norm_", dir=_TEST_TMP_DIR)
+        cls._orig_db = config.DB_PATH
+        config.DB_PATH = Path(cls._tmp.name) / "norm_test.db"
+        db.DB_PATH = config.DB_PATH
+        db.init_db()
+
+    @classmethod
+    def tearDownClass(cls):
+        db.DB_PATH = cls._orig_db
+        config.DB_PATH = cls._orig_db
+        cls._tmp.cleanup()
+
     def test_lowercase(self):
         self.assertEqual(normalize_subject("Music"), "music")
         self.assertEqual(normalize_subject("BIOLOGY"), "biology")

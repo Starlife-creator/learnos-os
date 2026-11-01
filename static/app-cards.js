@@ -48,7 +48,12 @@ function renderCardsList(items) {
   const famBadge = it => {
     if (!it.familiarity) return '';
     const key = 'fsrs.fam' + it.familiarity[0].toUpperCase() + it.familiarity.slice(1);
-    return `<span class="tag ${_famTagClass(it.familiarity)}" title="${escapeHtml(t(key))}（R=${(it.retrievability||0).toFixed(2)}）">${escapeHtml(t(key))}</span>`;
+    // review：retrievability 为 null/undefined 表示 FSRS 不可用或异常，
+    // 不能用 0.0 冒充真实检索率——显示「未知」。
+    const rText = (it.retrievability === null || it.retrievability === undefined)
+      ? t('fsrs.unknown', '未知')
+      : `R=${Number(it.retrievability).toFixed(2)}`;
+    return `<span class="tag ${_famTagClass(it.familiarity)}" title="${escapeHtml(t(key))}（${escapeHtml(rText)}）">${escapeHtml(t(key))}</span>`;
   };
   wrap.innerHTML = items.map(it => `
     <div class="card mb-8">

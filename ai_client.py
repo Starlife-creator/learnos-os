@@ -29,6 +29,7 @@ from validate import validate_object, SchemaError
 # 双层：内存 LRU（快）+ SQLite（跨重启）。TTL 与容量都有上限防膨胀。
 _RESULT_CACHE_TTL = 30 * 24 * 3600     # 30 天（区别于下方 settings 缓存 _CACHE_TTL=30s）
 _CACHE_MAX_MEM = 200            # 内存最多缓存 200 条
+_CACHE_MAX_DB = 2000            # L8：DB 结果缓存条数上限，超出按最旧淘汰
 _result_mem: dict[str, tuple[float, dict[str, Any]]] = {}
 
 # 进程内缓存命中计数（P1b 可观测：验证缓存收益、定位失效；不写库、无迁移）
@@ -61,6 +62,12 @@ def _ensure_cache_table() -> None:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS ai_result_cache ("
                 " cache_key TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL)")
+            # review：TTL 清理（DELETE WHERE created_at < ?）与 LRU 裁剪
+            # （ORDER BY created_at ASC LIMIT ?）都按 created_at 过滤/排序；
+            # 无索引时每次写缓存都全表扫描，2000 行上限下加索引避免退化。
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ai_result_cache_created_at "
+                "ON ai_result_cache(created_at)")
     except Exception as exc:
         LOG.warning("创建结果缓存表失败: %s", exc)
 
@@ -105,16 +112,30 @@ def cache_get(key: str) -> dict[str, Any] | None:
 
 
 def cache_set(key: str, value: dict[str, Any]) -> None:
-    """写缓存（DB + 内存）。内存容量超限时清最旧。"""
+    """写缓存（DB + 内存）。内存容量超限时清最旧。
+
+    L8：DB 层写入后批量清理过期条目，并按 `_CACHE_MAX_DB` 上限淘汰最旧条目，
+    避免长期运行后 ai_result_cache 单调膨胀。
+    """
     import hashlib
+    from datetime import datetime as _dt, timedelta as _td
     try:
         k = hashlib.sha256(key.encode("utf-8")).hexdigest()
         from db import DB_LOCK, db, now
         payload = json.dumps(value, ensure_ascii=False)
+        cutoff = (_dt.now() - _td(seconds=_RESULT_CACHE_TTL)).isoformat(timespec="seconds")
         with DB_LOCK, db() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO ai_result_cache(cache_key, payload, created_at) VALUES (?, ?, ?)",
                 (k, payload, now()))
+            # L8：批量删除已过期条目
+            conn.execute("DELETE FROM ai_result_cache WHERE created_at < ?", (cutoff,))
+            n = conn.execute("SELECT COUNT(*) FROM ai_result_cache").fetchone()[0]
+            if n > _CACHE_MAX_DB:
+                conn.execute(
+                    "DELETE FROM ai_result_cache WHERE cache_key IN ("
+                    "SELECT cache_key FROM ai_result_cache ORDER BY created_at ASC LIMIT ?)",
+                    (n - _CACHE_MAX_DB,))
         _result_mem[k] = (time.time(), value)
         if len(_result_mem) > _CACHE_MAX_MEM:
             oldest = sorted(_result_mem.items(), key=lambda kv: kv[1][0])[: len(_result_mem) - _CACHE_MAX_MEM]

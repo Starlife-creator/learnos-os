@@ -348,10 +348,11 @@ def forget_predict(subject: str = "physics") -> dict[str, Any]:
                        # 兼容既有前端：仅题目可跳题详情，卡片为 None
                        "problem_id": s["item_id"] if s["item_type"] == "problem" else None,
                        "title": s["label"], "due": s["due_date"], "r": r})
-    high = sum(1 for v in values if v["r"] < 0.5)
-    medium = sum(1 for v in values if 0.5 <= v["r"] < 0.7)
-    avg = round(sum(v["r"] for v in values) / len(values), 3)
-    top = sorted(values, key=lambda v: v["r"])[:3]
+    high = sum(1 for v in values if v["r"] is not None and v["r"] < 0.5)
+    medium = sum(1 for v in values if v["r"] is not None and 0.5 <= v["r"] < 0.7)
+    valid = [v for v in values if v["r"] is not None]
+    avg = round(sum(v["r"] for v in valid) / len(valid), 3) if valid else None
+    top = sorted(valid, key=lambda v: v["r"])[:3]
     return {"count": len(values), "high_risk": high, "medium_risk": medium,
             "avg_r": avg, "top": top}
 
@@ -614,6 +615,8 @@ def forgetting_curve(today: date, subject: str = "physics") -> dict[str, Any]:
             last_review=ref,
             current=today,
         )
+        if r is None:
+            continue
         idx = next((i for i, bound in enumerate(buckets) if elapsed < bound), len(buckets) - 1)
         entry = bucket_data[idx] if idx < len(bucket_data) else None
         if not entry:

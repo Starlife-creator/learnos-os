@@ -173,8 +173,9 @@ def predict_score(paper_id: int, exam_date: str | None = None) -> dict[str, Any]
                     last_review=str(p["updated_at"] or ""),
                     current=eday,
                 )
-                total += r
-                n += 1
+                if r is not None:
+                    total += r
+                    n += 1
             if n:
                 retro = round(total / n, 4)
                 method = "fsrs" if fsrs_status()["available"] else "proxy"

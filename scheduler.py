@@ -35,6 +35,8 @@ class ScheduleResult:
     stability: float
     difficulty: float
     overdue_days: int
+    step: int | None = None   # L3：Learning/Relearning 子步（Review 态为 None）
+    engine_reason: str = ""   # L1：回退 SM-2 时记录原因，便于前端提示与排查
 
 
 def _parse_day(value: object) -> date | None:
@@ -66,6 +68,7 @@ def schedule_review(
     last_review: object = "",
     today: date | None = None,
     subject: str = "",
+    step: int | None = None,
 ) -> ScheduleResult:
     """计算一次复习后的完整调度结果（纯函数，不读写数据库）。"""
     today = today or date.today()
@@ -74,13 +77,14 @@ def schedule_review(
     sm2 = compute_review(rating, prev_interval, float(prev_ease or 2.5), int(prev_repetition or 0))
     late = overdue_days(due_date, today)
     last = _parse_day(last_review)
+    reason = ""
 
     if fsrs_bridge.fsrs_available():
         try:
             fs = fsrs_bridge.compute_fsrs_review(
                 rating, prev_interval, int(state or 0), float(stability or 0.0),
                 float(difficulty or 0.0), today=today, subject=subject,
-                last_review=last.isoformat() if last else "",
+                last_review=last.isoformat() if last else "", step=step,
             )
             interval = max(1, fs.scheduled_days)
             return ScheduleResult(
@@ -88,10 +92,13 @@ def schedule_review(
                 next_due=(today + timedelta(days=interval)).isoformat(),
                 ease_factor=sm2.ease_factor, repetition=sm2.repetition, mastery=sm2.mastery,
                 state=fs.state, stability=fs.stability, difficulty=fs.difficulty,
-                overdue_days=late,
+                overdue_days=late, step=fs.step,
             )
         except Exception as exc:  # 调度异常不阻断复习，退回 SM-2
             LOG.warning("FSRS 调度异常，回退 SM-2: %s", exc)
+            reason = f"fsrs_exception: {str(exc)[:120]}"
+    else:
+        reason = "fsrs_unavailable"
 
     interval, ease, rep, mastery = sm2.interval_days, sm2.ease_factor, sm2.repetition, sm2.mastery
     # SM-2 模式不推进 FSRS 记忆态，原样保留（FSRS 恢复后从此处继续）
@@ -100,11 +107,17 @@ def schedule_review(
         interval, rep, ease = 1, 0, min(ease, 2.5)
         mastery = max(1, mastery - 1)
         st, stab, diff = 0, 0.0, 0.0  # 降级为新学：记忆态归零，避免与新间隔矛盾
+        step = None
     elif late >= OVERDUE_HALVE_DAYS:
         interval = max(1, interval // 2)
+    # review：engine_reason 此前写入 ScheduleResult 但无消费方；
+    # 至少在 LOG 里落一条 INFO，让「静默降级」可被 grep/日志告警发现。
+    LOG.info("调度使用 SM-2 引擎 reason=%s subject=%s state=%s",
+             reason or "(default)", subject, st)
     return ScheduleResult(
         engine="sm2", interval_days=interval,
         next_due=(today + timedelta(days=interval)).isoformat(),
         ease_factor=ease, repetition=rep, mastery=mastery,
         state=st, stability=stab, difficulty=diff, overdue_days=late,
+        step=step, engine_reason=reason,
     )

@@ -75,6 +75,36 @@ class TestFsrsBridge(unittest.TestCase):
         self.assertGreaterEqual(r, 0.0)
         self.assertLessEqual(r, 1.0)
 
+    def test_retention_survives_db_error(self):
+        """L1：settings 表未就绪抛 OperationalError 时，保持率回退默认 0.9，不穿透到调度层。"""
+        import sqlite3
+        from unittest import mock
+
+        def _boom():
+            raise sqlite3.OperationalError("no such table: settings")
+
+        with mock.patch("db.settings_dict", side_effect=_boom):
+            self.assertEqual(fsrs_bridge._desired_retention(), 0.9)
+            self.assertEqual(fsrs_bridge._desired_retention("biology"), 0.9)
+            # 调度在 DB 异常下仍可完成，不抛错、不误回退 SM-2
+            fs = compute_fsrs_review(3, 1, today=date(2026, 8, 11))
+            self.assertGreaterEqual(fs.scheduled_days, 1)
+
+    def test_retrievability_none_when_unavailable(self):
+        """L4：FSRS 不可用时 retrievability 返回 None（三态：概率 / None 未知 / 异常日志）。"""
+        from unittest import mock
+        with mock.patch.object(fsrs_bridge, "_FSRS_AVAILABLE", False):
+            self.assertIsNone(
+                fsrs_bridge.retrievability(prev_interval=5, last_review="2026-08-11"))
+
+    def test_step_roundtrip(self):
+        """L3：compute_fsrs_review 保留子步 step；重建 Card 时回填。"""
+        fs = compute_fsrs_review(3, 1, today=date(2026, 8, 11))
+        # Review 态 step 可为 None；重建时携带传入 step 不丢失
+        card = fsrs_bridge._state_to_card(fs.state, fs.stability, fs.difficulty,
+                                          fs.scheduled_days, step=fs.step)
+        self.assertEqual(card.step, fs.step)
+
     def test_train_missing_deps_degrades(self):
         """P0：训练依赖（用户可选安装）缺失 → (False, reason)，调度不受影响。"""
         ok, payload = fsrs_bridge.train_parameters(

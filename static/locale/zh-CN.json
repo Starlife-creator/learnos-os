@@ -1106,5 +1106,22 @@
   "help.empty": "没有匹配的条目，换个关键词试试。",
   "help.goDashboard2": "打开「概览」导出",
   "help.goSettings2": "打开「设置」配置 AI",
-  "help.searchPh": "搜索帮助：概览 / 题库 / FSRS / 导入…"
+  "help.searchPh": "搜索帮助：概览 / 题库 / FSRS / 导入…",
+  "learn.delete": "删除",
+  "tour.quick.title": "五步学习循环",
+  "tour.quick.body": "这是 LearnOS 的核心闭环：录入 → 提示 → 主动回忆 → 间隔复习 → 口试。建议每天从「概览」的今日行动开始。",
+  "tour.dashboard.title": "今日行动",
+  "tour.dashboard.body": "「概览」页把到期复习、薄弱概念口试、错题巩固、题库练习汇总到一个队列，按优先级推进。",
+  "tour.review.title": "诚实评分",
+  "tour.review.body": "复习时按 忘记 / 模糊 / 想起 / 秒答 四档评分，评分越诚实，FSRS 调度越准。",
+  "tour.oral.title": "口试检验",
+  "tour.oral.body": "用 AI 五轮追问检验你是否真正理解，答案按与题目无关的纯知识判定即可。",
+  "tour.data.title": "数据安全",
+  "tour.data.body": "数据全部存在本机 learnos.db，可随时导出/备份。需要时从「概览」页导出即可。",
+  "tour.stepOf": "第",
+  "tour.stepUnit": "步",
+  "tour.prev": "上一步",
+  "tour.next": "下一步",
+  "tour.done": "完成",
+  "tour.skip": "跳过"
 }

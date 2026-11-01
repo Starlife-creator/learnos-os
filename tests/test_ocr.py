@@ -103,14 +103,19 @@ class TestOcr(unittest.TestCase):
         self.assertTrue(all(p["confidence"] == 1.0 for p in r["pages"]))
 
     def test_scanned_pdf_without_deps(self):
-        # 无文本层 + 渲染器缺失 → ValueError 带降级指引
-        for m in ("pdfminer", "pdfminer.high_level", "pypdfium2", "paddleocr", "PIL"):
-            sys.modules.pop(m, None)
-        pdf = Path(self.temp_dir.name) / "scan.pdf"
-        pdf.write_bytes(b"%PDF-1.4 fakess")
-        with self.assertRaises(ValueError) as ctx:
-            ocr.extract_pdf(pdf)
-        self.assertIn("pypdfium2", str(ctx.exception))
+        # 无文本层 + 渲染器/识别器缺失 → ValueError 带降级指引。
+        # L16：用 sys.modules None 占位符强制 import 失败，避免本机已装 pypdfium2 等
+        # 可选依赖破坏「全缺」假设（None 占位会让对应 import 抛 ImportError）。
+        import unittest.mock as _mock
+        with _mock.patch.dict(sys.modules, {
+            "pdfminer": None, "pdfminer.high_level": None, "pypdfium2": None,
+            "paddleocr": None, "PIL": None,
+        }):
+            pdf = Path(self.temp_dir.name) / "scan.pdf"
+            pdf.write_bytes(b"%PDF-1.4 fakess")
+            with self.assertRaises(ValueError) as ctx:
+                ocr.extract_pdf(pdf)
+            self.assertIn("pypdfium2", str(ctx.exception))
 
     def test_image_ocr_happy_path(self):
         # 注入假 PIL + paddleocr + pypdfium2 + numpy：覆盖扫描 PDF 渲染→OCR

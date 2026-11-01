@@ -119,11 +119,11 @@ document.querySelectorAll('#helpToc .help-toc-link').forEach(link => {
 // 新手引导：分步高亮（不依赖第三方），状态存 localStorage
 function startHelpTour() {
   const steps = [
-    { sel: '#help-quick', title: '五步学习循环', body: '这是 LearnOS 的核心闭环：录入 → 提示 → 主动回忆 → 间隔复习 → 口试。建议每天从「概览」的今日行动开始。' },
-    { sel: '#help-dashboard', title: '今日行动', body: '「概览」页把到期复习、薄弱概念口试、错题巩固、题库练习汇总到一个队列，按优先级推进。' },
-    { sel: '#help-review', title: '诚实评分', body: '复习时按 忘记 / 模糊 / 想起 / 秒答 四档评分，评分越诚实，FSRS 调度越准。' },
-    { sel: '#help-oral', title: '口试检验', body: '用 AI 五轮追问检验你是否真正理解，答案按「中国/红涨绿跌」无关的纯知识判定即可。' },
-    { sel: '#help-data', title: '数据安全', body: '数据全部存在本机 learnos.db，可随时导出/备份。需要时从「概览」页导出即可。' }
+    { sel: '#help-quick', title: t('tour.quick.title', '五步学习循环'), body: t('tour.quick.body', '这是 LearnOS 的核心闭环：录入 → 提示 → 主动回忆 → 间隔复习 → 口试。建议每天从「概览」的今日行动开始。') },
+    { sel: '#help-dashboard', title: t('tour.dashboard.title', '今日行动'), body: t('tour.dashboard.body', '「概览」页把到期复习、薄弱概念口试、错题巩固、题库练习汇总到一个队列，按优先级推进。') },
+    { sel: '#help-review', title: t('tour.review.title', '诚实评分'), body: t('tour.review.body', '复习时按 忘记 / 模糊 / 想起 / 秒答 四档评分，评分越诚实，FSRS 调度越准。') },
+    { sel: '#help-oral', title: t('tour.oral.title', '口试检验'), body: t('tour.oral.body', '用 AI 五轮追问检验你是否真正理解，答案按「中国/红涨绿跌」无关的纯知识判定即可。') },
+    { sel: '#help-data', title: t('tour.data.title', '数据安全'), body: t('tour.data.body', '数据全部存在本机 learnos.db，可随时导出/备份。需要时从「概览」页导出即可。') }
   ];
   let i = 0;
   const overlay = document.createElement('div');
@@ -134,15 +134,15 @@ function startHelpTour() {
     const card = document.createElement('div');
     card.className = 'tour-card';
     card.innerHTML =
-      '<div class="tour-step">第 ' + (i + 1) + ' / ' + steps.length + ' 步</div>' +
+      '<div class="tour-step">' + t('tour.stepOf', '第') + ' ' + (i + 1) + ' / ' + steps.length + ' ' + t('tour.stepUnit', '步') + '</div>' +
       '<h4>' + s.title + '</h4>' +
       '<p>' + s.body + '</p>' +
       '<div class="tour-actions">' +
-        (i > 0 ? '<button class="btn btn-sm btn-secondary" id="tourPrev">上一步</button>' : '') +
+        (i > 0 ? '<button class="btn btn-sm btn-secondary" id="tourPrev">' + t('tour.prev', '上一步') + '</button>' : '') +
         (i < steps.length - 1
-          ? '<button class="btn btn-sm btn-primary" id="tourNext">下一步</button>'
-          : '<button class="btn btn-sm btn-primary" id="tourNext">完成</button>') +
-        '<button class="btn btn-sm btn-secondary" id="tourSkip">跳过</button>' +
+          ? '<button class="btn btn-sm btn-primary" id="tourNext">' + t('tour.next', '下一步') + '</button>'
+          : '<button class="btn btn-sm btn-primary" id="tourNext">' + t('tour.done', '完成') + '</button>') +
+        '<button class="btn btn-sm btn-secondary" id="tourSkip">' + t('tour.skip', '跳过') + '</button>' +
       '</div>';
     overlay.appendChild(card);
     card.querySelector('#tourNext').addEventListener('click', () => {

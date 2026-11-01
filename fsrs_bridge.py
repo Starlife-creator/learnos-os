@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
 import sys
 import threading
 from dataclasses import dataclass
@@ -115,13 +116,18 @@ def _load_params() -> dict[str, object] | None:
 
 
 def _desired_retention(subject: str = "") -> float:
-    """§46.5C：学科分层保持率。学科有专属覆盖则用覆盖，否则回退全局，否则 0.9。"""
+    """§46.5C：学科分层保持率。学科有专属覆盖则用覆盖，否则回退全局，否则 0.9。
+
+    L1 修复：DB 未就绪（表缺失/锁冲突等 sqlite3.Error）时不再静默穿透到调度层，
+    直接回退默认 0.9，避免异常被上层吞掉后误回退 SM-2。
+    """
     from db import settings_dict
     key = _retention_key(subject)
     try:
-        value = float(settings_dict().get(key, settings_dict().get(_RETENTION_KEY, "0.9")))
+        settings = settings_dict()
+        value = float(settings.get(key, settings.get(_RETENTION_KEY, "0.9")))
         return value if 0.75 <= value <= 0.97 else 0.9
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, sqlite3.Error):
         return 0.9
 
 
@@ -141,13 +147,17 @@ def _scheduler(subject: str = "") -> Scheduler:
     try:
         return Scheduler(parameters=params, desired_retention=_desired_retention(subject))
     except Exception as exc:
-        LOG.warning("FSRS 参数校验失败（用默认）: %s", exc)
-        return Scheduler(desired_retention=_desired_retention(subject))
+        LOG.warning("FSRS 参数校验失败（用默认保持率 0.9）: %s", exc)
+        # L1 修复：兜底分支不再二次读库（避免 DB 异常再次穿透），直接用默认保持率构造。
+        return Scheduler(desired_retention=0.9)
 
 
 @dataclass
 class FsrsState:
-    """可持久化的 FSRS 卡状态（对应 problems 表列）。"""
+    """可持久化的 FSRS 卡状态（对应 problems 表列）。
+
+    L3：step 保存 Learning/Relearning 子步（Review 态为 None），避免重启后子步丢失。
+    """
     state: int
     stability: float
     difficulty: float
@@ -155,6 +165,7 @@ class FsrsState:
     last_review: str
     elapsed_days: int
     scheduled_days: int
+    step: int | None = None
 
 
 def fsrs_available() -> bool:
@@ -166,16 +177,31 @@ def _state_to_card(
     stability: float,
     difficulty: float,
     prev_interval: int,
+    step: int | None = None,
 ) -> Card:
-    """从持久化状态重建 Card；无历史时按已学间隔估算。"""
+    """从持久化状态重建 Card；无历史时按已学间隔估算。
+
+    L3：回填 Learning/Relearning 子步 step，避免重启后子步丢失。
+    升级兼容：旧数据（v38 前 fsrs_step 为 NULL）下 Learning(1)/Relearning(3) 态
+    的卡片，step 必须兜底为 0，否则 vendor FSRS 在这两个态硬断言
+    `card.step is not None` 会抛 AssertionError，被上层静默降级为 SM-2。
+    vendor 枚举：Learning=1, Review=2, Relearning=3（reviewer 纠正：此前误把
+    Review=2 当 Relearning，写成了 (1,2)，导致 Relearning=3 仍崩）。
+    """
     card = Card()
     if state > 0:
         card.state = state
         card.stability = stability or max(prev_interval * 0.6, 1.0)
         card.difficulty = difficulty
+        # 只有 Learning(1)/Relearning(3) 要求 step 非 None；Review(2) 无意义。
+        if state in (1, 3):
+            card.step = 0 if step is None else step
+        else:
+            card.step = step
     elif prev_interval > 1:
         card.state = 1  # Learning
         card.stability = max(prev_interval * 0.6, 1.0)
+        card.step = 0
     return card
 
 
@@ -188,14 +214,16 @@ def compute_fsrs_review(
     today: date | None = None,
     subject: str = "",
     last_review: str = "",
+    step: int | None = None,
 ) -> FsrsState:
     """FSRS-6 调度。返回下一次复习状态（供 problems 表持久化）。
     subject 用于 §46.5C 学科分层保持率（无则全局）。
     last_review（ISO 日期，可选）：上次复习日期，FSRS 据此计算真实检索率 R 来更新稳定性；
     不传时对已有记忆态的卡按「准时复习」估算（today - prev_interval）。
+    step（可选）：持久化的 Learning/Relearning 子步，重建 Card 时回填（L3）。
     """
     today = today or date.today()
-    card = _state_to_card(state, stability, difficulty, prev_interval)
+    card = _state_to_card(state, stability, difficulty, prev_interval, step=step)
     scheduler = _scheduler(subject)
     review_dt = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
     # 修复：此前从不设置 card.last_review，FSRS 视检索率 R=0，每次复习都按「已遗忘」更新稳定性。
@@ -232,6 +260,7 @@ def compute_fsrs_review(
         last_review=today.isoformat(),
         elapsed_days=elapsed,
         scheduled_days=scheduled,
+        step=updated.step,
     )
 
 
@@ -243,13 +272,18 @@ def retrievability(
     last_review: str = "",
     current: date | None = None,
     subject: str = "",
-) -> float:
-    """P0：预测该卡今天的检索概率 R（0-1）。无 FSRS → 用 SM-2 间隔近似。
+) -> float | None:
+    """P0：预测该卡今天的检索概率 R（0-1）。
+
+    L4 三态返回：
+      - 0~1 浮点：FSRS 可用且计算成功；
+      - None：FSRS 不可用或计算异常（前端显示「未知」，不得用 0.0 冒充真实检索率）；
+      - 异常原因记入日志，便于排查。
     subject 用于 §46.5C 学科分层保持率。
     """
     current = current or date.today()
     if not _FSRS_AVAILABLE:
-        return 0.0
+        return None
     try:
         card = _state_to_card(state, stability, difficulty, prev_interval)
         ref = last_review or current.isoformat()
@@ -259,8 +293,9 @@ def retrievability(
         card.last_review = ref_dt
         now_dt = datetime.combine(current, datetime.min.time(), tzinfo=timezone.utc)
         return round(float(_scheduler(subject).get_card_retrievability(card, now_dt)), 4)
-    except Exception:
-        return 0.0
+    except Exception as exc:
+        LOG.debug("检索率估算失败（返回未知 None）: %s", exc)
+        return None
 
 
 # B6 P2-1：熟悉度词表 — 把 0-1 的 retrievability 翻成 4 档可懂文本（Space CLI 风格）。
@@ -324,6 +359,11 @@ def current_params_hash() -> str:
 def fsrs_status() -> dict[str, object]:
     """P0：调度与训练状态（设置页 FSRS 卡 + 遗忘预测）。"""
     trained = _load_params()
+    # L5：在锁内取训练状态快照，避免与后台训练线程竞态读到半写入字段。
+    with _PARAM_LOCK:
+        running = bool(_TRAIN_STATE["running"])
+        result = _TRAIN_STATE["result"]
+        error = _TRAIN_STATE["error"]
     status: dict[str, object] = {
         "available": _FSRS_AVAILABLE,
         "params_source": "trained" if trained else "default",
@@ -331,14 +371,14 @@ def fsrs_status() -> dict[str, object]:
         # F2：参数指纹（default 参数无指纹；trained 必有）——界面/日志可追溯「哪版参数」
         "params_hash": str(trained["params_hash"]) if trained else "",
         "desired_retention": _desired_retention(),
-        "training": bool(_TRAIN_STATE["running"]),
+        "training": running,
         "sample_count": 0,
     }
-    if _TRAIN_STATE["result"]:
-        status["last_train"] = _TRAIN_STATE["result"]
-        status["sample_count"] = int(_TRAIN_STATE["result"]["sample_count"])
-    if _TRAIN_STATE["error"]:
-        status["train_error"] = _TRAIN_STATE["error"]
+    if result:
+        status["last_train"] = result
+        status["sample_count"] = int(result["sample_count"])
+    if error:
+        status["train_error"] = error
     status["per_subject_retentions"] = per_subject_retentions()  # §46.5C 学科分层
     status["min_train_samples"] = FSRS_TRAIN_MIN_SAMPLES  # §16.2 单一门槛常量
     return status
@@ -442,22 +482,30 @@ def train_parameters(
 
 
 def train_async(reviews: list[tuple[int, int, str]]) -> bool:
-    """后台线程训练（不阻塞 HTTP 请求）。已在训练 → False。"""
-    if _TRAIN_STATE["running"]:
-        return False
-    _TRAIN_STATE["result"] = None
-    _TRAIN_STATE["error"] = None
+    """后台线程训练（不阻塞 HTTP 请求）。已在训练 → False。
+
+    L5：running 标志与 result/error 共享字典由同一把锁保护，消除 check-then-set 竞态
+    与结果读写可见性窗口。
+    """
+    with _PARAM_LOCK:
+        if _TRAIN_STATE["running"]:
+            return False
+        _TRAIN_STATE["result"] = None
+        _TRAIN_STATE["error"] = None
 
     def _run() -> None:
-        _TRAIN_STATE["running"] = True
+        with _PARAM_LOCK:
+            _TRAIN_STATE["running"] = True
         try:
             ok, payload = train_parameters(reviews)
-            if ok:
-                _TRAIN_STATE["result"] = payload
-            else:
-                _TRAIN_STATE["error"] = payload
+            with _PARAM_LOCK:
+                if ok:
+                    _TRAIN_STATE["result"] = payload
+                else:
+                    _TRAIN_STATE["error"] = payload
         finally:
-            _TRAIN_STATE["running"] = False
+            with _PARAM_LOCK:
+                _TRAIN_STATE["running"] = False
 
     threading.Thread(target=_run, daemon=True).start()
     return True

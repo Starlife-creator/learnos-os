@@ -1,6 +1,6 @@
 # LearnOS — 个人学习 OS
 
-> 本地优先、零第三方依赖的个人学习辅助工具。
+> 本地优先、主线零第三方依赖的个人学习辅助工具（可选增强依赖见下文「可选增强依赖」）。
 > 记录尝试 → 分级提示 → 主动回忆 → 间隔复习 → AI 口试。
 
 ## 功能
@@ -43,6 +43,27 @@ set LEARNOS_PORT=9000 && python app.py
 **Windows 一键启动**：直接双击 `start.bat`（自动校验 Python 3.11+、运行启动自检、启动服务并自动打开浏览器）。
 
 打开 `http://127.0.0.1:8765` 即可使用。
+
+## 可选增强依赖
+
+运行时主线**零第三方依赖**（Python 标准库 + 内置 vendor FSRS）。下列能力为可选增强，
+缺失时对应功能自动降级、不影响主线使用：
+
+| 能力 | 可选依赖 | 缺失时降级行为 |
+|---|---|---|
+| FSRS 个性化参数训练 | `torch`、`pandas`、`tqdm` | 继续使用内置默认 FSRS 参数，不影响调度 |
+| 扫描版 PDF / 图片 OCR | `pypdfium2`、`paddleocr`、`Pillow` | 提示改用 LLM 视觉提取或手动录入 |
+| 文本层 PDF 解析 | `pdfminer.six` | 跳过文本层，走扫描 OCR 或提示降级 |
+| 本地密钥加密存储 | `cryptography` | 回退到内存/环境变量密钥层，不写入数据库 |
+
+安装示例（按需，非必需）：
+
+```bash
+pip install torch pandas tqdm          # FSRS 参数训练
+pip install pypdfium2 paddleocr Pillow # 扫描版 OCR
+pip install pdfminer.six                # 文本层 PDF
+pip install cryptography                # 密钥本地加密存储
+```
 
 ## 配置
 

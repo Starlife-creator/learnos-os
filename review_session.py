@@ -140,7 +140,7 @@ def complete(review_id: int, rating: Any, subject: str) -> dict[str, Any]:
     if not review:
         raise ReviewError("复习任务不存在", 404)
     rating = max(1, min(4, int(rating)))
-    problem = row("SELECT ease_factor, repetition, state, stability, difficulty FROM problems WHERE id = ?",
+    problem = row("SELECT ease_factor, repetition, state, stability, difficulty, fsrs_step FROM problems WHERE id = ?",
                   (review["problem_id"],)) or {}
     result = schedule_review(
         rating,
@@ -150,6 +150,7 @@ def complete(review_id: int, rating: Any, subject: str) -> dict[str, Any]:
         state=problem.get("state") or 0,
         stability=problem.get("stability") or 0.0,
         difficulty=problem.get("difficulty") or 0.0,
+        step=problem.get("fsrs_step"),
         due_date=review["due_date"],
         last_review=review["created_at"],
         subject=subject,
@@ -162,9 +163,9 @@ def complete(review_id: int, rating: Any, subject: str) -> dict[str, Any]:
             (review["problem_id"], next_due, result.interval_days, int(review["variant_id"] or 0), now()),
         )
         conn.execute(
-            "UPDATE problems SET ease_factor = ?, repetition = ?, state = ?, stability = ?, difficulty = ?, updated_at = ? WHERE id = ?",
+            "UPDATE problems SET ease_factor = ?, repetition = ?, state = ?, stability = ?, difficulty = ?, fsrs_step = ?, updated_at = ? WHERE id = ?",
             (result.ease_factor, result.repetition, result.state, result.stability,
-             result.difficulty, now(), review["problem_id"]),
+             result.difficulty, result.step, now(), review["problem_id"]),
         )
         # ADR 0004：掌握度经单一写入口落事件
         set_problem_mastery(conn, review["problem_id"], result.mastery, "review",

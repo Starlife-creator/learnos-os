@@ -76,12 +76,20 @@ def extract_image(path: str | Path) -> dict[str, Any]:
 
 
 def _extract_text_layer(fp: Path) -> str | None:
-    """pdfminer 文本层（可选）。无依赖或空白 → None。"""
+    """pdfminer 文本层（可选）。无依赖、空白或损坏 PDF → None。
+
+    L16：pdfminer 对损坏/伪造 PDF 抛 PDFSyntaxError，这里捕获后按「无文本层」处理，
+    让流程继续走扫描渲染 / 降级提示分支，而不是把解析异常抛给上层。
+    """
     try:
         from pdfminer.high_level import extract_text  # type: ignore
     except ImportError:
         return None
-    out = (extract_text(str(fp)) or "").strip()
+    try:
+        out = (extract_text(str(fp)) or "").strip()
+    except Exception as exc:
+        LOG.debug("pdfminer 解析文本层失败（按无文本层处理）: %s", exc)
+        return None
     return out or None
 
 

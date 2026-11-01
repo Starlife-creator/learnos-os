@@ -140,7 +140,7 @@ async function loadMaterials() {
       <div class="mat-item${m.id === curMaterialId ? ' active' : ''}" onclick="openMaterial(${m.id}, '${esc(m.fmt)}')">
         <span class="fmt">${esc(FMT_LABEL[m.fmt] || m.fmt)}</span>
         <span class="name" title="${esc(m.title)}">${esc(m.title)}</span>
-        <button class="del" title="删除" onclick="delMaterial(event, ${m.id}, this)">✕</button>
+        <button class="del" title="${esc(t('learn.delete', '删除'))}" onclick="delMaterial(event, ${m.id}, this)">✕</button>
       </div>`).join('');
   } catch (e) {
     box.innerHTML = `<div class="muted">${esc(e.message)}</div>`;

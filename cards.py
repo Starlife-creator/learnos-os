@@ -324,6 +324,9 @@ def review_card(card_id: int, rating: int) -> dict[str, Any]:
         raise ValueError("卡片不存在")
     rating = max(1, min(4, int(rating or 2)))
     # 调度统一走 scheduler（与题目复习同一实现，ADR 0007）
+    # L3 修复（review）：cards 路径此前不传 step，旧卡 Learning 态下次复习触发
+    # vendor FSRS 的 `assert card.step is not None` 被静默降级 SM-2。这里从
+    # cards.fsrs_step（v39 migration 新增）读入，复习后写回 result.step。
     result = schedule_review(
         rating,
         prev_interval=card["interval_days"] or 1,
@@ -335,6 +338,7 @@ def review_card(card_id: int, rating: int) -> dict[str, Any]:
         due_date=card["due_date"],
         last_review=card["last_review"],
         subject=card["subject"] or "",
+        step=card["fsrs_step"],
     )
     next_due = result.next_due
     fs_state, fs_stability, fs_difficulty = result.state, result.stability, result.difficulty
@@ -366,9 +370,12 @@ def review_card(card_id: int, rating: int) -> dict[str, Any]:
              fsrs_bridge.current_params_hash()))
         conn.execute(
             "UPDATE cards SET due_date = ?, interval_days = ?, ease_factor = ?, repetition = ?, "
-            "state = ?, stability = ?, difficulty = ?, last_review = ? WHERE id = ?",
+            "state = ?, stability = ?, difficulty = ?, last_review = ?, fsrs_step = ? WHERE id = ?",
             (next_due, result.interval_days, result.ease_factor, result.repetition,
-             fs_state, fs_stability, fs_difficulty, date.today().isoformat(), card_id))
+             fs_state, fs_stability, fs_difficulty, date.today().isoformat(),
+             # vendor 枚举：Learning=1, Relearning=3 持久化 step；Review=2 写回 None。
+             result.step if int(fs_state) in (1, 3) else None,
+             card_id))
     # Phase 2：卡片评分实时回写图谱掌握度（双驱动）
     try:
         graph.update_progress(card["subject"], force=True, entry_point="card",

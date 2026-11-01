@@ -1106,5 +1106,22 @@
   "help.empty": "No matching entries, try another keyword.",
   "help.goDashboard2": "Open Dashboard export",
   "help.goSettings2": "Open Settings to configure AI",
-  "help.searchPh": "Search help: dashboard / bank / FSRS / import…"
+  "help.searchPh": "Search help: dashboard / bank / FSRS / import…",
+  "learn.delete": "Delete",
+  "tour.quick.title": "The five-step cycle",
+  "tour.quick.body": "LearnOS core loop: record → hint → active recall → spaced review → oral quiz. Start each day from Today's actions on the Dashboard.",
+  "tour.dashboard.title": "Today's actions",
+  "tour.dashboard.body": "The Dashboard aggregates due reviews, weak-concept oral quizzes, missed problems and bank practice into one prioritized queue.",
+  "tour.review.title": "Rate honestly",
+  "tour.review.body": "Rate Forget / Vague / Recall / Instant honestly; the more truthful the rating, the more accurate FSRS scheduling.",
+  "tour.oral.title": "Oral quiz",
+  "tour.oral.body": "The AI asks five follow-up rounds to check whether you truly understand. Answer with plain knowledge unrelated to the question itself.",
+  "tour.data.title": "Data safety",
+  "tour.data.body": "All data lives locally in learnos.db and can be exported/backed up anytime from the Dashboard.",
+  "tour.stepOf": "Step",
+  "tour.stepUnit": "of",
+  "tour.prev": "Back",
+  "tour.next": "Next",
+  "tour.done": "Done",
+  "tour.skip": "Skip"
 }

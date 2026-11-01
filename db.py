@@ -1001,6 +1001,28 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (37, ?)", (now(),))
         LOG.info("数据库已迁移到 v37 (统一可复习项读模型视图 review_items/review_log)")
 
+    # v38: L3 FSRS 子步持久化 — problems.fsrs_step（Learning/Relearning 子步；NULL=Review 态/无步）
+    if current < 38:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(problems)").fetchall()}
+        if "fsrs_step" not in cols:
+            conn.execute("ALTER TABLE problems ADD COLUMN fsrs_step INTEGER")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (38, ?)", (now(),))
+        LOG.info("数据库已迁移到 v38 (FSRS 子步列 fsrs_step)")
+
+    # v39: review 指出 cards 路径缺 fsrs_step 持久化 — 与 problems 同列，避免 Learning 子步
+    # 在 cards 复习路径丢失（_state_to_card 已兜底 None→0，但持久化后子步才真正连续）。
+    # 旧库 replay 时 cards 表可能尚未建（v34 前），用 sqlite_master 探测，表不存在则跳过。
+    if current < 39:
+        cards_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cards'"
+        ).fetchone() is not None
+        if cards_exists:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(cards)").fetchall()}
+            if "fsrs_step" not in cols:
+                conn.execute("ALTER TABLE cards ADD COLUMN fsrs_step INTEGER")
+        conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (39, ?)", (now(),))
+        LOG.info("数据库已迁移到 v39 (cards.fsrs_step)")
+
 
 # 内置三科的中文显示名（title）；user 自定义过的中文 title 不会被覆盖。
 _BUILTIN_SUBJECT_TITLES = {
