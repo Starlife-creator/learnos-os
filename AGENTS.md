@@ -15,3 +15,19 @@
 - 保持零第三方依赖主路径；可选依赖缺失时必须有降级路径。
 - 所有 AI 写入走「草稿确认」或「结构化校验」，不静默落库。
 - 密钥绝不写入数据库，日志脱敏。
+
+## 协作 / 群聊约定
+- 群里 @ 必须用**英文直引号**标签 <at user_id=""></at>，`user_id` 必须用**发送方应用自己视角**下的对方 id——各 bot 用自己 secret 从 `/bot/v3/info` 取到的自报 id 是它自己视角的，在你的消息里一个都 @ 不中；中文弯引号会让标签退化成普通文字。
+- 手头没有验证过能用的 id 时，回执直接发群里即可；管家会读全群记录，不必硬 @。
+- 判定是否送达：看聊天转写标题行有没有 `·N mention(s)`；没有就是没送到。
+
+## 项目暂停状态与恢复方法（2026-11 起暂停，未解冻）
+- 停止点：`eb23fb8`（2026-10-17 阶段3 收尾）；此后主树只有 `d1b51f1`（.gitignore +4 行）。
+- 评审材料：`.tmp/pr2-APPLY-NOTES.md`（清单/证据/落地五步）。补丁本体
+  `.tmp/pr2-updated-worktree.diff`（首选）与 `.tmp/pr2-worktree.diff`，**只能二选一**。
+- 落地命令须带 `--exclude=.gitignore`：
+  `git apply --exclude=.gitignore .tmp/pr2-updated-worktree.diff`
+- 基线基准数字：主树 **689 passed + 16 subtests**；打上 pr2-updated 后 **694 passed + 16
+  subtests**（差的 5 个即新增测试）。数字对不上就说明补丁或基线已变，重新论证再落地。
+- 测试入口：`python run_tests.py`（唯一权威，别直接 unittest discover）；lint 为
+  `ruff check`（dev-only、非阻塞）。
