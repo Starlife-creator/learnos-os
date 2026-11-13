@@ -91,3 +91,7 @@ OPTIMIZATION_PLAN_V2.md
 WORK_LOG.md
 .git.corrupt-bak.*/
 .audit-tmp/
+
+# Local PR-review draft artifacts (root-level patches/metadata, NOT source)
+/.pr2*.diff
+/.pr2*.json
