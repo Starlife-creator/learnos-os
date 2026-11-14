@@ -23,7 +23,7 @@
 
 ## 项目暂停状态与恢复方法（2026-11 起暂停，未解冻）
 - 停止点：`eb23fb8`（2026-10-17 阶段3 收尾）；此后主树为 `d1b51f1`（.gitignore +4 行）及之后的 AGENTS.md 文档提交（`d3b4942`、`ad8d8e7`，以及本行所在的这次提交）——**零源码改动**。
-- 核对事实（2026-11-14 实测）：`git diff --stat eb23fb8..HEAD` = `.gitignore +4` / `AGENTS.md +16`（纯文档提交会让 AGENTS.md 行数继续累加）；落地条件 e)「主树必须干净」仍满足，`git apply` 仍须带 `--exclude=.gitignore`。
+- 核对事实（2026-11-14 实测）：`git diff --stat eb23fb8..HEAD` 仅含 `.gitignore` 与 `AGENTS.md` 两处文档改动、零源码改动（行数随后续文档提交累加，引用前复核）；落地条件 e)「主树必须干净」仍满足，`git apply` 仍须带 `--exclude=.gitignore`。
 - 评审材料：`.tmp/pr2-APPLY-NOTES.md`（清单/证据/落地五步）。补丁本体
   `.tmp/pr2-updated-worktree.diff`（首选）与 `.tmp/pr2-worktree.diff`，**只能二选一**。
 - 落地命令须带 `--exclude=.gitignore`：
